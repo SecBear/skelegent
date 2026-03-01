@@ -1,33 +1,110 @@
-name: ci
+name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
 
 jobs:
-  test:
+  check:
+    name: Check (Nix)
+    runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-
-      - name: Nix Info
-        run: |
-          nix --version
-          nix show-config | rg -n "experimental-features|substituters|trusted-public-keys" || true
-
-      - name: Pre-Commit (treefmt)
-        run: nix develop -c pre-commit run --all-files
-
-      - name: Tests
-        run: nix develop -c cargo test
-
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Format check
+        run: nix develop --command treefmt --fail-on-change
+      - name: Test
+        run: nix develop --command cargo test --workspace
       - name: Clippy
-        run: nix develop -c cargo clippy -- -D warnings
+        run: nix develop --command cargo clippy --workspace --all-features -- -D warnings
+      - name: Doc
+        run: nix develop --command cargo doc --workspace --no-deps
 
+  check-cargo:
+    name: Check (Cargo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-features -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Doc
+        run: cargo doc --workspace --no-deps
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin
+      - name: Generate coverage
+        run: cargo tarpaulin --workspace --out xml --output-dir coverage/
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/cobertura.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  security:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  deny:
+    name: Dependency check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          rust-version: stable
+
+  links:
+    name: Link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check links
+        uses: lycheeverse/lychee-action@v1
+        with:
+          args: --verbose --no-progress --config .lychee.toml '**/*.md'
+          fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  msrv:
+    name: MSRV check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.90"
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --workspace
