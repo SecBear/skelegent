@@ -1,0 +1,121 @@
+name: publish (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Dry run (no actual publish)"
+        required: false
+        default: "false"
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish workspace crates in dependency order
+        run: |
+          DRY_RUN="${{ inputs.dry-run }}"
+          EXTRA_ARGS=""
+          if [ "$DRY_RUN" = "true" ]; then
+            EXTRA_ARGS="--dry-run"
+            echo "DRY RUN MODE — no crates will be published"
+          fi
+
+          # Dependency order: leaves first, umbrella last.
+          # Topo-sorted from the workspace dependency graph.
+          CRATES=(
+            # Tier 0: no internal deps
+            layer0
+            neuron-tool
+
+            # Tier 1: depend only on layer0 / neuron-tool
+            neuron-secret
+            neuron-crypto
+            neuron-hooks
+            neuron-hook-security
+            neuron-state-memory
+            neuron-state-fs
+            neuron-orch-kit
+            neuron-orch-local
+            neuron-turn
+
+            # Tier 2: depend on tier 0-1
+            neuron-auth
+            neuron-context
+            neuron-secret-env
+            neuron-secret-keystore
+            neuron-env-local
+            neuron-mcp
+            neuron-op-single-shot
+
+            # Tier 3: depend on tier 0-2
+            neuron-auth-static
+            neuron-auth-file
+            neuron-auth-oidc
+            neuron-auth-k8s
+            neuron-crypto-vault
+            neuron-crypto-hardware
+            neuron-secret-vault
+            neuron-secret-aws
+            neuron-secret-gcp
+            neuron-secret-k8s
+            neuron-op-react
+
+            # Tier 4: depend on many crates
+            neuron-provider-anthropic
+            neuron-provider-openai
+            neuron-provider-ollama
+
+            # Umbrella (last)
+            neuron
+          )
+
+          for crate in "${CRATES[@]}"; do
+            # Skip comments
+            [[ "$crate" == \#* ]] && continue
+
+            echo "::group::$crate"
+            # --no-verify skips rebuild (CI already validated).
+            # Retry up to 3 times with 30s delay for index propagation.
+            PUBLISHED=false
+            for attempt in 1 2 3; do
+              OUTPUT=$(cargo publish -p "$crate" --no-verify $EXTRA_ARGS 2>&1) && {
+                echo "Published $crate successfully"
+                PUBLISHED=true
+                break
+              }
+              if echo "$OUTPUT" | grep -qE "already uploaded|already exists"; then
+                echo "$crate already published, skipping"
+                PUBLISHED=true
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "Attempt $attempt failed, waiting 30s for index propagation..."
+                echo "$OUTPUT"
+                sleep 30
+              fi
+            done
+            echo "::endgroup::"
+            if [ "$PUBLISHED" = "false" ]; then
+              echo "$OUTPUT"
+              echo "::error::Failed to publish $crate after 3 attempts"
+              exit 1
+            fi
+            sleep 10  # pause for index propagation before next crate
+          done
+          echo "All crates published successfully"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
