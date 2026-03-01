@@ -22,45 +22,14 @@ Rules:
     - `LocalEnv` now emits both `SecretAccessEvent` (audit) and `ObservableEvent` (lifecycle) through a pluggable `EnvironmentEventSink`
     - Credential resolution/injection failures are sanitized to avoid secret-material leakage in `EnvError::CredentialFailed` messages
     - New integration coverage for end-to-end pipeline behavior and no-leak guarantees in `neuron-env-local/tests/env.rs`
-  - Verify:
-    - `nix develop -c cargo test --workspace --all-targets` (pass)
-    - `nix develop -c cargo clippy --workspace --all-targets -- -D warnings` (blocked by nix-daemon socket in sandbox)
-    - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+  - Verify: `nix develop -c cargo test --workspace --all-targets` (pass)
 
-- 2026-02-27: Make orchestration “core complete” for composed systems
+- 2026-02-27: Make orchestration "core complete" for composed systems
   - Specs: `specs/03-effects-and-execution-semantics.md`, `specs/05-orchestration-core.md`, `specs/06-composition-factory-and-glue.md`, `specs/11-testing-examples-and-backpressure.md`
   - Adds:
-    - `neuron-orch-kit` end-to-end effect pipeline integration test covering `WriteMemory`, `DeleteMemory`, `Delegate`, `Handoff`, and observable `Signal` (`runner_effect_pipeline_end_to_end`)
-    - `neuron-orch-local` in-memory workflow signal journal semantics with query contracts (`status`, `signals`) and workflow-not-found behavior
-  - Verify:
-    - `nix develop -c cargo test --workspace --all-targets` (pass)
-    - `cargo clippy --workspace --all-targets -- -D warnings` (pass; nix-daemon socket blocked for `nix develop -c cargo clippy`)
-
-- 2026-02-27: Brain job groups (fan-out + merge) for large landscapes
-  - Spec: `specs/15-brain-research-backend.md`
-  - Adds tools: `research_group_start`, `research_group_status`, `research_job_merge`
-  - Adds offline fixtures: `brain/tests/fixtures/merge/`
-  - Done when:
-    - Group start fans out per-target jobs; group status reports `landscape_job_id`
-    - Merge tool produces deterministic `coverage.targets/gaps/next_steps` from fixtures
-  - Verify: `nix develop -c cargo test -p brain`
-
-- 2026-02-27: Brain SpecPack traceability (feature map + slices + evidence refs)
-  - Spec: `specs/19-brain-specpack-traceability-and-feature-map.md`
-  - Adds: `analysis/feature_map.json` required by `specpack_finalize`; validates capability_ids ↔ ledger, spec_refs/trace_refs ↔ manifest, code_refs ↔ artifact index
-
-- 2026-02-27: Added artifact_import and artifact_write tools (source-first ingest)
-  - Spec: `specs/17-brain-artifact-ingest-and-write.md`
-  - Tools: `artifact_import`, `artifact_write` (traversal-safe, sha256-hashed)
-
-- 2026-02-27: Implemented `brain` v1 (controller + worker tools + MCP config)
-  - Spec: `specs/14-brain-agentic-research-assistant.md`
-
-- 2026-02-27: Implemented Brain v2 ResearchOps backend (MCP + async jobs + grounded bundles)
-  - Spec: `specs/15-brain-research-backend.md`
-
-- 2026-02-27: Hardened Brain v2 research backend (bundle contract + acquisition roles)
-  - Spec: `specs/15-brain-research-backend.md`
+    - `neuron-orch-kit` end-to-end effect pipeline integration test
+    - `neuron-orch-local` in-memory workflow signal journal semantics
+  - Verify: `nix develop -c cargo test --workspace --all-targets` (pass)
 
 - 2026-02-27: CI hard enforcement (format, tests, clippy) is present
   - Spec: `specs/13-documentation-and-dx-parity.md`
@@ -73,11 +42,3 @@ Rules:
 - 2026-02-27: Umbrella `neuron` crate added (features + prelude)
   - Spec: `specs/12-packaging-versioning-and-umbrella-crate.md`
   - Crate: `neuron/`
-
-- 2026-02-27: Brain SpecPack outputs added (specpack init/write/finalize)
-  - Spec: `specs/16-brain-specpack-output-and-queue.md`
-  - Tools: `specpack_init`, `specpack_write_file`, `specpack_finalize`
-
-- 2026-02-27: Brain SpecPack finalize enforces quality/backpressure artifacts
-  - Spec: `specs/18-brain-specpack-quality-and-backpressure.md`
-  - Adds: `ledger.json` + `conformance/` validation, plus impl-task verify enforcement

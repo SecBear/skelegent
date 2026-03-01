@@ -1,5 +1,10 @@
 # Neuron Workspace Redesign Plan
 
+> **⚠️ Historical document.** This was the original redesign plan. The redesign is now implemented.
+> Crate names referenced here (`neuron-types`, `neuron-loop`, `neuron-runtime`, `neuron-otel`) no longer
+> exist in the workspace. For current architecture, see [`SPECS.md`](SPECS.md) and the
+> [mdbook](docs/book/).
+
 > **For any agent picking this up:** Read this document IN ORDER. It is the authoritative plan for the neuron workspace redesign. If you haven't read `DEVELOPMENT-LOG.md`, read it first — it has the full history and rationale behind every decision.
 
 ---

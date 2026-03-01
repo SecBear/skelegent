@@ -19,11 +19,11 @@ Build and test:
 
 ## Reading Order
 
-1. [Redesign Plan](NEURON-REDESIGN-PLAN.md)
-2. [Layer 0 Handoff](docs/architecture/HANDOFF.md)
-3. [Composable Agentic Architecture](docs/architecture/composable-agentic-architecture.md)
-4. [Platform Scope Mapping](docs/architecture/platform-scope-mapping.md)
-5. [Agentic Decision Map v3](docs/architecture/agentic-decision-map-v3.md)
+1. [Specs Index](SPECS.md)
+2. [Architecture: 6-Layer Model](docs/book/src/architecture/layers.md)
+3. [Architecture: Protocol Traits](docs/book/src/architecture/protocol-traits.md)
+4. [Crate Map](docs/book/src/reference/crate-map.md)
+5. [Redesign Plan (historical)](NEURON-REDESIGN-PLAN.md)
 
 ## Architecture
 
