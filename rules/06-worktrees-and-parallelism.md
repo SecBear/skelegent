@@ -14,13 +14,13 @@ When work items are disjoint, isolate them using git worktrees and separate agen
 Use `scripts/new-worktree.sh`:
 
 ```bash
-./scripts/new-worktree.sh brain-v1 redesign/v2
+./scripts/new-worktree.sh orch-temporal redesign/v2
 ```
 
 This creates:
 
-1. A branch `feat/brain-v1` off the base branch.
-2. A sibling directory `../neuron-explore-brain-v1/` checked out to that branch.
+1. A branch `feat/orch-temporal` off the base branch.
+2. A sibling directory `../neuron-explore-orch-temporal/` checked out to that branch.
 
 ## Avoiding Context Mixing
 

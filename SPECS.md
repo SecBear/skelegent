@@ -28,9 +28,3 @@ These specs are written to ensure the project is *composable by construction*: o
 | `specs/11-testing-examples-and-backpressure.md` | DX/Quality | Example suite, test matrix, mock/real path strategy |
 | `specs/12-packaging-versioning-and-umbrella-crate.md` | Release | Crate naming, umbrella crate, feature flags, publishing |
 | `specs/13-documentation-and-dx-parity.md` | Docs/DX | Documentation requirements and parity targets |
-| `specs/14-brain-agentic-research-assistant.md` | Product/POC | Brain v1/v2: controller + worker tools, MCP config compatibility |
-| `specs/15-brain-research-backend.md` | Product/POC | Brain v2 ResearchOps: async jobs, grounded bundles, artifact contracts |
-| `specs/16-brain-specpack-output-and-queue.md` | Product/POC | Brain SpecPack: file-based spec library + manifest + parallelizable factory queue |
-| `specs/17-brain-artifact-ingest-and-write.md` | Product/POC | Brain artifacts: import/source snapshots + write API for progressive spec generation |
-| `specs/18-brain-specpack-quality-and-backpressure.md` | Product/POC | Brain SpecPack quality: parity ledger + conformance/backpressure artifacts |
-| `specs/19-brain-specpack-traceability-and-feature-map.md` | Product/POC | Brain SpecPack traceability: feature map + slices + evidence linking specs ↔ code ↔ traces |

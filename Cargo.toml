@@ -7,7 +7,6 @@ publish = false
 [workspace]
 resolver = "2"
 members = [
-  "brain",
   "neuron",
   "layer0",
   "neuron-state-memory",

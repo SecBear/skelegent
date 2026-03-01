@@ -53,6 +53,51 @@ pub trait ToolDyn: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>;
 }
 
+/// A tool wrapper that exposes a different name while delegating behavior to an inner tool.
+///
+/// This is useful when importing tools from external systems (e.g. MCP servers) where the
+/// upstream tool names are not stable or do not match the caller's desired naming scheme.
+pub struct AliasedTool {
+    alias: String,
+    inner: Arc<dyn ToolDyn>,
+}
+
+impl AliasedTool {
+    /// Create a new aliased tool wrapper.
+    pub fn new(alias: impl Into<String>, inner: Arc<dyn ToolDyn>) -> Self {
+        Self {
+            alias: alias.into(),
+            inner,
+        }
+    }
+
+    /// Access the wrapped tool.
+    pub fn inner(&self) -> &Arc<dyn ToolDyn> {
+        &self.inner
+    }
+}
+
+impl ToolDyn for AliasedTool {
+    fn name(&self) -> &str {
+        &self.alias
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        self.inner.input_schema()
+    }
+
+    fn call(
+        &self,
+        input: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
+        self.inner.call(input)
+    }
+}
+
 /// Registry of tools available to a turn.
 ///
 /// Holds tools as `Arc<dyn ToolDyn>` keyed by name. The turn's ReAct loop
@@ -201,6 +246,18 @@ mod tests {
         let tool = reg.get("echo").unwrap();
         let result = tool.call(json!({"msg": "hello"})).await.unwrap();
         assert_eq!(result, json!({"echoed": {"msg": "hello"}}));
+    }
+
+    #[tokio::test]
+    async fn aliased_tool_exposes_alias_name_and_delegates() {
+        let inner: Arc<dyn ToolDyn> = Arc::new(EchoTool);
+        let tool: Arc<dyn ToolDyn> = Arc::new(AliasedTool::new("echo_alias", Arc::clone(&inner)));
+
+        assert_eq!(tool.name(), "echo_alias");
+        assert_eq!(tool.description(), inner.description());
+
+        let result = tool.call(json!({"msg": "hi"})).await.unwrap();
+        assert_eq!(result, json!({"echoed": {"msg": "hi"}}));
     }
 
     #[tokio::test]

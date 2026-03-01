@@ -15,18 +15,6 @@ This repo assumes Rust tooling is provided by the Nix flake.
 - Format: `nix develop -c nix fmt`
 - Full local verification: `./scripts/verify.sh`
 
-## Brain (ResearchOps backend)
-
-Brain is a structured research backend intended to be used under an external harness (Claude Code
-/ Codex) via MCP.
-
-- Overview: `docs/brain/README.md`
-- Specs: `specs/14-brain-agentic-research-assistant.md`, `specs/15-brain-research-backend.md`
-
-Run Brain as an MCP server (stdio):
-
-- `nix develop -c cargo run -p brain -- mcp serve --artifact-dir .brain/artifacts --mcp .mcp.json`
-
 ## Ralph loop (agentic queue)
 
 The repo has a deterministic “what next” queue at `ralph_queue.md`, driven by `PROMPT.md`.
@@ -69,7 +57,6 @@ Providers:
 Integration:
 
 - `neuron-mcp/`: MCP client/server glue
-- `brain/`: Brain v1 (controller + workers) and Brain v2 (research backend)
 
 Security building blocks:
 

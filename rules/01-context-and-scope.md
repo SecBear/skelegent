@@ -17,8 +17,8 @@ A task is any unit of work with a coherent success condition.
 
 Examples:
 
-1. "Implement `brain` v1 CLI with MCP config"
-2. "Add `neuron` umbrella crate"
+1. "Add `neuron` umbrella crate"
+2. "Implement the `neuron-orch-local` orchestrator"
 3. "Harden coverage for hook edge cases"
 
 Not tasks (too large, must be split):

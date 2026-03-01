@@ -65,7 +65,7 @@ CODEX=1 ./scripts/ralph.sh
 Auto-create worktree + run:
 
 ```bash
-./scripts/ralph-worktree.sh brain-v1 redesign/v2
+./scripts/ralph-worktree.sh orch-temporal redesign/v2
 ```
 
 Codex model override:

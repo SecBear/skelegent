@@ -20,7 +20,7 @@ Use:
 
 Examples:
 
-1. `feat(brain): add offline controller+worker loop`
+1. `feat(orch-local): add workflow cancellation support`
 2. `test(hooks): cover SkipTool and ModifyToolInput`
 
 ## Suggested Workflow

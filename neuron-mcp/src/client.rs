@@ -6,11 +6,12 @@
 //! [`ToolRegistry`](neuron_tool::ToolRegistry).
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use neuron_tool::{ToolDyn, ToolError};
+use neuron_tool::{AliasedTool, ToolDyn, ToolError};
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Content, RawContent, Tool as McpTool};
 use rmcp::service::{Peer, RoleClient, RunningService};
@@ -87,6 +88,31 @@ impl McpClient {
             .collect();
 
         Ok(tools)
+    }
+
+    /// Discover all tools and apply a name-alias map.
+    ///
+    /// The `aliases` map is keyed by the remote tool name and contains the
+    /// desired name to expose locally.
+    ///
+    /// This is a convenience wrapper around [`discover_tools`](McpClient::discover_tools).
+    pub async fn discover_tools_with_aliases(
+        &self,
+        aliases: &HashMap<String, String>,
+    ) -> Result<Vec<Arc<dyn ToolDyn>>, McpError> {
+        let tools = self.discover_tools().await?;
+        let aliased: Vec<Arc<dyn ToolDyn>> = tools
+            .into_iter()
+            .map(|tool| {
+                let tool_name = tool.name().to_string();
+                if let Some(alias) = aliases.get(&tool_name) {
+                    Arc::new(AliasedTool::new(alias.clone(), tool)) as Arc<dyn ToolDyn>
+                } else {
+                    tool
+                }
+            })
+            .collect();
+        Ok(aliased)
     }
 
     /// Shut down the MCP client connection.
