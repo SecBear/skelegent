@@ -12,10 +12,6 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    git-hooks-nix = {
-      url = "github:cachix/git-hooks.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
@@ -23,7 +19,6 @@
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
         inputs.treefmt-nix.flakeModule
-        inputs.git-hooks-nix.flakeModule
       ];
 
       systems = [
@@ -71,17 +66,8 @@
             };
           };
 
-          # ── pre-commit hooks ─────────────────────────────────────
-          pre-commit = {
-            check.enable = true;
-            settings.hooks = {
-              treefmt.enable = true;
-            };
-          };
-
           # ── devShell ─────────────────────────────────────────────
           devShells.default = pkgs.mkShell {
-            inputsFrom = [ config.pre-commit.devShell ];
 
             buildInputs = [
               rustToolchain
@@ -100,6 +86,9 @@
               pkgs.mdbook
               pkgs.lychee
 
+              # Pre-commit hooks
+              pkgs.prek
+
               # Nix tooling
               pkgs.nixd
             ]
@@ -114,6 +103,8 @@
             RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 
             shellHook = ''
+              prek install --install-hooks 2>/dev/null
+
               echo "neuron dev shell"
               echo ""
               echo "  rustc --version   — $(rustc --version)"
@@ -123,6 +114,7 @@
               echo "  cargo test        — run all tests"
               echo "  cargo deny check  — dependency review"
               echo "  cargo audit       — security audit"
+              echo "  prek run -a       — run all pre-commit hooks"
               echo ""
             '';
           };
