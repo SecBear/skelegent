@@ -28,4 +28,3 @@ max_retries = 3
 # CI passes GITHUB_TOKEN which avoids this.
 # Locally, accept common "no auth" codes.
 accept = "100..=399"
-
