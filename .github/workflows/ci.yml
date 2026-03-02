@@ -108,3 +108,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check
         run: cargo check --workspace
+
+
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    needs: [check, check-cargo, coverage, security, deny, links, msrv]
+    steps:
+      - name: Aggregate required checks
+        env:
+          CHECK: ${{ needs.check.result }}
+          CHECK_CARGO: ${{ needs.check-cargo.result }}
+          COVERAGE: ${{ needs.coverage.result }}
+          SECURITY: ${{ needs.security.result }}
+          DENY: ${{ needs.deny.result }}
+          LINKS: ${{ needs.links.result }}
+          MSRV: ${{ needs.msrv.result }}
+        run: |
+          echo "check=$CHECK"
+          echo "check-cargo=$CHECK_CARGO"
+          echo "coverage=$COVERAGE"
+          echo "security=$SECURITY"
+          echo "deny=$DENY"
+          echo "links=$LINKS"
+          echo "msrv=$MSRV"
+          for s in "$CHECK" "$CHECK_CARGO" "$COVERAGE" "$SECURITY" "$DENY" "$LINKS" "$MSRV"; do
+            if [ "$s" != "success" ]; then
+              echo "One or more required jobs did not succeed"
+              exit 1
+            fi
+          done
+          echo "All required jobs succeeded"
