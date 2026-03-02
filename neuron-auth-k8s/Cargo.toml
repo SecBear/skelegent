@@ -1,6 +1,6 @@
 [package]
 name = "neuron-auth-k8s"
-version = "1.0.0-alpha.1"
+version = "0.4.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,7 +11,7 @@ categories = ["asynchronous", "authentication"]
 keywords = ["neuron", "ai", "agent", "kubernetes", "auth"]
 
 [dependencies]
-neuron-auth = { path = "../neuron-auth" , version = "1.0.0-alpha.1"}
+neuron-auth = { path = "../neuron-auth" , version = "0.4.0"}
 async-trait = "0.1"
 
 [dev-dependencies]

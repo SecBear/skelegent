@@ -1,6 +1,6 @@
 [package]
 name = "custom-operator-barrier"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2024"
 authors = ["Neuron Contributors"]
 publish = false
@@ -12,8 +12,8 @@ path = "src/lib.rs"
 async-trait = "0.1"
 serde_json = "1"
 thiserror = "1"
-layer0 = { path = "../../layer0" }
-neuron-tool = { path = "../../neuron-tool" }
+layer0 = { path = "../../layer0" , version = "0.4.0"}
+neuron-tool = { path = "../../neuron-tool" , version = "0.4.0"}
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

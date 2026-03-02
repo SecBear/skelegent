@@ -1,6 +1,6 @@
 [package]
 name = "neuron-workspace"
-version = "0.0.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
@@ -56,20 +56,20 @@ homepage = "https://github.com/secbear/neuron"
 
 # Dependencies for workspace-level integration tests
 [dev-dependencies]
-layer0 = { path = "layer0", features = ["test-utils"] }
-neuron = { path = "neuron" }
-neuron-turn = { path = "neuron-turn" }
-neuron-op-react = { path = "neuron-op-react" }
-neuron-op-single-shot = { path = "neuron-op-single-shot" }
-neuron-context = { path = "neuron-context" }
-neuron-hooks = { path = "neuron-hooks" }
-neuron-tool = { path = "neuron-tool" }
-neuron-state-memory = { path = "neuron-state-memory" }
-neuron-state-fs = { path = "neuron-state-fs" }
-neuron-provider-anthropic = { path = "neuron-provider-anthropic" }
-neuron-provider-openai = { path = "neuron-provider-openai" }
-neuron-provider-ollama = { path = "neuron-provider-ollama" }
-neuron-orch-local = { path = "neuron-orch-local" }
+layer0 = { path = "layer0", features = ["test-utils"] , version = "0.4.0"}
+neuron = { path = "neuron" , version = "0.4.0"}
+neuron-turn = { path = "neuron-turn" , version = "0.4.0"}
+neuron-op-react = { path = "neuron-op-react" , version = "0.4.0"}
+neuron-op-single-shot = { path = "neuron-op-single-shot" , version = "0.4.0"}
+neuron-context = { path = "neuron-context" , version = "0.4.0"}
+neuron-hooks = { path = "neuron-hooks" , version = "0.4.0"}
+neuron-tool = { path = "neuron-tool" , version = "0.4.0"}
+neuron-state-memory = { path = "neuron-state-memory" , version = "0.4.0"}
+neuron-state-fs = { path = "neuron-state-fs" , version = "0.4.0"}
+neuron-provider-anthropic = { path = "neuron-provider-anthropic" , version = "0.4.0"}
+neuron-provider-openai = { path = "neuron-provider-openai" , version = "0.4.0"}
+neuron-provider-ollama = { path = "neuron-provider-ollama" , version = "0.4.0"}
+neuron-orch-local = { path = "neuron-orch-local" , version = "0.4.0"}
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
 serde_json = "1"

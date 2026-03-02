@@ -15,7 +15,7 @@ Summary
   - Added example: examples/custom_operator_barrier
   - Added execution/composability principles in rules/09-execution-principles-and-composability.md and RFC
 - Release prep:
-  - Version bump to 1.0.0-alpha.1 across crates
+  - Version bump to 0.4.0 across crates
   - Internal deps now include version alongside path for publish compatibility
   - .github/workflows/publish.yml updated to include new crates in order
   - RELEASE_NOTES.md and MIGRATION.md added
