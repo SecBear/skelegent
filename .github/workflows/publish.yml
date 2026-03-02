@@ -83,10 +83,10 @@ jobs:
             
             # Umbrella (last)
             neuron
-)
+          )
           for crate in "${CRATES[@]}"; do
             # Skip comments
-            [[ "$crate" == \#* ]] && continue
+            [[ "$crate" == '#'* ]] && continue
 
             echo "::group::$crate"
             # --no-verify skips rebuild (CI already validated).
