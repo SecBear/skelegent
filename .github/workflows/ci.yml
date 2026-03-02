@@ -22,7 +22,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: Format check
-        run: nix develop --command treefmt --fail-on-change
+        run: nix develop --command bash -lc "nix fmt && git diff --exit-code"
       - name: Test
         run: nix develop --command cargo test --workspace
       - name: Clippy
