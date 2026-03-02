@@ -83,10 +83,10 @@ jobs:
             
             # Umbrella (last)
             neuron
-)
+          )
           for crate in "${CRATES[@]}"; do
             # Skip comments
-            [[ "$crate" == \#* ]] && continue
+            [[ "$crate" == '#'* ]] && continue
 
             echo "::group::$crate"
             # --no-verify skips rebuild (CI already validated).
@@ -104,9 +104,9 @@ jobs:
                 break
               fi
               if [ "$attempt" -lt 3 ]; then
-                echo "Attempt $attempt failed, waiting 30s for index propagation..."
+                echo "Attempt $attempt failed, waiting 90s for index propagation / rate limit..."
                 echo "$OUTPUT"
-                sleep 30
+                sleep 90
               fi
             done
             echo "::endgroup::"
@@ -115,7 +115,7 @@ jobs:
               echo "::error::Failed to publish $crate after 3 attempts"
               exit 1
             fi
-            sleep 10  # pause for index propagation before next crate
+            sleep 65  # pause for rate limit: crates.io allows ~6 new crates per 5 min window
           done
           echo "All crates published successfully"
         env:
