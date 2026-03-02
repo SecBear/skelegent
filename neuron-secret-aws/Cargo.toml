@@ -1,6 +1,6 @@
 [package]
 name = "neuron-secret-aws"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,9 +11,9 @@ categories = ["asynchronous", "authentication"]
 keywords = ["neuron", "ai", "agent", "aws", "secrets"]
 
 [dependencies]
-neuron-secret = { path = "../neuron-secret" }
-neuron-auth = { path = "../neuron-auth" }
-layer0 = { path = "../layer0" }
+neuron-secret = { path = "../neuron-secret" , version = "1.0.0-alpha.1"}
+neuron-auth = { path = "../neuron-auth" , version = "1.0.0-alpha.1"}
+layer0 = { path = "../layer0" , version = "1.0.0-alpha.1"}
 async-trait = "0.1"
 
 [dev-dependencies]

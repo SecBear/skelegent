@@ -87,3 +87,36 @@ This repo is designed to be run in a deterministic loop:
 
 1. `PROMPT.md` is the loop prompt.
 2. `ralph_queue.md` is the single prioritized queue.
+
+
+## Composability Philosophy (Neuron v2)
+
+- Layer 0 must stay stable: object-safe traits + serde wire types. Additive changes preferred; breaking changes are planned and versioned.
+- Effects are the side‑effect boundary: operators declare, orchestrators/environments execute. No direct writes from operators.
+- Hooks are for policy/observability/redaction, not control flow. Halt/Skip/Modify are explicit; do not encode scheduling in hooks.
+- Execution mechanics are explicit and opt‑in:
+  - ToolExecutionStrategy (default: sequential). Optional barrier scheduling with Shared/Exclusive + batch flush + parallel shared tools.
+  - SteeringSource polled at defined boundaries to inject mid‑loop messages and optionally skip remaining tools.
+  - Optional streaming tool API; forward chunks via a ToolExecutionUpdate hook point.
+- Defaults must remain slim for simple use cases. Advanced behavior is opt‑in and modular; avoid boolean soup.
+- Orchestrator owns the reference effect interpreter and minimal signal/query semantics (local first, durable later).
+- Credentials are resolved/injected via Environment + secret/auth/crypto backends; tests must prove no secret leakage.
+- Conformance: golden tests prove provider swap, state swap, operator swap, and orchestration compose deterministically.
+
+## Architecture Principles (Execution + Composability)
+
+- Layer 0 is protocol only: object-safe traits + serde wire types. No execution policy, no technology bindings, no durability semantics.
+- Effects boundary is sacred: operators declare; orchestrators/environments execute. Operators must not write state directly.
+- Hooks vs Steering:
+  - Hooks are event-triggered observation/intervention at defined points (pre/post inference/tool, exit) with explicit actions.
+  - Steering is operator-initiated control flow: the runtime decides when to poll, may inject messages, and may skip current batches. Keep steering out of hooks.
+- Defaults stay slim: sequential tools, no steering, no streaming, local best-effort effects. Advanced behavior is opt-in via small, composable traits (no boolean soup).
+- Turn engine decomposition: prefer composing these primitives over monolithic loops:
+  - ContextAssembler, ToolExecutionPlanner, ConcurrencyDecider, BatchExecutor, SteeringSource, HookDispatcher, EffectSynthesizer, ExitController.
+- Tool metadata is source of truth: concurrency hints (Shared/Exclusive) live on the tool definition; deciders read metadata first and may layer policy.
+- Single authority for limits: budget/time/turns live in ExitController; planners only observe remaining budget/time (read-only).
+- Local vs durable: keep LocalEffectExecutor lean (in-order, best-effort). Durable semantics (idempotency keys, retries, sagas) belong to durable orchestrators, not Layer 0 or local executors.
+- Streaming is observation-only: ToolExecutionUpdate is read-only; it must not alter control flow.
+- Invariants: preserve tool_use → tool_result pairing; on steering, emit placeholders for skipped tools.
+- Refactor guardrail: behavior-preserving refactors must pass the full test suite before adding new capabilities via decomposed traits.
+- Conformance: prove composition patterns (provider/state/operator/orchestration swaps) with golden tests; enforce CI backpressure (fmt, clippy -D warnings, tests).

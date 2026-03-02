@@ -147,3 +147,11 @@ This continues until the model produces a final text response (no more tool use)
 - Include `"description"` on each property -- the model uses these to understand what to pass.
 - Keep schemas simple. Complex nested schemas increase the chance of the model producing invalid input.
 - Return structured JSON from `call()`. The model reads the tool result to decide its next action.
+
+
+## Migration from Rho tools
+
+If you're migrating from Rho:
+- Each `rho-tools` function maps to a `neuron_tool::ToolDyn` implementation.
+- Register tools in a `ToolRegistry`; the operator builds tool definitions from this registry.
+- Model/provider wiring from `rho-ai` maps to `neuron-turn` + `neuron-provider-*` crates; your loop logic lives in a custom operator if you need barriers/steering.

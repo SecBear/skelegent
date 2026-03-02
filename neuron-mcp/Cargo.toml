@@ -1,6 +1,6 @@
 [package]
 name = "neuron-mcp"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,7 +11,7 @@ categories = ["asynchronous", "network-programming"]
 keywords = ["neuron", "ai", "agent", "mcp", "model-context"]
 
 [dependencies]
-neuron-tool = { path = "../neuron-tool" }
+neuron-tool = { path = "../neuron-tool" , version = "1.0.0-alpha.1"}
 rmcp = { version = "0.16", features = [
   "client",
   "server",

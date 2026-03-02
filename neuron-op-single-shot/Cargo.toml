@@ -1,6 +1,6 @@
 [package]
 name = "neuron-op-single-shot"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,8 +11,8 @@ categories = ["asynchronous"]
 keywords = ["neuron", "ai", "agent", "operator", "llm"]
 
 [dependencies]
-layer0 = { path = "../layer0" }
-neuron-turn = { path = "../neuron-turn" }
+layer0 = { path = "../layer0" , version = "1.0.0-alpha.1"}
+neuron-turn = { path = "../neuron-turn" , version = "1.0.0-alpha.1"}
 async-trait = "0.1"
 rust_decimal = { version = "1", features = ["serde-str"] }
 serde_json = "1"

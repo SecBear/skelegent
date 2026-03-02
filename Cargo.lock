@@ -190,6 +190,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "custom-operator-barrier"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "neuron-tool",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -731,13 +743,13 @@ dependencies = [
 
 [[package]]
 name = "layer0"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "rust_decimal",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -796,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "neuron"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "layer0",
  "neuron-context",
@@ -818,18 +830,18 @@ dependencies = [
 
 [[package]]
 name = "neuron-auth"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
  "neuron-secret",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
 [[package]]
 name = "neuron-auth-file"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "neuron-auth",
@@ -839,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-auth-k8s"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "neuron-auth",
@@ -848,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-auth-oidc"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "neuron-auth",
@@ -857,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-auth-static"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "neuron-auth",
@@ -866,24 +878,24 @@ dependencies = [
 
 [[package]]
 name = "neuron-context"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "neuron-turn",
 ]
 
 [[package]]
 name = "neuron-crypto"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
 [[package]]
 name = "neuron-crypto-hardware"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "neuron-crypto",
@@ -892,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-crypto-vault"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "neuron-crypto",
@@ -900,8 +912,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "neuron-effects-core"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "neuron-effects-local"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "neuron-effects-core",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "neuron-env-local"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -912,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-hook-security"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -923,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-hooks"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -933,25 +966,27 @@ dependencies = [
 
 [[package]]
 name = "neuron-mcp"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "neuron-tool",
  "rmcp",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
 [[package]]
 name = "neuron-op-react"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
+ "futures-util",
  "layer0",
  "neuron-hooks",
  "neuron-tool",
  "neuron-turn",
+ "neuron-turn-kit",
  "rust_decimal",
  "serde_json",
  "tokio",
@@ -959,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-op-single-shot"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -971,18 +1006,21 @@ dependencies = [
 
 [[package]]
 name = "neuron-orch-kit"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
+ "neuron-effects-core",
+ "neuron-effects-local",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "neuron-orch-local"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -992,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-provider-anthropic"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "layer0",
  "neuron-context",
@@ -1010,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-provider-ollama"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "layer0",
  "neuron-context",
@@ -1029,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-provider-openai"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "layer0",
  "neuron-context",
@@ -1047,19 +1085,19 @@ dependencies = [
 
 [[package]]
 name = "neuron-secret"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "zeroize",
 ]
 
 [[package]]
 name = "neuron-secret-aws"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -1070,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-secret-env"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -1081,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-secret-gcp"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -1092,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-secret-k8s"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -1103,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-secret-keystore"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -1113,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-secret-vault"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -1124,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-state-fs"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -1135,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "neuron-state-memory"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
@@ -1145,24 +1183,32 @@ dependencies = [
 
 [[package]]
 name = "neuron-tool"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "serde_json",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
 [[package]]
 name = "neuron-turn"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "layer0",
  "rust_decimal",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "neuron-turn-kit"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "neuron-turn",
+ "serde_json",
 ]
 
 [[package]]
@@ -1335,7 +1381,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "web-time",
@@ -1356,7 +1402,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror",
+ "thiserror 2.0.18",
  "tinyvec",
  "tracing",
  "web-time",
@@ -1649,7 +1695,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sse-stream",
- "thiserror",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -1993,11 +2039,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.18",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

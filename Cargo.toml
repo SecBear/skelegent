@@ -41,6 +41,10 @@ members = [
   "neuron-crypto-vault",
   "neuron-crypto-hardware",
   "neuron-hook-security",
+  "examples/custom_operator_barrier",
+  "neuron-turn-kit",
+  "neuron-effects-core",
+  "neuron-effects-local",
 ]
 
 [workspace.package]

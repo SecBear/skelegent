@@ -181,3 +181,12 @@ The `Orchestrator` trait is designed to support orchestrators beyond in-process 
 - **HTTP** -- Dispatch over HTTP for microservice architectures. `dispatch` sends a serialized `OperatorInput` over the network.
 
 The trait is transport-agnostic by design. All protocol types (`OperatorInput`, `OperatorOutput`, `SignalPayload`, `QueryPayload`) implement `Serialize + Deserialize`, so they can cross any boundary.
+
+
+## Effects, signals, and custom operators
+
+Neuron draws a hard boundary: operators declare `effects`; orchestrators execute them. This separation lets you reuse the same operator across transports (in-process, Temporal, Restate) without leaking execution mechanics.
+
+Custom operators (e.g., barrier-scheduled loops) can freely declare effects like `Effect::Log`, `Effect::Delegate`, or `Effect::Signal`. The orchestrator decides when to execute them relative to dispatch lifecycles, and exposes `signal()`/`query()` for out-of-band communication.
+
+Defaults stay slim: if you do nothing, use `ReactOperator` or `SingleShotOperator`. If you need Rho-like control (barriers and steering), implement a custom operator and keep effects at the boundary. See `examples/custom_operator_barrier`.

@@ -15,7 +15,7 @@ use layer0::operator::{
     ExitReason, Operator, OperatorInput, OperatorMetadata, OperatorOutput, ToolCallRecord,
 };
 use neuron_hooks::HookRegistry;
-use neuron_tool::ToolRegistry;
+use neuron_tool::{ToolConcurrencyHint, ToolRegistry};
 use neuron_turn::context::ContextStrategy;
 use neuron_turn::convert::{content_to_user_message, parts_to_content};
 use neuron_turn::provider::Provider;
@@ -67,6 +67,53 @@ struct ResolvedConfig {
     max_tokens: u32,
 }
 
+// Re-export turn-kit primitives
+pub use neuron_turn_kit::{
+    BarrierPlanner, BatchItem, Concurrency, ConcurrencyDecider, SteeringSource,
+    ToolExecutionPlanner,
+};
+
+/// Default decider: all tools Exclusive.
+struct DefaultDecider;
+impl ConcurrencyDecider for DefaultDecider {
+    /// Return the concurrency class for a tool by name.
+    fn concurrency(&self, _tool_name: &str) -> Concurrency {
+        Concurrency::Exclusive
+    }
+}
+
+/// Concurrency decider that reads per-tool metadata from ToolRegistry.
+struct MetadataDecider {
+    tools: ToolRegistry,
+}
+impl ConcurrencyDecider for MetadataDecider {
+    fn concurrency(&self, tool_name: &str) -> Concurrency {
+        match self.tools.get(tool_name) {
+            Some(tool) => match tool.concurrency_hint() {
+                ToolConcurrencyHint::Shared => Concurrency::Shared,
+                ToolConcurrencyHint::Exclusive => Concurrency::Exclusive,
+                _ => Concurrency::Exclusive,
+            },
+            None => Concurrency::Exclusive,
+        }
+    }
+}
+
+/// Sequential planner: each tool runs alone.
+struct SequentialPlanner;
+impl ToolExecutionPlanner for SequentialPlanner {
+    fn plan(
+        &self,
+        tool_uses: &[(String, String, serde_json::Value)],
+        _decider: &dyn ConcurrencyDecider,
+    ) -> Vec<BatchItem> {
+        tool_uses
+            .iter()
+            .cloned()
+            .map(BatchItem::Exclusive)
+            .collect()
+    }
+}
 /// A full-featured Operator implementation with a ReAct loop.
 ///
 /// Generic over `P: Provider` (not object-safe). The object-safe boundary
@@ -78,6 +125,9 @@ pub struct ReactOperator<P: Provider> {
     hooks: HookRegistry,
     state_reader: Arc<dyn layer0::StateReader>,
     config: ReactConfig,
+    planner: Box<dyn ToolExecutionPlanner>,
+    decider: Box<dyn ConcurrencyDecider>,
+    steering: Option<Arc<dyn SteeringSource>>,
 }
 
 impl<P: Provider> ReactOperator<P> {
@@ -97,7 +147,32 @@ impl<P: Provider> ReactOperator<P> {
             hooks,
             state_reader,
             config,
+            planner: Box::new(SequentialPlanner),
+            decider: Box::new(DefaultDecider),
+            steering: None,
         }
+    }
+    /// Opt-in: set a custom tool execution planner.
+    pub fn with_planner(mut self, planner: Box<dyn ToolExecutionPlanner>) -> Self {
+        self.planner = planner;
+        self
+    }
+    /// Opt-in: set a custom concurrency decider.
+    pub fn with_concurrency_decider(mut self, decider: Box<dyn ConcurrencyDecider>) -> Self {
+        self.decider = decider;
+        self
+    }
+    /// Opt-in: use tool metadata to decide concurrency.
+    pub fn with_metadata_concurrency(mut self) -> Self {
+        self.decider = Box::new(MetadataDecider {
+            tools: self.tools.clone(),
+        });
+        self
+    }
+    /// Opt-in: attach a steering source.
+    pub fn with_steering(mut self, s: Arc<dyn SteeringSource>) -> Self {
+        self.steering = Some(s);
+        self
     }
 
     fn resolve_config(&self, input: &OperatorInput) -> ResolvedConfig {
@@ -413,7 +488,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 content: response.content.clone(),
             });
 
-            let tool_uses: Vec<(String, String, serde_json::Value)> = response
+            let _tool_uses: Vec<(String, String, serde_json::Value)> = response
                 .content
                 .iter()
                 .filter_map(|part| match part {
@@ -423,127 +498,494 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                     _ => None,
                 })
                 .collect();
+            let mut tool_results: Vec<ContentPart> = Vec::new();
+            // Use planner to decide batches. Build (id,name,input) vector first.
+            let planned = {
+                let calls: Vec<(String, String, serde_json::Value)> = response
+                    .content
+                    .iter()
+                    .filter_map(|part| match part {
+                        ContentPart::ToolUse { id, name, input } => {
+                            Some((id.clone(), name.clone(), input.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                self.planner.plan(&calls, self.decider.as_ref())
+            };
 
-            let mut tool_results = Vec::new();
-
-            for (id, name, tool_input) in tool_uses {
-                // a. Check effect tool
-                if EFFECT_TOOL_NAMES.contains(&name.as_str()) {
-                    if let Some(effect) = self.try_as_effect(&name, &tool_input) {
-                        effects.push(effect);
+            let mut _steered = false;
+            'batches: for batch in planned {
+                match batch {
+                    BatchItem::Shared(call_group) => {
+                        // Pre-batch steering poll
+                        if let Some(s) = &self.steering {
+                            let injected = s.drain();
+                            if !injected.is_empty() {
+                                messages.extend(injected);
+                                // All tools in this batch are skipped with placeholders
+                                for (id, name, _input) in call_group.into_iter() {
+                                    tool_results.push(ContentPart::ToolResult {
+                                        tool_use_id: id,
+                                        content: "Skipped due to steering".into(),
+                                        is_error: false,
+                                    });
+                                    tool_records.push(ToolCallRecord::new(
+                                        &name,
+                                        DurationMs::ZERO,
+                                        false,
+                                    ));
+                                }
+                                _steered = true;
+                                break 'batches;
+                            }
+                        }
+                        // Execute shared tools sequentially to allow steering to interrupt mid-batch
+                        let len = call_group.len();
+                        for idx in 0..len {
+                            // Pre-next-tool steering poll (after some tools completed)
+                            if idx > 0
+                                && let Some(s) = &self.steering
+                            {
+                                let injected = s.drain();
+                                if !injected.is_empty() {
+                                    messages.extend(injected);
+                                    for (rid, rname, _rinput) in
+                                        call_group.iter().skip(idx).cloned()
+                                    {
+                                        tool_results.push(ContentPart::ToolResult {
+                                            tool_use_id: rid,
+                                            content: "Skipped due to steering".into(),
+                                            is_error: false,
+                                        });
+                                        tool_records.push(ToolCallRecord::new(
+                                            &rname,
+                                            DurationMs::ZERO,
+                                            false,
+                                        ));
+                                    }
+                                    _steered = true;
+                                    _steered = true;
+                                }
+                            }
+                            let (id, name, tool_input) = call_group[idx].clone();
+                            // Effects handled immediately
+                            if EFFECT_TOOL_NAMES.contains(&name.as_str()) {
+                                if let Some(effect) = self.try_as_effect(&name, &tool_input) {
+                                    effects.push(effect);
+                                }
+                                tool_results.push(ContentPart::ToolResult {
+                                    tool_use_id: id,
+                                    content: format!("{name} effect recorded."),
+                                    is_error: false,
+                                });
+                                tool_records.push(ToolCallRecord::new(
+                                    &name,
+                                    DurationMs::ZERO,
+                                    true,
+                                ));
+                            } else {
+                                // Hook: PreToolUse
+                                let mut actual_input = tool_input.clone();
+                                let mut hook_ctx = HookContext::new(HookPoint::PreToolUse);
+                                hook_ctx.tool_name = Some(name.clone());
+                                hook_ctx.tool_input = Some(tool_input.clone());
+                                hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
+                                hook_ctx.cost = total_cost;
+                                hook_ctx.turns_completed = turns_used;
+                                hook_ctx.elapsed = DurationMs::from(start.elapsed());
+                                match self.hooks.dispatch(&hook_ctx).await {
+                                    HookAction::Halt { reason } => {
+                                        return Ok(Self::make_output(
+                                            parts_to_content(&last_content),
+                                            ExitReason::ObserverHalt { reason },
+                                            self.build_metadata(
+                                                total_tokens_in,
+                                                total_tokens_out,
+                                                total_cost,
+                                                turns_used,
+                                                tool_records,
+                                                DurationMs::from(start.elapsed()),
+                                            ),
+                                            effects,
+                                        ));
+                                    }
+                                    HookAction::SkipTool { reason } => {
+                                        tool_results.push(ContentPart::ToolResult {
+                                            tool_use_id: id,
+                                            content: format!("Skipped: {reason}"),
+                                            is_error: false,
+                                        });
+                                        tool_records.push(ToolCallRecord::new(
+                                            &name,
+                                            DurationMs::ZERO,
+                                            false,
+                                        ));
+                                        continue;
+                                    }
+                                    HookAction::ModifyToolInput { new_input } => {
+                                        actual_input = new_input;
+                                    }
+                                    HookAction::Continue => {}
+                                    _ => {}
+                                }
+                                // Execute tool (streaming if supported)
+                                let tool_start = Instant::now();
+                                // Defaults for non-streaming path
+                                let (mut result_content, is_error, success, duration) = match self
+                                    .tools
+                                    .get(&name)
+                                {
+                                    Some(tool) => {
+                                        if let Some(stream) = tool.maybe_streaming() {
+                                            // Collect chunks during streaming
+                                            let chunks_arc =
+                                                std::sync::Arc::new(std::sync::Mutex::new(Vec::<
+                                                    String,
+                                                >::new(
+                                                )));
+                                            let chunks_cb = chunks_arc.clone();
+                                            let res = stream
+                                                .call_streaming(
+                                                    actual_input.clone(),
+                                                    Box::new(move |c: &str| {
+                                                        if let Ok(mut v) = chunks_cb.lock() {
+                                                            v.push(c.to_string());
+                                                        }
+                                                    }),
+                                                )
+                                                .await;
+                                            let tool_duration =
+                                                DurationMs::from(tool_start.elapsed());
+                                            // Dispatch chunk updates in order, ignoring actions/errors
+                                            if let Ok(chunks) =
+                                                std::sync::Arc::try_unwrap(chunks_arc)
+                                                    .map(|m| m.into_inner().unwrap())
+                                            {
+                                                for ch in &chunks {
+                                                    let mut uctx = HookContext::new(
+                                                        HookPoint::ToolExecutionUpdate,
+                                                    );
+                                                    uctx.tool_name = Some(name.clone());
+                                                    uctx.tool_chunk = Some(ch.clone());
+                                                    uctx.tokens_used =
+                                                        total_tokens_in + total_tokens_out;
+                                                    uctx.cost = total_cost;
+                                                    uctx.turns_completed = turns_used;
+                                                    uctx.elapsed =
+                                                        DurationMs::from(start.elapsed());
+                                                    let _ = self.hooks.dispatch(&uctx).await;
+                                                }
+                                                match res {
+                                                    Ok(()) => (
+                                                        chunks.concat(),
+                                                        false,
+                                                        true,
+                                                        tool_duration,
+                                                    ),
+                                                    Err(e) => {
+                                                        (e.to_string(), true, false, tool_duration)
+                                                    }
+                                                }
+                                            } else {
+                                                // Fallback if Arc could not be unwrapped
+                                                match res {
+                                                    Ok(()) => {
+                                                        (String::new(), false, true, tool_duration)
+                                                    }
+                                                    Err(e) => {
+                                                        (e.to_string(), true, false, tool_duration)
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            // Non-streaming
+                                            match tool.call(actual_input.clone()).await {
+                                                Ok(value) => (
+                                                    serde_json::to_string(&value)
+                                                        .unwrap_or_default(),
+                                                    false,
+                                                    true,
+                                                    DurationMs::from(tool_start.elapsed()),
+                                                ),
+                                                Err(e) => (
+                                                    e.to_string(),
+                                                    true,
+                                                    false,
+                                                    DurationMs::from(tool_start.elapsed()),
+                                                ),
+                                            }
+                                        }
+                                    }
+                                    None => (
+                                        neuron_tool::ToolError::NotFound(name.clone()).to_string(),
+                                        true,
+                                        false,
+                                        DurationMs::from(tool_start.elapsed()),
+                                    ),
+                                };
+                                // PostToolUse hook
+                                let mut hook_ctx = HookContext::new(HookPoint::PostToolUse);
+                                hook_ctx.tool_name = Some(name.clone());
+                                hook_ctx.tool_result = Some(result_content.clone());
+                                hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
+                                hook_ctx.cost = total_cost;
+                                hook_ctx.turns_completed = turns_used;
+                                hook_ctx.elapsed = DurationMs::from(start.elapsed());
+                                match self.hooks.dispatch(&hook_ctx).await {
+                                    HookAction::Halt { reason } => {
+                                        return Ok(Self::make_output(
+                                            parts_to_content(&last_content),
+                                            ExitReason::ObserverHalt { reason },
+                                            self.build_metadata(
+                                                total_tokens_in,
+                                                total_tokens_out,
+                                                total_cost,
+                                                turns_used,
+                                                tool_records,
+                                                DurationMs::from(start.elapsed()),
+                                            ),
+                                            effects,
+                                        ));
+                                    }
+                                    HookAction::ModifyToolOutput { new_output } => {
+                                        result_content = new_output.to_string();
+                                    }
+                                    _ => {}
+                                }
+                                tool_results.push(ContentPart::ToolResult {
+                                    tool_use_id: id,
+                                    content: result_content,
+                                    is_error,
+                                });
+                                tool_records.push(ToolCallRecord::new(name, duration, success));
+                            }
+                            // Mid-batch steering poll — skip remaining tools in this batch
+                            if let Some(s) = &self.steering {
+                                let injected = s.drain();
+                                if !injected.is_empty() {
+                                    messages.extend(injected);
+                                }
+                                if idx + 1 < len {
+                                    for (rid, rname, _rinput) in
+                                        call_group.iter().skip(idx + 1).cloned()
+                                    {
+                                        tool_results.push(ContentPart::ToolResult {
+                                            tool_use_id: rid,
+                                            content: "Skipped due to steering".into(),
+                                            is_error: false,
+                                        });
+                                        tool_records.push(ToolCallRecord::new(
+                                            &rname,
+                                            DurationMs::ZERO,
+                                            false,
+                                        ));
+                                    }
+                                    break 'batches;
+                                }
+                            }
+                        }
+                        // Post-batch steering poll
+                        if let Some(s) = &self.steering {
+                            let injected = s.drain();
+                            if !injected.is_empty() {
+                                messages.extend(injected);
+                                _steered = true;
+                                break 'batches;
+                            }
+                        }
                     }
-                    tool_results.push(ContentPart::ToolResult {
-                        tool_use_id: id,
-                        content: format!("{name} effect recorded."),
-                        is_error: false,
-                    });
-                    tool_records.push(ToolCallRecord::new(&name, DurationMs::ZERO, true));
-                    continue;
-                }
-
-                // b. Hook: PreToolUse
-                let mut actual_input = tool_input.clone();
-                let mut hook_ctx = HookContext::new(HookPoint::PreToolUse);
-                hook_ctx.tool_name = Some(name.clone());
-                hook_ctx.tool_input = Some(tool_input.clone());
-                hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
-                hook_ctx.cost = total_cost;
-                hook_ctx.turns_completed = turns_used;
-                hook_ctx.elapsed = DurationMs::from(start.elapsed());
-
-                match self.hooks.dispatch(&hook_ctx).await {
-                    HookAction::Halt { reason } => {
-                        return Ok(Self::make_output(
-                            parts_to_content(&last_content),
-                            ExitReason::ObserverHalt { reason },
-                            self.build_metadata(
-                                total_tokens_in,
-                                total_tokens_out,
-                                total_cost,
-                                turns_used,
-                                tool_records,
-                                DurationMs::from(start.elapsed()),
+                    BatchItem::Exclusive((id, name, tool_input)) => {
+                        // Pre-exclusive steering poll
+                        if let Some(s) = &self.steering {
+                            let injected = s.drain();
+                            if !injected.is_empty() {
+                                messages.extend(injected);
+                                tool_results.push(ContentPart::ToolResult {
+                                    tool_use_id: id,
+                                    content: "Skipped due to steering".into(),
+                                    is_error: false,
+                                });
+                                tool_records.push(ToolCallRecord::new(
+                                    &name,
+                                    DurationMs::ZERO,
+                                    false,
+                                ));
+                                _steered = true;
+                                break 'batches;
+                            }
+                        }
+                        if EFFECT_TOOL_NAMES.contains(&name.as_str()) {
+                            if let Some(effect) = self.try_as_effect(&name, &tool_input) {
+                                effects.push(effect);
+                            }
+                            tool_results.push(ContentPart::ToolResult {
+                                tool_use_id: id,
+                                content: format!("{name} effect recorded."),
+                                is_error: false,
+                            });
+                            tool_records.push(ToolCallRecord::new(&name, DurationMs::ZERO, true));
+                            continue;
+                        }
+                        let mut actual_input = tool_input.clone();
+                        let mut hook_ctx = HookContext::new(HookPoint::PreToolUse);
+                        hook_ctx.tool_name = Some(name.clone());
+                        hook_ctx.tool_input = Some(tool_input.clone());
+                        hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
+                        hook_ctx.cost = total_cost;
+                        hook_ctx.turns_completed = turns_used;
+                        hook_ctx.elapsed = DurationMs::from(start.elapsed());
+                        match self.hooks.dispatch(&hook_ctx).await {
+                            HookAction::Halt { reason } => {
+                                return Ok(Self::make_output(
+                                    parts_to_content(&last_content),
+                                    ExitReason::ObserverHalt { reason },
+                                    self.build_metadata(
+                                        total_tokens_in,
+                                        total_tokens_out,
+                                        total_cost,
+                                        turns_used,
+                                        tool_records,
+                                        DurationMs::from(start.elapsed()),
+                                    ),
+                                    effects,
+                                ));
+                            }
+                            HookAction::SkipTool { reason } => {
+                                tool_results.push(ContentPart::ToolResult {
+                                    tool_use_id: id,
+                                    content: format!("Skipped: {reason}"),
+                                    is_error: false,
+                                });
+                                tool_records.push(ToolCallRecord::new(
+                                    &name,
+                                    DurationMs::ZERO,
+                                    false,
+                                ));
+                                continue;
+                            }
+                            HookAction::ModifyToolInput { new_input } => {
+                                actual_input = new_input;
+                            }
+                            HookAction::Continue => {}
+                            _ => {}
+                        }
+                        let tool_start = Instant::now();
+                        // Execute tool (streaming if supported)
+                        let (mut result_content, is_error, success, tool_duration) = match self
+                            .tools
+                            .get(&name)
+                        {
+                            Some(tool) => {
+                                if let Some(stream) = tool.maybe_streaming() {
+                                    let chunks_arc = std::sync::Arc::new(std::sync::Mutex::new(
+                                        Vec::<String>::new(),
+                                    ));
+                                    let chunks_cb = chunks_arc.clone();
+                                    let res = stream
+                                        .call_streaming(
+                                            actual_input.clone(),
+                                            Box::new(move |c: &str| {
+                                                if let Ok(mut v) = chunks_cb.lock() {
+                                                    v.push(c.to_string());
+                                                }
+                                            }),
+                                        )
+                                        .await;
+                                    let dur = DurationMs::from(tool_start.elapsed());
+                                    if let Ok(chunks) = std::sync::Arc::try_unwrap(chunks_arc)
+                                        .map(|m| m.into_inner().unwrap())
+                                    {
+                                        for ch in &chunks {
+                                            let mut uctx =
+                                                HookContext::new(HookPoint::ToolExecutionUpdate);
+                                            uctx.tool_name = Some(name.clone());
+                                            uctx.tool_chunk = Some(ch.clone());
+                                            uctx.tokens_used = total_tokens_in + total_tokens_out;
+                                            uctx.cost = total_cost;
+                                            uctx.turns_completed = turns_used;
+                                            uctx.elapsed = DurationMs::from(start.elapsed());
+                                            let _ = self.hooks.dispatch(&uctx).await;
+                                        }
+                                        match res {
+                                            Ok(()) => (chunks.concat(), false, true, dur),
+                                            Err(e) => (e.to_string(), true, false, dur),
+                                        }
+                                    } else {
+                                        match res {
+                                            Ok(()) => (String::new(), false, true, dur),
+                                            Err(e) => (e.to_string(), true, false, dur),
+                                        }
+                                    }
+                                } else {
+                                    match tool.call(actual_input.clone()).await {
+                                        Ok(value) => (
+                                            serde_json::to_string(&value).unwrap_or_default(),
+                                            false,
+                                            true,
+                                            DurationMs::from(tool_start.elapsed()),
+                                        ),
+                                        Err(e) => (
+                                            e.to_string(),
+                                            true,
+                                            false,
+                                            DurationMs::from(tool_start.elapsed()),
+                                        ),
+                                    }
+                                }
+                            }
+                            None => (
+                                neuron_tool::ToolError::NotFound(name.clone()).to_string(),
+                                true,
+                                false,
+                                DurationMs::from(tool_start.elapsed()),
                             ),
-                            effects,
-                        ));
-                    }
-                    HookAction::SkipTool { reason } => {
+                        };
+                        let mut hook_ctx = HookContext::new(HookPoint::PostToolUse);
+                        hook_ctx.tool_name = Some(name.clone());
+                        hook_ctx.tool_result = Some(result_content.clone());
+                        hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
+                        hook_ctx.cost = total_cost;
+                        hook_ctx.turns_completed = turns_used;
+                        hook_ctx.elapsed = DurationMs::from(start.elapsed());
+                        match self.hooks.dispatch(&hook_ctx).await {
+                            HookAction::Halt { reason } => {
+                                return Ok(Self::make_output(
+                                    parts_to_content(&last_content),
+                                    ExitReason::ObserverHalt { reason },
+                                    self.build_metadata(
+                                        total_tokens_in,
+                                        total_tokens_out,
+                                        total_cost,
+                                        turns_used,
+                                        tool_records,
+                                        DurationMs::from(start.elapsed()),
+                                    ),
+                                    effects,
+                                ));
+                            }
+                            HookAction::ModifyToolOutput { new_output } => {
+                                result_content = new_output.to_string();
+                            }
+                            _ => {}
+                        }
                         tool_results.push(ContentPart::ToolResult {
                             tool_use_id: id,
-                            content: format!("Skipped: {reason}"),
-                            is_error: false,
+                            content: result_content,
+                            is_error,
                         });
-                        tool_records.push(ToolCallRecord::new(&name, DurationMs::ZERO, false));
-                        continue;
+                        tool_records.push(ToolCallRecord::new(name, tool_duration, success));
+                        // Post-exclusive steering poll
+                        if let Some(s) = &self.steering {
+                            let injected = s.drain();
+                            if !injected.is_empty() {
+                                messages.extend(injected);
+                                _steered = true;
+                                break 'batches;
+                            }
+                        }
                     }
-                    HookAction::ModifyToolInput { new_input } => {
-                        actual_input = new_input;
-                    }
-                    HookAction::Continue => {}
-                    // Handle non_exhaustive
-                    _ => {}
                 }
-
-                // c. Execute tool
-                let tool_start = Instant::now();
-                let result = match self.tools.get(&name) {
-                    Some(tool) => tool.call(actual_input).await,
-                    None => Err(neuron_tool::ToolError::NotFound(name.clone())),
-                };
-                let tool_duration = DurationMs::from(tool_start.elapsed());
-
-                let (mut result_content, is_error, success) = match result {
-                    Ok(value) => (
-                        serde_json::to_string(&value).unwrap_or_default(),
-                        false,
-                        true,
-                    ),
-                    Err(e) => (e.to_string(), true, false),
-                };
-
-                // d. Hook: PostToolUse
-                let mut hook_ctx = HookContext::new(HookPoint::PostToolUse);
-                hook_ctx.tool_name = Some(name.clone());
-                hook_ctx.tool_result = Some(result_content.clone());
-                hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
-                hook_ctx.cost = total_cost;
-                hook_ctx.turns_completed = turns_used;
-                hook_ctx.elapsed = DurationMs::from(start.elapsed());
-
-                match self.hooks.dispatch(&hook_ctx).await {
-                    HookAction::Halt { reason } => {
-                        return Ok(Self::make_output(
-                            parts_to_content(&last_content),
-                            ExitReason::ObserverHalt { reason },
-                            self.build_metadata(
-                                total_tokens_in,
-                                total_tokens_out,
-                                total_cost,
-                                turns_used,
-                                tool_records,
-                                DurationMs::from(start.elapsed()),
-                            ),
-                            effects,
-                        ));
-                    }
-                    HookAction::ModifyToolOutput { new_output } => {
-                        // Replace tool result content before it flows into model context.
-                        // HookRegistry short-circuits on first non-Continue, so only one
-                        // hook's ModifyToolOutput can be returned per dispatch.
-                        result_content = new_output.to_string();
-                    }
-                    _ => {} // Continue, SkipTool, ModifyToolInput are no-ops at PostToolUse
-                }
-
-                // e. Backfill result
-                tool_results.push(ContentPart::ToolResult {
-                    tool_use_id: id,
-                    content: result_content,
-                    is_error,
-                });
-
-                // f. Record
-                tool_records.push(ToolCallRecord::new(name, tool_duration, success));
             }
 
             // Add tool results as user message
@@ -1370,5 +1812,423 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
         // The unused `provider` variable should not cause issues
         drop(provider);
+    }
+
+    // -- Steering Mocks --
+    struct MockSteering {
+        seq: Mutex<VecDeque<Vec<ProviderMessage>>>,
+        calls: AtomicUsize,
+    }
+    impl MockSteering {
+        fn new(seq: Vec<Vec<ProviderMessage>>) -> Self {
+            Self {
+                seq: Mutex::new(seq.into()),
+                calls: AtomicUsize::new(0),
+            }
+        }
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+    impl SteeringSource for MockSteering {
+        fn drain(&self) -> Vec<ProviderMessage> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seq.lock().unwrap().pop_front().unwrap_or_default()
+        }
+    }
+
+    struct CountingEchoTool {
+        hits: std::sync::Arc<AtomicUsize>,
+    }
+    impl CountingEchoTool {
+        fn new(h: std::sync::Arc<AtomicUsize>) -> Self {
+            Self { hits: h }
+        }
+    }
+    impl neuron_tool::ToolDyn for CountingEchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "Echoes input (counting)"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type":"object"})
+        }
+        fn call(
+            &self,
+            input: serde_json::Value,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<serde_json::Value, neuron_tool::ToolError>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(json!({"echoed": input})) })
+        }
+    }
+
+    struct SharedOnlyDecider;
+    impl ConcurrencyDecider for SharedOnlyDecider {
+        fn concurrency(&self, tool_name: &str) -> Concurrency {
+            if tool_name == "echo" {
+                Concurrency::Shared
+            } else {
+                Concurrency::Exclusive
+            }
+        }
+    }
+
+    fn user_msg(text: &str) -> ProviderMessage {
+        ProviderMessage {
+            role: Role::User,
+            content: vec![ContentPart::Text { text: text.into() }],
+        }
+    }
+
+    #[tokio::test]
+    async fn steering_skips_remaining_shared_batch() {
+        // Provider returns two shared tool uses in one response
+        let first = ProviderResponse {
+            content: vec![
+                ContentPart::ToolUse {
+                    id: "t1".into(),
+                    name: "echo".into(),
+                    input: json!({"n":1}),
+                },
+                ContentPart::ToolUse {
+                    id: "t2".into(),
+                    name: "echo".into(),
+                    input: json!({"n":2}),
+                },
+            ],
+            stop_reason: StopReason::ToolUse,
+            usage: TokenUsage {
+                input_tokens: 10,
+                output_tokens: 15,
+                ..Default::default()
+            },
+            model: "mock".into(),
+            cost: None,
+            truncated: None,
+        };
+        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
+        let steering = Arc::new(MockSteering::new(vec![
+            vec![],                  // pre-batch: no steering
+            vec![user_msg("STEER")], // after first result: trigger steering
+        ]));
+        let steering_ref = steering.clone();
+        let op = make_op_with_tools(provider, tools)
+            .with_planner(Box::new(BarrierPlanner))
+            .with_concurrency_decider(Box::new(SharedOnlyDecider))
+            .with_steering(steering);
+        let output = op.execute(simple_input("run"));
+        let output = output.await.unwrap();
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert!(steering_ref.call_count() >= 1);
+        // Only first tool executed
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(output.metadata.turns_used, 2);
+        assert_eq!(output.metadata.tools_called.len(), 2);
+        assert_eq!(output.metadata.tools_called[0].name, "echo");
+        assert_eq!(output.metadata.tools_called[1].name, "echo");
+    }
+    #[tokio::test]
+    async fn steering_skips_before_exclusive() {
+        // Single exclusive tool use, steering triggers before execution
+        let first = ProviderResponse {
+            content: vec![ContentPart::ToolUse {
+                id: "t1".into(),
+                name: "echo".into(),
+                input: json!({}),
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: TokenUsage {
+                input_tokens: 10,
+                output_tokens: 15,
+                ..Default::default()
+            },
+            model: "mock".into(),
+            cost: None,
+            truncated: None,
+        };
+        // Provider should be called again after steering injection
+        let call_count = std::sync::Arc::new(AtomicUsize::new(0));
+        struct CountingProvider {
+            inner: MockProvider,
+            count: std::sync::Arc<AtomicUsize>,
+        }
+        impl Provider for CountingProvider {
+            #[allow(clippy::manual_async_fn)]
+            fn complete(
+                &self,
+                request: ProviderRequest,
+            ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send
+            {
+                self.count.fetch_add(1, Ordering::SeqCst);
+                self.inner.complete(request)
+            }
+        }
+        let counting = CountingProvider {
+            inner: MockProvider::new(vec![first, simple_text_response("Done")]),
+            count: call_count.clone(),
+        };
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
+        let steering = Arc::new(MockSteering::new(vec![
+            vec![user_msg("STEER")], // pre-exclusive: trigger
+        ]));
+        let op = ReactOperator::new(
+            counting,
+            tools,
+            Box::new(NoCompaction),
+            HookRegistry::new(),
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        )
+        .with_steering(steering);
+        let output = op.execute(simple_input("run"));
+        let output = output.await.unwrap();
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        // Tool implementation was never called
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        // Provider called twice (two turns)
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert_eq!(output.metadata.turns_used, 2);
+    }
+
+    #[tokio::test]
+    async fn no_steering_default() {
+        // Two shared tools; without steering both execute
+        let first = ProviderResponse {
+            content: vec![
+                ContentPart::ToolUse {
+                    id: "t1".into(),
+                    name: "echo".into(),
+                    input: json!({}),
+                },
+                ContentPart::ToolUse {
+                    id: "t2".into(),
+                    name: "echo".into(),
+                    input: json!({}),
+                },
+            ],
+            stop_reason: StopReason::ToolUse,
+            usage: TokenUsage {
+                input_tokens: 10,
+                output_tokens: 15,
+                ..Default::default()
+            },
+            model: "mock".into(),
+            cost: None,
+            truncated: None,
+        };
+        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
+        let op = make_op_with_tools(provider, tools)
+            .with_planner(Box::new(BarrierPlanner))
+            .with_concurrency_decider(Box::new(SharedOnlyDecider));
+        let output = op.execute(simple_input("run"));
+        let output = output.await.unwrap();
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        assert_eq!(output.metadata.tools_called.len(), 2);
+        assert_eq!(output.metadata.turns_used, 2);
+    }
+
+    // -- Streaming Tool + Hook tests --
+    struct StreamEcho;
+    impl neuron_tool::ToolDyn for StreamEcho {
+        fn name(&self) -> &str {
+            "stream_echo"
+        }
+        fn description(&self) -> &str {
+            "Streams echo chunks"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type":"object"})
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<serde_json::Value, neuron_tool::ToolError>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async { Ok(serde_json::json!({"note":"non-stream fallback"})) })
+        }
+        fn maybe_streaming(&self) -> Option<&dyn neuron_tool::ToolDynStreaming> {
+            Some(self)
+        }
+    }
+    impl neuron_tool::ToolDynStreaming for StreamEcho {
+        fn call_streaming<'a>(
+            &'a self,
+            _input: serde_json::Value,
+            on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), neuron_tool::ToolError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                for ch in ["A", "B", "C"] {
+                    on_chunk(ch);
+                }
+                Ok(())
+            })
+        }
+    }
+
+    struct CollectHook {
+        points: Vec<HookPoint>,
+        chunks: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        finals: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    #[async_trait]
+    impl layer0::hook::Hook for CollectHook {
+        fn points(&self) -> &[HookPoint] {
+            &self.points
+        }
+        async fn on_event(
+            &self,
+            ctx: &HookContext,
+        ) -> Result<HookAction, layer0::error::HookError> {
+            if ctx.point == HookPoint::ToolExecutionUpdate {
+                if let Some(c) = &ctx.tool_chunk {
+                    self.chunks.lock().unwrap().push(c.clone());
+                }
+                Ok(HookAction::Continue)
+            } else if ctx.point == HookPoint::PostToolUse {
+                if let Some(r) = &ctx.tool_result {
+                    self.finals.lock().unwrap().push(r.clone());
+                }
+                Ok(HookAction::Continue)
+            } else {
+                Ok(HookAction::Continue)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_chunks_forwarded_and_concatenated() {
+        // Provider returns a single tool use then an EndTurn
+        let _provider = MockProvider::new(vec![
+            tool_use_response("tu_s", "stream_echo", json!({"n":1})),
+            simple_text_response("OK"),
+        ]);
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(StreamEcho));
+        // Hook to collect updates
+        let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let finals = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let mut hooks = HookRegistry::new();
+        hooks.add(Arc::new(CollectHook {
+            points: vec![HookPoint::ToolExecutionUpdate, HookPoint::PostToolUse],
+            chunks: chunks.clone(),
+            finals: finals.clone(),
+        }));
+        let op = ReactOperator::new(
+            MockProvider::new(vec![
+                tool_use_response("tu_s", "stream_echo", json!({})),
+                simple_text_response("OK"),
+            ]),
+            tools,
+            Box::new(NoCompaction),
+            hooks,
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        );
+        let _ = op.execute(simple_input("run")).await.unwrap();
+        let got_chunks = chunks.lock().unwrap().clone();
+        assert_eq!(got_chunks, vec!["A", "B", "C"]);
+        let got_finals = finals.lock().unwrap().clone();
+        assert_eq!(got_finals.len(), 1);
+        assert_eq!(got_finals[0], "ABC");
+    }
+
+    struct CountingSharedEchoTool {
+        hits: std::sync::Arc<AtomicUsize>,
+    }
+    impl CountingSharedEchoTool {
+        fn new(h: std::sync::Arc<AtomicUsize>) -> Self {
+            Self { hits: h }
+        }
+    }
+    impl neuron_tool::ToolDyn for CountingSharedEchoTool {
+        fn name(&self) -> &str {
+            "meta_echo"
+        }
+        fn description(&self) -> &str {
+            "Echoes input (shared via metadata)"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type":"object"})
+        }
+        fn call(
+            &self,
+            input: serde_json::Value,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<serde_json::Value, neuron_tool::ToolError>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(json!({"echoed": input})) })
+        }
+        fn concurrency_hint(&self) -> neuron_tool::ToolConcurrencyHint {
+            neuron_tool::ToolConcurrencyHint::Shared
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_concurrency_batches_shared() {
+        // Two uses of the same tool should batch as Shared when metadata decider is used
+        let first = ProviderResponse {
+            content: vec![
+                ContentPart::ToolUse {
+                    id: "t1".into(),
+                    name: "meta_echo".into(),
+                    input: json!({}),
+                },
+                ContentPart::ToolUse {
+                    id: "t2".into(),
+                    name: "meta_echo".into(),
+                    input: json!({}),
+                },
+            ],
+            stop_reason: StopReason::ToolUse,
+            usage: TokenUsage {
+                input_tokens: 10,
+                output_tokens: 15,
+                ..Default::default()
+            },
+            model: "mock".into(),
+            cost: None,
+            truncated: None,
+        };
+        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(CountingSharedEchoTool::new(hits.clone())));
+        let op = make_op_with_tools(provider, tools)
+            .with_planner(Box::new(BarrierPlanner))
+            .with_metadata_concurrency();
+        let output = op.execute(simple_input("run")).await.unwrap();
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        assert_eq!(output.metadata.tools_called.len(), 2);
+        assert_eq!(output.metadata.turns_used, 2);
     }
 }

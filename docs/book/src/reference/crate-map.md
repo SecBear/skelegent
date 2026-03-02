@@ -21,6 +21,7 @@ All crates in the neuron workspace, organized by architectural layer.
 | `neuron-mcp` | MCP (Model Context Protocol) client. Wraps MCP server tools as `ToolDyn` implementations. |
 | `neuron-op-react` | ReAct operator. Implements `Operator` with the reason-act-observe loop and tool execution. |
 | `neuron-op-single-shot` | Single-shot operator. Implements `Operator` with one model call and no tools. |
+| `neuron-turn-kit` | Turn engine primitives: `ToolExecutionPlanner`, `ConcurrencyDecider`, `BatchExecutor` (execution-only), `SteeringSource`. |
 
 ## Layer 2 -- Orchestration
 
@@ -28,6 +29,8 @@ All crates in the neuron workspace, organized by architectural layer.
 |-------|-------------|
 | `neuron-orch-local` | In-process orchestrator. Implements `Orchestrator` with tokio tasks. |
 | `neuron-orch-kit` | Shared utilities for orchestrator implementations. |
+| `neuron-effects-core` | Effect execution trait (`EffectExecutor`), errors, and policy — no implementations. |
+| `neuron-effects-local` | Local in-process `EffectExecutor` implementation (in-order, best-effort). |
 
 ## Layer 3 -- State
 
@@ -70,15 +73,21 @@ All crates in the neuron workspace, organized by architectural layer.
 |-------|-------------|
 | `neuron` | Umbrella crate. Feature-gated re-exports of all layers. |
 
+
+## Examples
+
+| Crate | Description |
+|-------|-------------|
+| `custom-operator-barrier` | Example custom operator with barrier scheduling and steering (workspace member at `examples/custom_operator_barrier`). |
 ## Summary
 
 | Layer | Crates |
 |-------|--------|
 | 0 | 1 |
-| 1 | 9 |
-| 2 | 2 |
+| 1 | 10 |
+| 2 | 4 |
 | 3 | 2 |
-| 4 | 14 |
+| 4 | 16 |
 | 5 | 2 |
 | Umbrella | 1 |
-| **Total** | **31** |
+| **Total** | **36** |

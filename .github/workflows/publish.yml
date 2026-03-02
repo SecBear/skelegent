@@ -40,49 +40,50 @@ jobs:
             # Tier 0: no internal deps
             layer0
             neuron-tool
-
-            # Tier 1: depend only on layer0 / neuron-tool
-            neuron-secret
-            neuron-crypto
+            neuron-effects-core
+            
+            # Tier 1: depend only on tier 0
+            neuron-effects-local
             neuron-hooks
             neuron-hook-security
             neuron-state-memory
             neuron-state-fs
             neuron-orch-kit
-            neuron-orch-local
             neuron-turn
-
+            
             # Tier 2: depend on tier 0-1
+            neuron-turn-kit
+            neuron-orch-local
             neuron-auth
             neuron-context
-            neuron-secret-env
-            neuron-secret-keystore
-            neuron-env-local
+            neuron-secret
+            neuron-crypto
             neuron-mcp
             neuron-op-single-shot
-
+            
             # Tier 3: depend on tier 0-2
             neuron-auth-static
             neuron-auth-file
             neuron-auth-oidc
             neuron-auth-k8s
-            neuron-crypto-vault
-            neuron-crypto-hardware
+            neuron-secret-env
+            neuron-secret-keystore
             neuron-secret-vault
             neuron-secret-aws
             neuron-secret-gcp
             neuron-secret-k8s
+            neuron-crypto-vault
+            neuron-crypto-hardware
             neuron-op-react
-
+            
             # Tier 4: depend on many crates
             neuron-provider-anthropic
             neuron-provider-openai
             neuron-provider-ollama
-
+            
             # Umbrella (last)
             neuron
-          )
-
+)
           for crate in "${CRATES[@]}"; do
             # Skip comments
             [[ "$crate" == \#* ]] && continue

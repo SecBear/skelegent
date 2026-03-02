@@ -32,6 +32,26 @@ pub enum ToolError {
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// Concurrency hint for tool scheduling.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ToolConcurrencyHint {
+    /// Safe to run alongside other shared tools in the same batch.
+    Shared,
+    /// Must run alone (barrier before and after).
+    #[default]
+    Exclusive,
+}
+
+/// Optional streaming interface for tools.
+pub trait ToolDynStreaming: Send + Sync + 'static + ToolDyn {
+    /// Execute the tool with streaming chunk updates.
+    fn call_streaming<'a>(
+        &'a self,
+        input: serde_json::Value,
+        on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>>;
+}
 /// Object-safe trait for tool implementations.
 ///
 /// Any tool source (local function, MCP server, HTTP endpoint) implements
@@ -51,6 +71,19 @@ pub trait ToolDyn: Send + Sync {
         &self,
         input: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>;
+
+    /// If this tool also supports streaming, return a reference to its streaming interface.
+    /// Default is None; streaming is opt-in and non-disruptive.
+    fn maybe_streaming(&self) -> Option<&dyn ToolDynStreaming> {
+        None
+    }
+
+    /// Optional concurrency hint used by planners/deciders.
+    ///
+    /// Default is Exclusive to preserve backward-compatible behavior.
+    fn concurrency_hint(&self) -> ToolConcurrencyHint {
+        ToolConcurrencyHint::Exclusive
+    }
 }
 
 /// A tool wrapper that exposes a different name while delegating behavior to an inner tool.
@@ -96,12 +129,17 @@ impl ToolDyn for AliasedTool {
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         self.inner.call(input)
     }
+
+    fn concurrency_hint(&self) -> ToolConcurrencyHint {
+        self.inner.concurrency_hint()
+    }
 }
 
 /// Registry of tools available to a turn.
 ///
 /// Holds tools as `Arc<dyn ToolDyn>` keyed by name. The turn's ReAct loop
 /// uses this to look up and execute tools requested by the model.
+#[derive(Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn ToolDyn>>,
 }
@@ -279,5 +317,64 @@ mod tests {
         // Register another tool with the same name
         reg.register(Arc::new(EchoTool));
         assert_eq!(reg.len(), 1);
+    }
+
+    struct StreamerTool;
+    impl ToolDyn for StreamerTool {
+        fn name(&self) -> &str {
+            "streamer"
+        }
+        fn description(&self) -> &str {
+            "Streams chunks"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type":"object"})
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
+        {
+            Box::pin(async { Ok(serde_json::json!({"status":"done"})) })
+        }
+        fn maybe_streaming(&self) -> Option<&dyn ToolDynStreaming> {
+            Some(self)
+        }
+    }
+    impl ToolDynStreaming for StreamerTool {
+        fn call_streaming<'a>(
+            &'a self,
+            _input: serde_json::Value,
+            on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>> {
+            Box::pin(async move {
+                on_chunk("one");
+                on_chunk("two");
+                on_chunk("three");
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_tool_emits_chunks_and_completes() {
+        use std::sync::{
+            Arc as StdArc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let count = StdArc::new(AtomicUsize::new(0));
+        let seen: StdArc<Mutex<Vec<String>>> = StdArc::new(Mutex::new(vec![]));
+        let c2 = count.clone();
+        let s2 = seen.clone();
+        let tool = StreamerTool;
+        let on_chunk = Box::new(move |c: &str| {
+            c2.fetch_add(1, Ordering::SeqCst);
+            s2.lock().unwrap().push(c.to_string());
+        });
+        let res = tool.call_streaming(serde_json::json!({}), on_chunk).await;
+        assert!(res.is_ok());
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+        let got = seen.lock().unwrap().clone();
+        assert_eq!(got, vec!["one", "two", "three"]);
     }
 }

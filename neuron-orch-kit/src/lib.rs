@@ -18,3 +18,7 @@ pub use runner::{
     EffectExecutor, ExecutionEvent, ExecutionTrace, KitError, LocalEffectExecutor,
     OrchestratedRunner,
 };
+
+pub mod effects;
+pub use neuron_effects_core as effects_core;
+pub use neuron_effects_local as effects_local;

@@ -5,8 +5,7 @@
 > exist in the workspace. For current architecture, see [`SPECS.md`](SPECS.md) and the
 > [mdbook](docs/book/).
 
-> **For any agent picking this up:** Read this document IN ORDER. It is the authoritative plan for the neuron workspace redesign. If you haven't read `DEVELOPMENT-LOG.md`, read it first — it has the full history and rationale behind every decision.
-
+> NOTE: This file is preserved for historical context. It is not the active source of truth. For current architecture and decisions, see `SPECS.md`, the mdbook, and rules.
 ---
 
 ## What We're Doing

@@ -1,6 +1,6 @@
 [package]
 name = "neuron-auth-file"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,7 +11,7 @@ categories = ["asynchronous", "authentication"]
 keywords = ["neuron", "ai", "agent", "auth", "bearer-token"]
 
 [dependencies]
-neuron-auth = { path = "../neuron-auth" }
+neuron-auth = { path = "../neuron-auth" , version = "1.0.0-alpha.1"}
 async-trait = "0.1"
 tokio = { version = "1", features = ["fs"] }
 

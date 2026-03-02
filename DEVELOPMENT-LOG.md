@@ -160,6 +160,7 @@ Detailed the full Layer 0-5 architecture, validated it works at both extremes (s
 - `layer0` becomes a crate within the neuron workspace (the foundation)
 - The existing neuron crates (neuron-loop, neuron-provider-*, neuron-tool, neuron-context, neuron-mcp, neuron-runtime, neuron-otel) are redesigned to implement layer0 traits
 - `neuron-types` is replaced by `layer0` (our protocol traits are the new foundation)
+(legacy v0.3.0-era crate names; removed or renamed in the redesign)
 - The `redesign/v2` branch on the neuron repo will be the target for this work
 - Removed duplicate files: `agentic-decision-map-v3 2.md`, `validation-and-coordination 2.md`
 

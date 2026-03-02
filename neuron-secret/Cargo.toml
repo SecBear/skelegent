@@ -1,6 +1,6 @@
 [package]
 name = "neuron-secret"
-version = "0.4.0"
+version = "1.0.0-alpha.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,7 +11,7 @@ categories = ["asynchronous", "authentication"]
 keywords = ["neuron", "ai", "agent", "secrets", "credentials"]
 
 [dependencies]
-layer0 = { path = "../layer0" }
+layer0 = { path = "../layer0" , version = "1.0.0-alpha.1"}
 async-trait = "0.1"
 thiserror = "2"
 zeroize = "1"

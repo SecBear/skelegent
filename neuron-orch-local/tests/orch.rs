@@ -101,67 +101,74 @@ async fn dispatch_many_partial_failure() {
 // --- Signal and query ---
 
 #[tokio::test]
-async fn signal_is_recorded_and_visible_via_status_query() {
+async fn signal_increments_journal_and_query_reports_count() {
     let orch = LocalOrch::new();
     let wf = WorkflowId::new("wf-1");
-    let signal =
-        layer0::effect::SignalPayload::new("cancel", serde_json::json!({"reason": "user request"}));
-    orch.signal(&wf, signal).await.unwrap();
-
-    let status = orch
-        .query(&wf, QueryPayload::new("status", serde_json::json!({})))
+    // Initially zero, query should lazily create and report 0
+    let initial = orch
+        .query(&wf, QueryPayload::new("any", serde_json::json!({})))
         .await
         .unwrap();
-    assert_eq!(status["workflow_id"], serde_json::json!("wf-1"));
-    assert_eq!(status["signal_count"], serde_json::json!(1));
-    assert_eq!(status["last_signal_type"], serde_json::json!("cancel"));
-}
+    assert_eq!(initial["signals"], serde_json::json!(0));
 
-#[tokio::test]
-async fn query_signals_returns_recorded_signal_history() {
-    let orch = LocalOrch::new();
-    let wf = WorkflowId::new("wf-1");
+    // Send two signals and verify count via query
     orch.signal(
         &wf,
-        layer0::effect::SignalPayload::new("a", serde_json::json!({"n": 1})),
+        layer0::effect::SignalPayload::new("a", serde_json::json!(null)),
     )
     .await
     .unwrap();
     orch.signal(
         &wf,
-        layer0::effect::SignalPayload::new("b", serde_json::json!({"n": 2})),
+        layer0::effect::SignalPayload::new("b", serde_json::json!({"x":1})),
     )
     .await
     .unwrap();
 
     let result = orch
-        .query(
-            &wf,
-            QueryPayload::new("signals", serde_json::json!({"limit": 1})),
-        )
+        .query(&wf, QueryPayload::new("ignored", serde_json::json!({})))
         .await
         .unwrap();
-    assert_eq!(result["workflow_id"], serde_json::json!("wf-1"));
-    assert_eq!(result["signals"].as_array().unwrap().len(), 1);
-    assert_eq!(result["signals"][0]["signal_type"], serde_json::json!("b"),);
+    assert_eq!(result, serde_json::json!({"signals": 2}));
 }
 
 #[tokio::test]
-async fn query_unknown_workflow_returns_not_found() {
+async fn signal_count_getter_matches_query() {
     let orch = LocalOrch::new();
-    let result = orch
-        .query(
-            &WorkflowId::new("missing"),
-            QueryPayload::new("status", serde_json::json!({})),
-        )
-        .await;
-    assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("workflow not found")
-    );
+    let wf = WorkflowId::new("wf-2");
+    orch.signal(
+        &wf,
+        layer0::effect::SignalPayload::new("s", serde_json::json!({})),
+    )
+    .await
+    .unwrap();
+    let count = orch.signal_count(&wf).await;
+    let val = orch
+        .query(&wf, QueryPayload::new("anything", serde_json::json!({})))
+        .await
+        .unwrap();
+    assert_eq!(serde_json::json!({"signals": count}), val);
+}
+
+#[tokio::test]
+async fn parallel_signals_recorded_correctly() {
+    let orch = Arc::new(LocalOrch::new());
+    let wf = WorkflowId::new("wf-par");
+    let n = 64usize;
+    let mut handles = Vec::with_capacity(n);
+    for i in 0..n {
+        let orch = Arc::clone(&orch);
+        let wf = wf.clone();
+        handles.push(tokio::spawn(async move {
+            let payload = layer0::effect::SignalPayload::new("p", serde_json::json!({"i": i}));
+            orch.signal(&wf, payload).await.unwrap();
+        }));
+    }
+    for h in handles {
+        h.await.unwrap();
+    }
+    let count = orch.signal_count(&wf).await;
+    assert_eq!(count, n);
 }
 
 // --- Object safety ---

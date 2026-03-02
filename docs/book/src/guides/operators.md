@@ -159,3 +159,63 @@ orchestrator.register_agent("classifier", single_op);
 ```
 
 The provider's generic type parameter is erased at the `Operator` boundary. Callers never see the concrete provider type.
+
+
+## Custom operators: barrier scheduling and steering
+
+Some systems (Rho-like) prefer explicit, opt-in execution mechanics where the operator owns batching and when-to-call-tools decisions, and the orchestrator owns effect execution, signals, and queries. Neuron keeps defaults slim by putting that behavior behind explicit operator implementations.
+
+- Barrier scheduling: accumulate `tool_use` requests, execute them in batches at explicit barriers.
+- Steering: inject guidance/messages between batches without changing the default ReAct semantics.
+- Effects boundary: the operator declares `effects`, the orchestrator executes them.
+
+Planned extension points (kept out of defaults):
+- ToolExecutionStrategy — per-batch policies (parallel vs sequential, retry/backoff).
+- SteeringSource — injects steering content between batches (policy-, safety-, or topology-driven).
+
+Example operator skeleton (see the `custom-operator-barrier` example crate for a runnable version):
+```rust
+use std::sync::Arc;
+use layer0::content::{Content, ContentBlock};
+use layer0::operator::{Operator, OperatorInput, OperatorOutput, ExitReason};
+use neuron_tool::ToolRegistry;
+
+struct BarrierOperator { tools: ToolRegistry }
+
+# #[allow(dead_code)]
+impl BarrierOperator {
+    fn new(tools: ToolRegistry) -> Self { Self { tools } }
+}
+
+# #[allow(dead_code)]
+#[async_trait::async_trait]
+impl Operator for BarrierOperator {
+    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, layer0::error::OperatorError> {
+        let mut out = vec![];
+        let mut batch: Vec<(String, String, serde_json::Value)> = vec![];
+        // Treat `text == "BARRIER"` as a flush point
+        if let Content::Blocks(blocks) = input.message {
+            for b in blocks {
+                match b {
+                    ContentBlock::ToolUse { id, name, input } => batch.push((id, name, input)),
+                    ContentBlock::Text { text } if text.trim() == "BARRIER" => {
+                        // flush(batch) — call tools then inject steering text
+                        out.push(ContentBlock::Text { text: "[steer] batch flushed".into() });
+                    }
+                    other => out.push(other),
+                }
+            }
+            // final flush(batch)
+        }
+        Ok(OperatorOutput::new(Content::Blocks(out), ExitReason::Complete))
+    }
+}
+```
+
+This keeps ReAct defaults unchanged. If you want this behavior, you opt into a different operator (or swap the inner loop via composition).
+
+### Migration from Rho
+
+- `rho-ai` model/providers → `neuron-turn` + concrete providers in `neuron-provider-*`.
+- `rho-tools` → implement `neuron_tool::ToolDyn` and register in a `ToolRegistry`.
+- `rho` loop → implement a custom operator that owns batching/steering (see example above).

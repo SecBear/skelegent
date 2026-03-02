@@ -19,6 +19,8 @@ pub enum HookPoint {
     PostToolUse,
     /// At each exit-condition check.
     ExitCheck,
+    /// During tool execution: a streaming update chunk is available.
+    ToolExecutionUpdate,
 }
 
 /// What context is available to a hook at its firing point.
@@ -34,6 +36,7 @@ pub struct HookContext {
     /// Tool input (only at PreToolUse).
     pub tool_input: Option<serde_json::Value>,
     /// Tool result (only at PostToolUse).
+    /// Tool result (only at PostToolUse).
     pub tool_result: Option<String>,
     /// Model response (only at PostInference).
     pub model_output: Option<Content>,
@@ -45,6 +48,8 @@ pub struct HookContext {
     pub turns_completed: u32,
     /// Time elapsed since the turn started.
     pub elapsed: crate::duration::DurationMs,
+    /// Streaming chunk text (only at ToolExecutionUpdate).
+    pub tool_chunk: Option<String>,
 }
 
 impl HookContext {
@@ -60,6 +65,7 @@ impl HookContext {
             cost: rust_decimal::Decimal::ZERO,
             turns_completed: 0,
             elapsed: crate::duration::DurationMs::ZERO,
+            tool_chunk: None,
         }
     }
 }

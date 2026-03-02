@@ -4,7 +4,7 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | Current (redesign) |
+| 0.4.x   | Current |
 | < 0.1   | No      |
 
 ## Reporting a Vulnerability
