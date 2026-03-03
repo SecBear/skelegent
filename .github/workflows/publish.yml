@@ -92,6 +92,7 @@ jobs:
             # --no-verify skips rebuild (CI already validated).
             # Retry up to 3 times with 30s delay for index propagation.
             PUBLISHED=false
+            SKIPPED=false
             for attempt in 1 2 3; do
               OUTPUT=$(cargo publish -p "$crate" --no-verify $EXTRA_ARGS 2>&1) && {
                 echo "Published $crate successfully"
@@ -100,7 +101,7 @@ jobs:
               }
               if echo "$OUTPUT" | grep -qE "already uploaded|already exists"; then
                 echo "$crate already published, skipping"
-                PUBLISHED=true
+                SKIPPED=true
                 break
               fi
               if [ "$attempt" -lt 3 ]; then
@@ -110,12 +111,15 @@ jobs:
               fi
             done
             echo "::endgroup::"
-            if [ "$PUBLISHED" = "false" ]; then
+            if [ "$PUBLISHED" = "false" ] && [ "$SKIPPED" = "false" ]; then
               echo "$OUTPUT"
               echo "::error::Failed to publish $crate after 3 attempts"
               exit 1
             fi
-            sleep 65  # pause for rate limit: crates.io allows ~6 new crates per 5 min window
+            # Only sleep after a real publish (not a skip) to stay under rate limit.
+            if [ "$PUBLISHED" = "true" ]; then
+              sleep 65  # pause for rate limit: crates.io allows ~6 new crates per 5 min window
+            fi
           done
           echo "All crates published successfully"
         env:
