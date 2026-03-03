@@ -24,43 +24,56 @@ The repo has a deterministic “what next” queue at `ralph_queue.md`, driven b
 
 ## Crate map (workspace members)
 
-Core protocol / runtime:
+Core:
 
-- `layer0/`: protocol traits + wire contract
-- `neuron-turn/`: turn types + provider abstraction
-- `neuron-tool/`: tool traits + `ToolRegistry`
-- `neuron-hooks/`: hook registry + lifecycle hooks
-- `neuron-context/`: prompt/context assembly helpers
+- `layer0/` — protocol traits + wire contract
+- `neuron/` — umbrella crate
 
-Operators:
+Turn (`turn/`):
 
-- `neuron-op-react/`: ReAct-style operator loop
-- `neuron-op-single-shot/`: single-shot operator
+- `neuron-turn` — turn types + provider abstraction
+- `neuron-turn-kit` — turn decomposition primitives
+- `neuron-context` — prompt/context assembly
+- `neuron-tool` — tool traits + `ToolRegistry`
+- `neuron-mcp` — MCP client/server
 
-Orchestration / environment:
+Operators (`op/`):
 
-- `neuron-orch-kit/`: orchestration building blocks
-- `neuron-orch-local/`: local orchestrator implementation
-- `neuron-env-local/`: local environment (process/tool execution glue)
+- `neuron-op-react` — ReAct-style operator loop
+- `neuron-op-single-shot` — single-shot operator
 
-State:
+Orchestration (`orch/`):
 
-- `neuron-state-memory/`: in-memory state store
-- `neuron-state-fs/`: filesystem-backed state store
+- `neuron-orch-kit` — composition building blocks
+- `neuron-orch-local` — local orchestrator
 
-Providers:
+Effects (`effects/`):
 
-- `neuron-provider-openai/`
-- `neuron-provider-anthropic/`
-- `neuron-provider-ollama/`
+- `neuron-effects-core` — effect executor trait
+- `neuron-effects-local` — local effect interpreter
 
-Integration:
+Hooks (`hooks/`):
 
-- `neuron-mcp/`: MCP client/server glue
+- `neuron-hooks` — hook registry + lifecycle hooks
+- `neuron-hook-security` — security-oriented hooks
 
-Security building blocks:
+State (`state/`):
 
-- `neuron-secret/` and `neuron-secret-*`: secret store interfaces + backends
-- `neuron-auth/` and `neuron-auth-*`: auth interfaces + backends
-- `neuron-crypto/` and `neuron-crypto-*`: crypto interfaces + backends
-- `neuron-hook-security/`: security-oriented hooks
+- `neuron-state-memory` — in-memory state store
+- `neuron-state-fs` — filesystem-backed state store
+
+Environment (`env/`):
+
+- `neuron-env-local` — local environment (process/tool execution glue)
+
+Providers (`provider/`):
+
+- `neuron-provider-anthropic`
+- `neuron-provider-openai`
+- `neuron-provider-ollama`
+
+Security (`secret/`, `auth/`, `crypto/`):
+
+- `neuron-secret` + backends (env, vault, aws, gcp, keystore, k8s)
+- `neuron-auth` + backends (static, file, oidc, k8s)
+- `neuron-crypto` + backends (vault, hardware)

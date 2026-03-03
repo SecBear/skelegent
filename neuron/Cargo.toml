@@ -15,21 +15,21 @@ path = "src/lib.rs"
 
 [dependencies]
 layer0 = { path = "../layer0", optional = true, version = "0.4.0" }
-neuron-context = { path = "../neuron-context", optional = true, version = "0.4.0" }
-neuron-hooks = { path = "../neuron-hooks", optional = true, version = "0.4.0" }
-neuron-mcp = { path = "../neuron-mcp", optional = true, version = "0.4.0" }
-neuron-op-react = { path = "../neuron-op-react", optional = true, version = "0.4.0" }
-neuron-op-single-shot = { path = "../neuron-op-single-shot", optional = true, version = "0.4.0" }
-neuron-orch-kit = { path = "../neuron-orch-kit", optional = true, version = "0.4.0" }
-neuron-orch-local = { path = "../neuron-orch-local", optional = true, version = "0.4.0" }
-neuron-env-local = { path = "../neuron-env-local", optional = true, version = "0.4.0" }
-neuron-provider-anthropic = { path = "../neuron-provider-anthropic", optional = true, version = "0.4.0" }
-neuron-provider-ollama = { path = "../neuron-provider-ollama", optional = true, version = "0.4.0" }
-neuron-provider-openai = { path = "../neuron-provider-openai", optional = true, version = "0.4.0" }
-neuron-state-fs = { path = "../neuron-state-fs", optional = true, version = "0.4.0" }
-neuron-state-memory = { path = "../neuron-state-memory", optional = true, version = "0.4.0" }
-neuron-tool = { path = "../neuron-tool", optional = true, version = "0.4.0" }
-neuron-turn = { path = "../neuron-turn", optional = true, version = "0.4.0" }
+neuron-context = { path = "../turn/neuron-context", optional = true, version = "0.4.0" }
+neuron-hooks = { path = "../hooks/neuron-hooks", optional = true, version = "0.4.0" }
+neuron-mcp = { path = "../turn/neuron-mcp", optional = true, version = "0.4.0" }
+neuron-op-react = { path = "../op/neuron-op-react", optional = true, version = "0.4.0" }
+neuron-op-single-shot = { path = "../op/neuron-op-single-shot", optional = true, version = "0.4.0" }
+neuron-orch-kit = { path = "../orch/neuron-orch-kit", optional = true, version = "0.4.0" }
+neuron-orch-local = { path = "../orch/neuron-orch-local", optional = true, version = "0.4.0" }
+neuron-env-local = { path = "../env/neuron-env-local", optional = true, version = "0.4.0" }
+neuron-provider-anthropic = { path = "../provider/neuron-provider-anthropic", optional = true, version = "0.4.0" }
+neuron-provider-ollama = { path = "../provider/neuron-provider-ollama", optional = true, version = "0.4.0" }
+neuron-provider-openai = { path = "../provider/neuron-provider-openai", optional = true, version = "0.4.0" }
+neuron-state-fs = { path = "../state/neuron-state-fs", optional = true, version = "0.4.0" }
+neuron-state-memory = { path = "../state/neuron-state-memory", optional = true, version = "0.4.0" }
+neuron-tool = { path = "../turn/neuron-tool", optional = true, version = "0.4.0" }
+neuron-turn = { path = "../turn/neuron-turn", optional = true, version = "0.4.0" }
 
 [features]
 default = ["core", "hooks"]

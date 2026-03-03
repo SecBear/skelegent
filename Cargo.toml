@@ -10,41 +10,41 @@ resolver = "3"
 members = [
   "neuron",
   "layer0",
-  "neuron-state-memory",
-  "neuron-state-fs",
-  "neuron-env-local",
-  "neuron-orch-local",
-  "neuron-orch-kit",
-  "neuron-hooks",
-  "neuron-tool",
-  "neuron-turn",
-  "neuron-op-react",
-  "neuron-op-single-shot",
-  "neuron-context",
-  "neuron-provider-anthropic",
-  "neuron-provider-openai",
-  "neuron-provider-ollama",
-  "neuron-mcp",
-  "neuron-secret",
-  "neuron-crypto",
-  "neuron-auth",
-  "neuron-secret-env",
-  "neuron-secret-vault",
-  "neuron-secret-aws",
-  "neuron-secret-gcp",
-  "neuron-secret-keystore",
-  "neuron-secret-k8s",
-  "neuron-auth-static",
-  "neuron-auth-file",
-  "neuron-auth-oidc",
-  "neuron-auth-k8s",
-  "neuron-crypto-vault",
-  "neuron-crypto-hardware",
-  "neuron-hook-security",
+  "state/neuron-state-memory",
+  "state/neuron-state-fs",
+  "env/neuron-env-local",
+  "orch/neuron-orch-local",
+  "orch/neuron-orch-kit",
+  "hooks/neuron-hooks",
+  "turn/neuron-tool",
+  "turn/neuron-turn",
+  "op/neuron-op-react",
+  "op/neuron-op-single-shot",
+  "turn/neuron-context",
+  "provider/neuron-provider-anthropic",
+  "provider/neuron-provider-openai",
+  "provider/neuron-provider-ollama",
+  "turn/neuron-mcp",
+  "secret/neuron-secret",
+  "crypto/neuron-crypto",
+  "auth/neuron-auth",
+  "secret/neuron-secret-env",
+  "secret/neuron-secret-vault",
+  "secret/neuron-secret-aws",
+  "secret/neuron-secret-gcp",
+  "secret/neuron-secret-keystore",
+  "secret/neuron-secret-k8s",
+  "auth/neuron-auth-static",
+  "auth/neuron-auth-file",
+  "auth/neuron-auth-oidc",
+  "auth/neuron-auth-k8s",
+  "crypto/neuron-crypto-vault",
+  "crypto/neuron-crypto-hardware",
+  "hooks/neuron-hook-security",
   "examples/custom_operator_barrier",
-  "neuron-turn-kit",
-  "neuron-effects-core",
-  "neuron-effects-local",
+  "turn/neuron-turn-kit",
+  "effects/neuron-effects-core",
+  "effects/neuron-effects-local",
 ]
 
 [workspace.package]
@@ -58,18 +58,18 @@ homepage = "https://github.com/secbear/neuron"
 [dev-dependencies]
 layer0 = { path = "layer0", features = ["test-utils"], version = "0.4.0" }
 neuron = { path = "neuron", version = "0.4.0" }
-neuron-turn = { path = "neuron-turn", version = "0.4.0" }
-neuron-op-react = { path = "neuron-op-react", version = "0.4.0" }
-neuron-op-single-shot = { path = "neuron-op-single-shot", version = "0.4.0" }
-neuron-context = { path = "neuron-context", version = "0.4.0" }
-neuron-hooks = { path = "neuron-hooks", version = "0.4.0" }
-neuron-tool = { path = "neuron-tool", version = "0.4.0" }
-neuron-state-memory = { path = "neuron-state-memory", version = "0.4.0" }
-neuron-state-fs = { path = "neuron-state-fs", version = "0.4.0" }
-neuron-provider-anthropic = { path = "neuron-provider-anthropic", version = "0.4.0" }
-neuron-provider-openai = { path = "neuron-provider-openai", version = "0.4.0" }
-neuron-provider-ollama = { path = "neuron-provider-ollama", version = "0.4.0" }
-neuron-orch-local = { path = "neuron-orch-local", version = "0.4.0" }
+neuron-turn = { path = "turn/neuron-turn", version = "0.4.0" }
+neuron-op-react = { path = "op/neuron-op-react", version = "0.4.0" }
+neuron-op-single-shot = { path = "op/neuron-op-single-shot", version = "0.4.0" }
+neuron-context = { path = "turn/neuron-context", version = "0.4.0" }
+neuron-hooks = { path = "hooks/neuron-hooks", version = "0.4.0" }
+neuron-tool = { path = "turn/neuron-tool", version = "0.4.0" }
+neuron-state-memory = { path = "state/neuron-state-memory", version = "0.4.0" }
+neuron-state-fs = { path = "state/neuron-state-fs", version = "0.4.0" }
+neuron-provider-anthropic = { path = "provider/neuron-provider-anthropic", version = "0.4.0" }
+neuron-provider-openai = { path = "provider/neuron-provider-openai", version = "0.4.0" }
+neuron-provider-ollama = { path = "provider/neuron-provider-ollama", version = "0.4.0" }
+neuron-orch-local = { path = "orch/neuron-orch-local", version = "0.4.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
 serde_json = "1"

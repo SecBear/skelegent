@@ -1,0 +1,21 @@
+[package]
+name = "neuron-op-single-shot"
+version = "0.4.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Single-shot operator — one model call, no tools, return immediately"
+readme = "README.md"
+categories = ["asynchronous"]
+keywords = ["neuron", "ai", "agent", "operator", "llm"]
+
+[dependencies]
+layer0 = { path = "../../layer0", version = "0.4.0" }
+neuron-turn = { path = "../../turn/neuron-turn", version = "0.4.0" }
+async-trait = "0.1"
+rust_decimal = { version = "1", features = ["serde-str"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
