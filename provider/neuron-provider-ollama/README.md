@@ -9,7 +9,7 @@
 ## Overview
 
 `neuron-provider-ollama` implements the `Provider` trait from
-[`neuron-turn`](../neuron-turn) for [Ollama](https://ollama.com), a local LLM runtime.
+[`neuron-turn`](../../turn/neuron-turn) for [Ollama](https://ollama.com), a local LLM runtime.
 It speaks Ollama's native chat API (not the OpenAI-compat shim), which enables access to
 Ollama-specific features like model keep-alive control and native tool call format.
 

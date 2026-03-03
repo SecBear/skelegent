@@ -8,9 +8,9 @@
 
 ## Overview
 
-`neuron-env-local` implements the `Environment` trait from [`layer0`](../layer0) for single-process
+`neuron-env-local` implements the `Environment` trait from [`layer0`](../../layer0) for single-process
 deployments. It resolves credentials on demand via a pluggable
-[`neuron-secret`](../neuron-secret) `SecretResolver` and injects them into the operator's
+[`neuron-secret`](../../secret/neuron-secret) `SecretResolver` and injects them into the operator's
 process using one of three delivery modes:
 
 | Mode | Delivery |

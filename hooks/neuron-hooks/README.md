@@ -14,7 +14,7 @@ short-circuits on `Halt`, `SkipTool`, or `ModifyToolInput` — subsequent hooks 
 errors are logged and the pipeline continues.
 
 The `Hook` trait and all associated types (`HookPoint`, `HookAction`, `HookContext`, `HookError`)
-are defined in [`layer0`](../layer0).
+are defined in [`layer0`](../../layer0).
 
 ## Exports
 

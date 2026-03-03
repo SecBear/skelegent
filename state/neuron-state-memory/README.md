@@ -9,7 +9,7 @@
 ## Overview
 
 `neuron-state-memory` provides a thread-safe, async-ready in-memory implementation of the
-`StateStore` trait from [`layer0`](../layer0). State is stored as a `HashMap` behind a `RwLock`,
+`StateStore` trait from [`layer0`](../../layer0). State is stored as a `HashMap` behind a `RwLock`,
 scoped to the process lifetime.
 
 Use it for:

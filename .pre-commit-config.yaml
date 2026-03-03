@@ -8,6 +8,14 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      - id: lychee-file-links
+        name: lychee (file links)
+        entry: lychee --scheme file --no-progress --config .lychee.toml
+        language: system
+        pass_filenames: true
+        types: [markdown]
+        stages: [pre-commit]
+
       - id: clippy
         name: clippy
         entry: cargo clippy --workspace --all-features -- -D warnings

@@ -9,7 +9,7 @@
 ## Overview
 
 `neuron-provider-anthropic` implements the `Provider` trait from
-[`neuron-turn`](../neuron-turn) for the
+[`neuron-turn`](../../turn/neuron-turn) for the
 [Anthropic Messages API](https://docs.anthropic.com/en/api/messages). It handles request
 serialization, response parsing, tool call routing, and cost accounting for Claude models.
 

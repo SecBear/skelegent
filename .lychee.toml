@@ -19,7 +19,7 @@ exclude = [
 ]
 
 # Exclude build artifacts and dependency docs
-exclude_path = ["target"]
+exclude_path = ["target", ".direnv"]
 
 # Retry transient failures
 max_retries = 3

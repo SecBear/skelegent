@@ -8,7 +8,7 @@
 
 ## Overview
 
-`neuron-state-fs` implements the `StateStore` trait from [`layer0`](../layer0) using the local
+`neuron-state-fs` implements the `StateStore` trait from [`layer0`](../../layer0) using the local
 filesystem. Each key maps to a file inside a configurable base directory, using a safe filename
 encoding. Reads and writes are async (Tokio `fs`).
 

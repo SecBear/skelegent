@@ -9,7 +9,7 @@
 ## Overview
 
 `neuron-provider-openai` implements the `Provider` trait from
-[`neuron-turn`](../neuron-turn) for the
+[`neuron-turn`](../../turn/neuron-turn) for the
 [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat). It handles
 request serialization, streaming-free response parsing, tool call routing, and cost accounting
 for GPT models.
