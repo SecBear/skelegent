@@ -327,6 +327,8 @@ The model is called. This seems simple but has significant engineering decisions
 | **Two-tier: architect/editor** — strong model plans edits, fast model applies them | Good | Good — each model does what it's best at | Aider |
 | **Three-tier** — match model capability to task difficulty | Best | Best — when routing is correct | Claude Code (sub-agents) |
 | **Difficulty-aware routing** — classify task difficulty, route to appropriate model tier | Optimal (64% cost at SOTA quality per DAAO paper) | Highest | Academic (DAAO) |
+| **Two-level routing** — select model AND reasoning effort per task (e.g., same model with low vs. high thinking budget) | Best — fine-grained cost/quality control | Best — when calibrated | Claude Code (Sonnet + thinking budget), Cursor, o1/o3 reasoning effort parameter |
+| **Speculative parallel** — send same request to multiple models, use first good result | Expensive (multiple calls) | Highest (best of N) | Safety-critical pipelines, consensus/verification systems |
 
 #### 3B: Inference durability
 
@@ -351,6 +353,24 @@ LLM inference can take 30 seconds to 5+ minutes for complex reasoning.
 | **Retry** | Rate limit errors (429) need exponential backoff with Retry-After header respect. Budget-exceeded errors should NOT retry. Safety refusals should NOT retry. |
 | **Heartbeat** | For long-running inference inside a durable framework, the activity must heartbeat periodically to prove it's alive. Otherwise the framework assumes it's dead and retries, doubling cost. |
 | **Conflict** | If both the SDK and the orchestrator have retry logic, they will conflict. Disable one. Use a single retry authority. |
+
+#### 3D: Output shape enforcement
+
+How does the system constrain the shape of the model's output?
+
+| Approach | Guarantee | Token Overhead | Used By |
+|----------|-----------|---------------|---------|
+| **No enforcement** — model outputs freeform text or tool_use | None — hope the model complies | Zero | Claude Code, most simple agents |
+| **JSON mode** — model instructed to produce JSON, no schema validation | Soft — usually valid JSON, no shape guarantee | Minimal | OpenAI (response_format: json) |
+| **Strict JSON Schema decoding** — constrained decoding guarantees output matches schema | Hard — 100% schema adherence at generation time | Zero runtime (constraint applied during decoding) | OpenAI Structured Outputs, Anthropic tool_use |
+| **Application-level parsing with retry** — custom parser validates output, retries on failure | Medium — depends on retry budget | Retry cost on parse failure | Aider (edit format parser), CrewAI (Pydantic validation) |
+| **Schema propagation across agent graph** — parent defines output contract, child must conform | Contract — compositional type safety | Schema validation overhead | Multi-agent pipelines with typed interfaces |
+
+**Why this is a separate decision**: Model selection (D3A) determines *which* model. Backfill (D4C) determines how tool *results* re-enter context. Output shape determines how the model's own *responses* are constrained. These are independently variable — you can use the same model with or without schema enforcement, and the same backfill strategy regardless of output constraints.
+
+**The compositional argument**: In multi-agent systems, a child agent returning malformed output breaks the parent's reasoning. Output shape enforcement is a type system for agent pipelines. Without it, composition is fragile — it works when the model cooperates, breaks when it doesn't.
+
+**Engineering consideration**: Strict schema decoding (when the provider supports it) is strictly superior to application-level parsing for structured output — zero token overhead, 100% conformance, no retry cost. The tradeoff is expressiveness: you can only enforce shapes the provider's schema language can represent. Complex output patterns (interleaved reasoning + structured data) may still need application-level parsing.
 
 ### Decision 4: How is the model's response handled?
 
@@ -381,6 +401,11 @@ Does the agent ever see API tokens, passwords, or secrets?
 | **Mounted files in container** | Only mounted ones | Same, but scoped by mount | NanoClaw |
 | **Boundary injection with leak detection** | No — injected at sandbox edge, scanned both directions | Minimal — active detection | IronClaw (WASM boundary) |
 | **Sidecar injection** — sidecar holds credentials, agent calls tools via sidecar, sidecar adds auth | No — agent never touches tokens | Minimal — network-level separation | MCP sidecar pattern |
+| **Proxy-mediated access** — agent makes requests through a proxy that injects credentials and enforces policy | No — proxy adds auth headers | Proxy misconfiguration | Claude Code (git credential proxy) |
+| **Workload identity (SPIFFE/SPIRE)** — agent has its own cryptographic identity, requests scoped tokens at runtime | Ephemeral scoped tokens only | Token scope misconfiguration | Enterprise Kubernetes deployments, MCP Nov 2025 spec (OAuth 2.1) |
+| **LLM-assisted risk scoring** — credential access gated by dynamic risk assessment of each tool call | Conditionally — depends on risk score | Risk model miscalibration | OpenHands (SecurityAnalyzer + ConfirmationPolicy) |
+
+**Agent identity vs. credential handling**: This decision covers whether the agent *sees* secrets. The related question of the agent's *own* identity — how it authenticates to external services, how permissions propagate in agent-to-agent delegation — overlaps with D2A (behavioral identity) and C1 (child context). In enterprise multi-agent systems, the agent's workload identity determines what credentials it can request, making identity a prerequisite for credential handling.
 
 #### 4C: Result integration (backfill)
 
@@ -408,6 +433,10 @@ After the model responds (text or tool call results have been processed), someth
 | **Circuit breaker** — stop after N consecutive failures | Error counter | May give up too early on hard tasks | Codex (parse failure fallback) |
 | **Timeout** — wall-clock time limit | Timer | Blunt instrument, doesn't account for progress | Common in production deployments |
 | **Observer halt** — external process watching execution decides to stop it | Parallel evaluation | Observer may be wrong; adds latency/cost | OpenAI Agents SDK (guardrail tripwire), AWS observer pattern |
+| **LLM self-assessment** — dedicated reasoning pass: "is the goal achieved?" with evidence evaluation | Extra inference step | May self-deceive; expensive | Devin (task completion assessment) |
+| **Programmatic verification** — machine-verifiable checks (file exists, tests pass, API returns 200) | Deterministic check | Narrow — only checks what's codified | CI-gated agents, SWE-bench harnesses |
+| **Loop/stuck detection** — semantic similarity of recent outputs, repeated tool call patterns | Similarity threshold | May false-positive on legitimately iterative work | Emerging best practice |
+| **Infeasibility recognition** — model determines task is impossible and exits with explanation | Model judgment | May give up too early on hard problems | Research systems |
 
 **Engineering consideration**: Production systems should layer multiple independent stop conditions. A single condition creates failure modes — "model signals done" alone lets the model loop forever if it's confused; "max turns" alone cuts off genuinely hard tasks. The combination of model-done + max-turns + budget + circuit-breaker provides defense-in-depth for termination.
 
@@ -498,6 +527,17 @@ This is the most consequential composition decision. The parent/previous agent h
 
 **The key question**: Is the child's context boundary enforced by **prompt** (you tell the LLM to ignore parent context — fragile, the model can choose to attend to it anyway) or by **infrastructure** (the child literally cannot see parent context because it's in a separate process/container/pod — robust, but requires IPC for any communication)?
 
+**Trust and permission propagation**: When a parent delegates to a child, should the child inherit the parent's permissions? This is the agent equivalent of privilege delegation in distributed systems.
+
+| Trust Model | Permissions | Risk | Used By |
+|------------|------------|------|---------|
+| **Full delegation** — child inherits parent's credentials and permissions | Same as parent | Over-privileged child | Simple delegation (most systems) |
+| **Scoped delegation** — parent explicitly grants a subset of its permissions | Restricted to task | Scope may be too narrow or too broad | OAuth 2.1 scoped tokens, MCP capability grants |
+| **Independent identity** — child has its own credentials, no inheritance from parent | Own permissions only | Child may lack needed access | Container-isolated agents (NanoClaw) |
+| **Dynamic risk-gated** — child's permission level adjusts based on risk assessment of each action | Adaptive | Risk model failure | OpenHands (SecurityAnalyzer) |
+
+**The key insight**: Permission propagation in agent composition is analogous to capability-based security in operating systems. The safest model is scoped delegation (grant minimum necessary), but most current systems default to full delegation (child acts as parent) because it's simpler.
+
 #### C2: How do results flow back?
 
 | Approach | What Returns | Token Cost to Parent | Audit Trail | Used By |
@@ -537,6 +577,21 @@ This is the most consequential composition decision. The parent/previous agent h
 | **Oracle tool** — agent can call a reasoning-specialist LLM | When agent decides to call | Advisory only | Per-call inference cost | Amp |
 | **Parallel guardrails** — validation runs alongside agent, can halt | Input/output/tool boundaries | Halt via tripwire | Inference cost per guardrail | OpenAI Agents SDK |
 | **Continuous observer** — separate agent monitors telemetry stream | Continuous | Halt, redirect, inject, modify | Ongoing inference cost | AWS observer agent, security monitors |
+
+#### Named Autonomy Configurations (D4A + C5 combinations)
+
+The combination of isolation (D4A) and observation (C5) choices produces recognizable autonomy postures. These are not a separate decision — they're named configurations of two existing decisions:
+
+| Autonomy Level | D4A (Isolation) | C5 (Observation) | Example |
+|---------------|----------------|------------------|---------|
+| **Read-only** | No execution allowed | Human approves everything | Monitoring/analysis agents |
+| **Propose** | No execution | Human executes suggestions | Conservative enterprise deployments |
+| **Execute with approval** | Permission gate | Human-in-the-loop | Claude Code (default) |
+| **Autonomous with guardrails** | Container/sandbox | Parallel guardrails | OpenAI Agents SDK, Devin (within sandbox) |
+| **Dynamic autonomy** | Risk-scored gating | Auto-approve low-risk, pause high-risk | OpenHands (SecurityAnalyzer) |
+| **Fully autonomous** | Any/none | No observer | Aider (within session), batch processing agents |
+
+**The insight**: You don't make an "autonomy level" decision separately from D4A and C5. Your D4A and C5 choices *determine* your autonomy level. This taxonomy is useful for communication ("we run at execute-with-approval level") but the actual engineering decisions remain D4A and C5.
 
 ---
 
@@ -628,7 +683,8 @@ TRIGGER TYPE (D1)
 INFERENCE (D3)
     ├── MODEL SELECTION (3A) ◀── constrained by ── BUDGET (L4)
     ├── DURABILITY (3B) ◀─────── determines ──▶ CRASH RECOVERY (L3)
-    └── RETRY (3C) ◀──────────── constrained by ── BUDGET (L4)
+    ├── RETRY (3C) ◀──────────── constrained by ── BUDGET (L4)
+    └── OUTPUT SHAPE (3D) ◀──── constrains ──▶ COMPOSITION (C1, C2)
 
 RESPONSE HANDLING (D4)
     ├── ISOLATION (4A) ◀──── constrains ──▶ CREDENTIAL HANDLING (4B)
@@ -668,13 +724,14 @@ COMPOSITION (C1-C5)
 | D2C | Memory | How is persistent knowledge accessed? (hot ↔ warm ↔ cold ↔ structural) |
 | D2D | Tools | How does the agent know what it can do? (static schemas ↔ lazy catalog ↔ structural map) |
 | D2E | Budget | How is the context window allocated? (what % for system, history, reserve?) |
-| D3A | Model | Which model handles this? (single ↔ two-tier ↔ three-tier ↔ difficulty-aware) |
+| D3A | Model | Which model handles this, and how hard does it think? (single → two-tier → two-level routing → speculative) |
 | D3B | Durability | What survives a crash? (nothing ↔ checkpoint ↔ event replay ↔ durable execution) |
 | D3C | Retry | How are failures handled? (SDK retry ↔ framework retry ↔ no retry for non-transient) |
+| D3D | Output shape | How is the model's output constrained? (none → JSON mode → strict schema → typed pipeline) |
 | D4A | Isolation | How trusted is generated code? (none ↔ permission gate ↔ container ↔ multi-layer) |
-| D4B | Credentials | Does the agent see secrets? (in-process ↔ mounted ↔ boundary-injected ↔ sidecar) |
+| D4B | Credentials | Does the agent see secrets? (in-process → mounted → proxy-mediated → boundary-injected → workload identity) |
 | D4C | Backfill | How do tool results re-enter context? (raw ↔ formatted ↔ sanitized) |
-| D5 | Exit | What ends the turn? (model done ↔ max turns ↔ budget ↔ goal eval ↔ circuit breaker ↔ observer) |
+| D5 | Exit | What ends the turn? (model done → max turns → budget → goal eval → loop detection → self-assessment → circuit breaker → observer) |
 
 ### Composition (When Multiple Agents)
 | # | Decision | Key Question |
@@ -694,7 +751,7 @@ COMPOSITION (C1-C5)
 | L4 | Budget | How to control cost? (token limits ↔ session caps ↔ workflow budget ↔ model routing) |
 | L5 | Observability | What can you see? (logs ↔ traces ↔ event history ↔ hooks ↔ queries) |
 
-**Total: 23 architectural decisions.** Every agentic AI system, from a 10-line script to a production multi-agent platform, makes a choice (explicit or implicit) on each of these. The choices interact — durability constrains composition, isolation constrains credentials, compaction constrains memory, budget constrains everything. Understanding the topology of these decisions is the foundation for making intelligent ones.
+**Total: 24 architectural decisions.** Every agentic AI system, from a 10-line script to a production multi-agent platform, makes a choice (explicit or implicit) on each of these. The choices interact — durability constrains composition, isolation constrains credentials, output shape constrains composition, compaction constrains memory, budget constrains everything. Understanding the topology of these decisions is the foundation for making intelligent ones.
 
 ---
 
@@ -727,7 +784,14 @@ These are unresolved research areas that should be periodically investigated to 
 - **Isolation overhead at scale**: What's the actual performance cost of multi-layer isolation (gVisor + network policy + credential sidecar) under realistic workloads? How does this scale with agent count?
 - **Agent-generated code threat modeling**: What are the actual attack vectors when an LLM generates and executes code from untrusted inputs? Beyond container escape, what about data exfiltration via tool outputs, timing side channels, or resource exhaustion?
 
+### Development Lifecycle (Out-of-Scope for Runtime Architecture, but Real Decisions)
+These are decisions every production team makes, but they operate outside the Turn/Composition/Lifecycle runtime framework. They're documented here as open questions rather than decision points because they concern the engineering process around agents, not the agents' runtime architecture.
+
+- **Evaluation and release gating**: How do you know the agent works? How do you prevent regressions? Devin gates releases on SWE-bench Verified. Braintrust integrates evals into CI/CD. Most open-source agents have no formal evaluation. This is a real decision that's genuinely independent of the 24 runtime decisions. Should it become L6?
+- **Agent versioning and rollback**: How is the agent's configuration (prompt + model + tools + policies) versioned as a unit? LangGraph Cloud supports graph versioning with deployment slots. Devin uses formal releases with rollback. Most systems have no versioning. Should it become L7?
+- **Agent identity registries**: As agents proliferate, how do you discover, authenticate, and govern them? MCP registries and A2A protocol (Google, 2025) address tool and agent discovery. No production system has a comprehensive agent registry yet. Is this a future decision point?
+
 ### Fundamentals
 - **Is the turn the right atomic unit?** Could there be a sub-turn primitive (individual tool calls, individual reasoning steps) that provides better composability? The fine-grained Temporal activity approach (each LLM call is a separate activity) suggests this, but adds complexity.
-- **Convergence or divergence?** Are agentic architectures converging toward a standard stack, or are they diverging into specialized niches? Track: do new systems introduced in 2026 map cleanly onto this framework's 23 decisions, or do they introduce genuinely new primitives?
-- **What's missing from this framework?** Use this document to analyze 5+ new agentic systems as they emerge. If a system makes a decision that doesn't fit any of the 23, that's a signal this framework needs a new primitive.
+- **Convergence or divergence?** Are agentic architectures converging toward a standard stack, or are they diverging into specialized niches? Track: do new systems introduced in 2026 map cleanly onto this framework's 24 decisions, or do they introduce genuinely new primitives?
+- **What's missing from this framework?** Use this document to analyze 5+ new agentic systems as they emerge. If a system makes a decision that doesn't fit any of the 24, that's a signal this framework needs a new primitive.
