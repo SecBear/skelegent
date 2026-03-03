@@ -107,70 +107,73 @@ neuron/                              # workspace root
     tests/
       phase1.rs, phase2.rs
 
-  # Layer 1 — Turn implementations
-  neuron-loop/                       # the agentic while-loop
-    Cargo.toml                       # depends on: layer0
-    src/
+  # Layer 1 — Turn infrastructure
+  turn/
+    neuron-turn/                     # turn types + provider abstraction
+    neuron-turn-kit/                 # turn decomposition primitives
+    neuron-context/                  # context assembly + compaction strategies
+    neuron-tool/                     # tool registry + middleware
+    neuron-mcp/                      # MCP client/server bridge
 
-  neuron-provider-anthropic/         # Anthropic Claude provider
-    Cargo.toml                       # depends on: layer0 (for types), internal Provider trait
-    src/
+  # Layer 1 — Operators (turn implementations)
+  op/
+    neuron-op-react/                 # ReAct-style operator loop
+    neuron-op-single-shot/           # single-shot operator
 
-  neuron-provider-openai/            # OpenAI provider
-    Cargo.toml
-    src/
+  # Layer 1 — Providers
+  provider/
+    neuron-provider-anthropic/       # Anthropic Claude provider
+    neuron-provider-openai/          # OpenAI provider
+    neuron-provider-ollama/          # Ollama local provider
 
-  neuron-provider-ollama/            # Ollama local provider
-    Cargo.toml
-    src/
+  # Layer 2 — Orchestration
+  orch/
+    neuron-orch-local/               # in-process orchestration (no durability)
+    neuron-orch-kit/                 # orchestration building blocks
 
-  neuron-tool/                       # tool registry + middleware
-    Cargo.toml                       # depends on: layer0
-    src/
-
-  neuron-tool-macros/                # proc macro for #[neuron_tool]
-    Cargo.toml
-    src/
-
-  neuron-context/                    # context assembly + compaction strategies
-    Cargo.toml                       # depends on: layer0
-    src/
-
-  neuron-mcp/                        # MCP client/server/bridge
-    Cargo.toml                       # depends on: layer0, neuron-tool
-    src/
-
-  # Layer 2 — Orchestration implementations
-  neuron-orch-local/                 # in-process orchestration (no durability)
-    Cargo.toml                       # depends on: layer0
-    src/
+  # Layer 2 — Effects
+  effects/
+    neuron-effects-core/             # effect executor trait
+    neuron-effects-local/            # local effect interpreter
 
   # Layer 3 — State implementations
-  neuron-state-memory/               # in-memory HashMap store
-    Cargo.toml                       # depends on: layer0
-    src/
-
-  neuron-state-fs/                   # filesystem-backed store
-    Cargo.toml                       # depends on: layer0
-    src/
+  state/
+    neuron-state-memory/             # in-memory HashMap store
+    neuron-state-fs/                 # filesystem-backed store
 
   # Layer 4 — Environment implementations
-  neuron-env-local/                  # passthrough, no isolation
-    Cargo.toml                       # depends on: layer0
-    src/
+  env/
+    neuron-env-local/                # passthrough, no isolation
 
   # Layer 5 — Cross-cutting
-  neuron-hooks/                      # hook registry + composition
-    Cargo.toml                       # depends on: layer0
-    src/
+  hooks/
+    neuron-hooks/                    # hook registry + composition
+    neuron-hook-security/            # security-oriented hooks (redaction, exfil guard)
 
-  neuron-otel/                       # OpenTelemetry instrumentation
-    Cargo.toml                       # depends on: layer0, neuron-hooks
-    src/
+  # Security building blocks
+  secret/
+    neuron-secret/                   # secret store trait
+    neuron-secret-env/               # environment variable backend
+    neuron-secret-vault/             # HashiCorp Vault backend (stub)
+    neuron-secret-aws/               # AWS Secrets Manager (stub)
+    neuron-secret-gcp/               # GCP Secret Manager (stub)
+    neuron-secret-keystore/          # OS keystore (stub)
+    neuron-secret-k8s/               # Kubernetes secrets (stub)
+
+  auth/
+    neuron-auth/                     # auth provider trait
+    neuron-auth-static/              # static token provider
+    neuron-auth-file/                # file-based token provider
+    neuron-auth-oidc/                # OIDC provider (stub)
+    neuron-auth-k8s/                 # K8s service account (stub)
+
+  crypto/
+    neuron-crypto/                   # crypto provider trait
+    neuron-crypto-vault/             # Vault transit (stub)
+    neuron-crypto-hardware/          # HSM/TPM (stub)
 
   # Umbrella crate
   neuron/                            # re-exports with feature flags
-    Cargo.toml
     src/lib.rs
 ```
 

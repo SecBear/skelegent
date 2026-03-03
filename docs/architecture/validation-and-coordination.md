@@ -395,40 +395,53 @@ CORE/                         ← new repo, named whatever the crate is called
 
 ```
 neuron/
-  layer0/                     ← Layer 0: protocol traits + message types
-  neuron-turn/                ← Layer 1: Turn provider abstraction
-  neuron-context/             ← Layer 1: conversation context
-  neuron-tool/                ← Layer 1: tool registry + middleware
-  neuron-mcp/                 ← Layer 1: MCP client integration
-  neuron-provider-anthropic/  ← Layer 1: Anthropic provider
-  neuron-provider-openai/     ← Layer 1: OpenAI provider
-  neuron-provider-ollama/     ← Layer 1: Ollama provider
-  neuron-op-react/            ← Layer 1: ReAct operator
-  neuron-op-single-shot/      ← Layer 1: single-shot operator
-  neuron-orch-local/          ← Layer 2: local orchestrator
-  neuron-orch-kit/            ← Layer 2: orchestration utilities
-  neuron-state-memory/        ← Layer 3: in-memory state store
-  neuron-state-fs/            ← Layer 3: filesystem state store
-  neuron-env-local/           ← Layer 4: local environment
-  neuron-secret/              ← Layer 4: secret trait
-  neuron-secret-env/          ← Layer 4: env-var secret backend
-  neuron-secret-vault/        ← Layer 4: Vault secret backend
-  neuron-secret-aws/          ← Layer 4: AWS secret backend
-  neuron-secret-gcp/          ← Layer 4: GCP secret backend
-  neuron-secret-keystore/     ← Layer 4: keystore secret backend
-  neuron-secret-k8s/          ← Layer 4: Kubernetes secret backend
-  neuron-auth/                ← Layer 4: auth trait
-  neuron-auth-static/         ← Layer 4: static auth
-  neuron-auth-file/           ← Layer 4: file-based auth
-  neuron-auth-oidc/           ← Layer 4: OIDC auth
-  neuron-auth-k8s/            ← Layer 4: Kubernetes auth
-  neuron-crypto/              ← Layer 4: crypto trait
-  neuron-crypto-vault/        ← Layer 4: Vault crypto backend
-  neuron-crypto-hardware/     ← Layer 4: hardware crypto backend
-  neuron-hooks/               ← Layer 5: hook registry
-  neuron-hook-security/       ← Layer 5: security hooks
-  neuron/                     ← Umbrella crate (re-exports)
-```
+  layer0/                           ← Layer 0: protocol traits + message types
+
+  turn/
+    neuron-turn/                     ← Layer 1: turn provider abstraction
+    neuron-turn-kit/                 ← Layer 1: turn decomposition primitives
+    neuron-context/                  ← Layer 1: conversation context
+    neuron-tool/                     ← Layer 1: tool registry + middleware
+    neuron-mcp/                      ← Layer 1: MCP client integration
+
+  op/
+    neuron-op-react/                 ← Layer 1: ReAct operator
+    neuron-op-single-shot/           ← Layer 1: single-shot operator
+
+  provider/
+    neuron-provider-anthropic/       ← Layer 1: Anthropic provider
+    neuron-provider-openai/          ← Layer 1: OpenAI provider
+    neuron-provider-ollama/          ← Layer 1: Ollama provider
+
+  orch/
+    neuron-orch-local/               ← Layer 2: local orchestrator
+    neuron-orch-kit/                 ← Layer 2: orchestration utilities
+
+  effects/
+    neuron-effects-core/             ← Layer 2: effect executor trait
+    neuron-effects-local/            ← Layer 2: local effect interpreter
+
+  state/
+    neuron-state-memory/             ← Layer 3: in-memory state store
+    neuron-state-fs/                 ← Layer 3: filesystem state store
+
+  env/
+    neuron-env-local/                ← Layer 4: local environment
+
+  secret/
+    neuron-secret/                   ← Layer 4: secret trait + 6 backends
+
+  auth/
+    neuron-auth/                     ← Layer 4: auth trait + 4 backends
+
+  crypto/
+    neuron-crypto/                   ← Layer 4: crypto trait + 2 backends
+
+  hooks/
+    neuron-hooks/                    ← Layer 5: hook registry
+    neuron-hook-security/            ← Layer 5: security hooks
+
+  neuron/                            ← Umbrella crate (re-exports)
 
 See `NEURON-REDESIGN-PLAN.md` for the full 6-layer architecture and design rationale.
 
