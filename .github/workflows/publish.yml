@@ -40,28 +40,29 @@ jobs:
             # Tier 0: no internal deps
             layer0
             neuron-tool
-            neuron-effects-core
             
             # Tier 1: depend only on tier 0
-            neuron-effects-local
+            neuron-effects-core
+            neuron-secret
+            neuron-crypto
             neuron-hooks
             neuron-hook-security
             neuron-state-memory
             neuron-state-fs
-            neuron-orch-kit
             neuron-turn
-            
-            # Tier 2: depend on tier 0-1
-            neuron-turn-kit
-            neuron-orch-local
-            neuron-auth
-            neuron-context
-            neuron-secret
-            neuron-crypto
             neuron-mcp
+            neuron-orch-local
+            
+            # Tier 2: depend on tier 1
+            neuron-effects-local
+            neuron-orch-kit
+            neuron-auth
+            neuron-env-local
+            neuron-turn-kit
+            neuron-context
             neuron-op-single-shot
             
-            # Tier 3: depend on tier 0-2
+            # Tier 3: depend on tier 2
             neuron-auth-static
             neuron-auth-file
             neuron-auth-oidc
