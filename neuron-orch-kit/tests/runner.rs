@@ -6,7 +6,7 @@ use layer0::id::{AgentId, WorkflowId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::state::{SearchResult, StateStore};
-use neuron_orch_kit::{Kit, KitError, LocalEffectExecutor, OrchestratedRunner};
+use neuron_orch_kit::{Kit, KitError, LocalEffectInterpreter, OrchestratedRunner};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -204,7 +204,7 @@ struct HandoffTargetOperator;
 #[async_trait]
 impl Operator for HandoffTargetOperator {
     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
-        // LocalEffectExecutor serializes the JSON state to a string and puts it in message text.
+        // LocalEffectInterpreter serializes the JSON state to a string and puts it in message text.
         let text = input.message.as_text().unwrap_or_default();
         assert!(text.contains("\"ticket\":123") || text.contains("\"ticket\": 123"));
         Ok(OperatorOutput::new(
@@ -258,7 +258,7 @@ async fn runner_executes_memory_and_signal_effects() {
     let state = Arc::new(TestStore::new());
     let runner = OrchestratedRunner::new(
         orch_for_runner,
-        Arc::new(LocalEffectExecutor::new(Arc::clone(&state))),
+        Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
     );
 
     let trace = runner
@@ -289,7 +289,7 @@ async fn runner_enqueues_and_executes_delegate() {
     let state = Arc::new(TestStore::new());
     let runner = OrchestratedRunner::new(
         Arc::new(orch),
-        Arc::new(LocalEffectExecutor::new(Arc::clone(&state))),
+        Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
     );
 
     let trace = runner
@@ -313,7 +313,7 @@ async fn runner_enqueues_and_executes_handoff() {
 
     let runner = OrchestratedRunner::new(
         Arc::new(orch),
-        Arc::new(LocalEffectExecutor::new(Arc::new(TestStore::new()))),
+        Arc::new(LocalEffectInterpreter::new(Arc::new(TestStore::new()))),
     );
 
     let trace = runner
@@ -376,7 +376,7 @@ async fn runner_has_safety_bound_for_infinite_followups() {
 
     let runner = OrchestratedRunner::new(
         Arc::new(orch),
-        Arc::new(LocalEffectExecutor::new(Arc::new(TestStore::new()))),
+        Arc::new(LocalEffectInterpreter::new(Arc::new(TestStore::new()))),
     )
     .with_max_followups(8);
 
@@ -402,7 +402,7 @@ async fn runner_effect_pipeline_end_to_end() {
     let state = Arc::new(TestStore::new());
     let runner = OrchestratedRunner::new(
         orch_for_runner,
-        Arc::new(LocalEffectExecutor::new(Arc::clone(&state))),
+        Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
     );
 
     let trace = runner

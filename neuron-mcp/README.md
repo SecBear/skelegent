@@ -8,16 +8,21 @@
 
 ## Overview
 
-`neuron-mcp` connects the
-[Model Context Protocol](https://modelcontextprotocol.io) (MCP) ecosystem to neuron's
-`ToolRegistry`. It provides:
+`neuron-mcp` bridges the [Model Context Protocol](https://modelcontextprotocol.io) ecosystem to
+neuron's `ToolRegistry`. Two independent components:
 
-- **MCP client** — connects to an MCP server (stdio child process, HTTP, or streamable HTTP),
-  discovers its tools, and registers them into a `ToolRegistry` so any neuron operator can call them
-- **MCP server** — exposes a `ToolRegistry` as an MCP server endpoint, making neuron tools
-  accessible to any MCP-capable client
+- **`McpClient`** — connects to an MCP server, discovers its tools, and returns them as
+  `Arc<dyn ToolDyn>` for use in a `ToolRegistry`
+- **`McpServer`** — wraps a `ToolRegistry` and exposes its tools over the MCP protocol via stdio
 
 Backed by the [`rmcp`](https://crates.io/crates/rmcp) library.
+
+## Exports
+
+- **`McpClient`** — `connect_stdio(Command)`, `connect_sse(url)`, `discover_tools()`,
+  `discover_tools_with_aliases(aliases)`, `close()`
+- **`McpServer`** — `new(registry, name, version)`, `serve_stdio()`
+- **`McpError`** — `Connection(String)`, `Protocol(String)`
 
 ## Usage
 
@@ -30,26 +35,43 @@ tokio = { version = "1", features = ["full"] }
 
 ### Consuming an MCP server's tools
 
-```rust
-use neuron_mcp::McpClientBridge;
+```rust,no_run
+use neuron_mcp::McpClient;
 use neuron_tool::ToolRegistry;
 
-let bridge = McpClientBridge::from_child_process("uvx", &["mcp-server-fetch"]).await?;
-let mut registry = ToolRegistry::new();
-bridge.register_into(&mut registry).await?;
-// registry now contains all tools from the MCP server
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = tokio::process::Command::new("uvx");
+    cmd.args(["mcp-server-fetch"]);
+
+    let client = McpClient::connect_stdio(cmd).await?;
+    let tools = client.discover_tools().await?;
+
+    let mut registry = ToolRegistry::new();
+    for tool in tools {
+        registry.register(tool);
+    }
+    // registry now contains all tools from the MCP server
+    client.close().await?;
+    Ok(())
+}
 ```
 
 ### Exposing neuron tools as an MCP server
 
-```rust
-use neuron_mcp::McpServerBridge;
+```rust,no_run
+use neuron_mcp::McpServer;
+use neuron_tool::ToolRegistry;
 
-let bridge = McpServerBridge::new(registry);
-bridge.serve_stdio().await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let registry = ToolRegistry::new(); // populate as needed
+    let server = McpServer::new(registry, "my-server", "0.1.0");
+    server.serve_stdio().await?;
+    Ok(())
+}
 ```
 
 ## Part of the neuron workspace
 
 [neuron](https://github.com/secbear/neuron) is a composable async agentic AI framework for Rust.
-See the [book](https://secbear.github.io/neuron) for architecture and guides.

@@ -488,16 +488,6 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 content: response.content.clone(),
             });
 
-            let _tool_uses: Vec<(String, String, serde_json::Value)> = response
-                .content
-                .iter()
-                .filter_map(|part| match part {
-                    ContentPart::ToolUse { id, name, input } => {
-                        Some((id.clone(), name.clone(), input.clone()))
-                    }
-                    _ => None,
-                })
-                .collect();
             let mut tool_results: Vec<ContentPart> = Vec::new();
             // Use planner to decide batches. Build (id,name,input) vector first.
             let planned = {

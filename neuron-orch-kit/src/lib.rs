@@ -15,7 +15,7 @@ mod runner;
 
 pub use kit::Kit;
 pub use runner::{
-    EffectExecutor, ExecutionEvent, ExecutionTrace, KitError, LocalEffectExecutor,
+    EffectInterpreter, ExecutionEvent, ExecutionTrace, KitError, LocalEffectInterpreter,
     OrchestratedRunner,
 };
 

@@ -1,4 +1,4 @@
-use crate::runner::{EffectExecutor, KitError, LocalEffectExecutor, OrchestratedRunner};
+use crate::runner::{EffectInterpreter, KitError, LocalEffectInterpreter, OrchestratedRunner};
 use layer0::orchestrator::Orchestrator;
 use layer0::state::StateStore;
 use std::sync::Arc;
@@ -36,25 +36,25 @@ impl Kit {
         self.state.as_ref()
     }
 
-    /// Build a runner using the provided effect executor.
-    pub fn runner_with_executor<E: EffectExecutor>(
+    /// Build a runner using the provided effect interpreter.
+    pub fn runner_with_interpreter<E: EffectInterpreter>(
         &self,
         executor: Arc<E>,
     ) -> OrchestratedRunner<E> {
         OrchestratedRunner::new(Arc::clone(&self.orch), executor)
     }
 
-    /// Build a local runner that executes memory effects against the kit state backend.
+    /// Build a local runner that interprets memory effects against the kit state backend.
     pub fn local_runner(
         &self,
-    ) -> Result<OrchestratedRunner<LocalEffectExecutor<dyn StateStore>>, KitError> {
+    ) -> Result<OrchestratedRunner<LocalEffectInterpreter<dyn StateStore>>, KitError> {
         let state = self
             .state
             .as_ref()
             .ok_or_else(|| KitError::Effect("local_runner requires a state backend".into()))?;
         Ok(OrchestratedRunner::new(
             Arc::clone(&self.orch),
-            Arc::new(LocalEffectExecutor::new(Arc::clone(state))),
+            Arc::new(LocalEffectInterpreter::new(Arc::clone(state))),
         ))
     }
 }

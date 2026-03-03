@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use layer0::effect::Effect;
-use layer0::error::{OperatorError, OrchError, StateError};
+use layer0::error::{OrchError, StateError};
 use layer0::id::{AgentId, WorkflowId};
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::Orchestrator;
@@ -87,13 +87,13 @@ impl Default for ExecutionTrace {
     }
 }
 
-/// Effect execution policy.
+/// Effect interpretation policy.
 ///
 /// The default `OrchestratedRunner` uses this trait as the single seam where
 /// a product (like Sortie) can override semantics without adopting a DSL.
 #[async_trait]
-pub trait EffectExecutor: Send + Sync {
-    /// Execute a single effect and optionally enqueue follow-up dispatches.
+pub trait EffectInterpreter: Send + Sync {
+    /// Interpret a single effect and optionally enqueue follow-up dispatches.
     async fn execute_effect(
         &self,
         effect: &Effect,
@@ -102,24 +102,24 @@ pub trait EffectExecutor: Send + Sync {
     ) -> Result<(), KitError>;
 }
 
-/// Default effect executor for local composition.
+/// Default effect interpreter for local composition.
 ///
-/// Executes state effects directly against the supplied state store and
+/// Interprets state effects directly against the supplied state store and
 /// turns `Delegate`/`Handoff` into follow-up dispatches on the same orchestrator.
-pub struct LocalEffectExecutor<S: StateStore + ?Sized> {
+pub struct LocalEffectInterpreter<S: StateStore + ?Sized> {
     /// State backend used for memory effects.
     pub state: Arc<S>,
 }
 
-impl<S: StateStore + ?Sized> LocalEffectExecutor<S> {
-    /// Create a new local effect executor.
+impl<S: StateStore + ?Sized> LocalEffectInterpreter<S> {
+    /// Create a new local effect interpreter.
     pub fn new(state: Arc<S>) -> Self {
         Self { state }
     }
 }
 
 #[async_trait]
-impl<S: StateStore + ?Sized + 'static> EffectExecutor for LocalEffectExecutor<S> {
+impl<S: StateStore + ?Sized + 'static> EffectInterpreter for LocalEffectInterpreter<S> {
     async fn execute_effect(
         &self,
         effect: &Effect,
@@ -180,13 +180,13 @@ impl<S: StateStore + ?Sized + 'static> EffectExecutor for LocalEffectExecutor<S>
 ///
 /// This is the core “glue” promised by `neuron-orch-kit`: it proves that the
 /// effect vocabulary is executable without forcing a DSL.
-pub struct OrchestratedRunner<E: EffectExecutor> {
+pub struct OrchestratedRunner<E: EffectInterpreter> {
     orch: Arc<dyn Orchestrator>,
     effects: Arc<E>,
     max_followups: usize,
 }
 
-impl<E: EffectExecutor> OrchestratedRunner<E> {
+impl<E: EffectInterpreter> OrchestratedRunner<E> {
     /// Create a new orchestrated runner.
     pub fn new(orch: Arc<dyn Orchestrator>, effects: Arc<E>) -> Self {
         Self {
@@ -249,7 +249,3 @@ impl<E: EffectExecutor> OrchestratedRunner<E> {
         Ok(trace)
     }
 }
-
-// Prevent unused imports from becoming warnings if we expand error mapping later.
-#[allow(dead_code)]
-fn _touch_errors(_e: OperatorError) {}
