@@ -25,13 +25,14 @@ Core capabilities expected from turn/operator implementations:
 Operators compose three independent, optional primitives:
 
 ```rust
-let operator = ReactOperator::new(provider, config)
-    .with_hooks(registry)        // observation + intervention
-    .with_steering(source)       // external control flow
-    .with_planner(barrier);      // execution strategy
+let operator = ReactOperator::new(
+    provider, tools, context_strategy, hooks, state_reader, config,
+)
+    .with_steering(source)       // external control flow (optional)
+    .with_planner(barrier);      // execution strategy (optional)
 ```
 
-Each is optional. Each composes independently. Default: no hooks, no steering, sequential planner. See `ARCHITECTURE.md` §Three-Primitive and `specs/09-hooks-lifecycle-and-governance.md` for full architectural position.
+Hooks, tools, context strategy, and state reader are required constructor parameters. Steering and planner are optional builder methods. Default: no steering, sequential planner. See `ARCHITECTURE.md` §Three-Primitive and `specs/09-hooks-lifecycle-and-governance.md` for full architectural position.
 
 ## Exit Reasons
 

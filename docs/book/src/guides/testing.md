@@ -105,11 +105,16 @@ Then construct an operator with the mock provider:
 use neuron_op_react::{ReactConfig, ReactOperator};
 use neuron_hooks::HookRegistry;
 use neuron_tool::ToolRegistry;
+use neuron_turn_kit::FullContext;
+use neuron_state_memory::MemoryStore;
+use std::sync::Arc;
 
 let operator = ReactOperator::new(
     mock_provider,
     ToolRegistry::new(),
+    Box::new(FullContext),
     HookRegistry::new(),
+    Arc::new(MemoryStore::new()),
     ReactConfig::default(),
 );
 

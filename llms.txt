@@ -3,7 +3,7 @@
 > 6-layer composable agentic AI runtime in Rust.
 
 Neuron is a Rust framework for building agentic AI systems. It decomposes
-the problem into six architectural layers (L0–L5), each with clear trait
+the problem into six architectural layers (Layer 0 through Layer 5), each with clear trait
 boundaries, so every concern — from protocol serialization to secret
 management — lives in exactly one place.
 

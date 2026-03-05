@@ -40,7 +40,7 @@ jobs:
             # Tier 0: no internal deps
             layer0
             neuron-tool
-            
+
             # Tier 1: depend only on tier 0
             neuron-effects-core
             neuron-secret
@@ -52,7 +52,7 @@ jobs:
             neuron-turn
             neuron-mcp
             neuron-orch-local
-            
+
             # Tier 2: depend on tier 1
             neuron-effects-local
             neuron-orch-kit
@@ -61,27 +61,16 @@ jobs:
             neuron-turn-kit
             neuron-context
             neuron-op-single-shot
-            
+
             # Tier 3: depend on tier 2
-            neuron-auth-static
-            neuron-auth-file
-            neuron-auth-oidc
-            neuron-auth-k8s
-            neuron-secret-env
-            neuron-secret-keystore
             neuron-secret-vault
-            neuron-secret-aws
-            neuron-secret-gcp
-            neuron-secret-k8s
-            neuron-crypto-vault
-            neuron-crypto-hardware
             neuron-op-react
-            
+
             # Tier 4: depend on many crates
             neuron-provider-anthropic
             neuron-provider-openai
             neuron-provider-ollama
-            
+
             # Umbrella (last)
             neuron
           )

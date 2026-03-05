@@ -121,7 +121,6 @@ The single-shot operator makes exactly one model call with no tool use. It is us
 ```rust,no_run
 use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use neuron_provider_anthropic::AnthropicProvider;
-use neuron_hooks::HookRegistry;
 
 let config = SingleShotConfig {
     system_prompt: "Classify the following text into one of: positive, negative, neutral.".into(),
@@ -130,9 +129,8 @@ let config = SingleShotConfig {
 };
 
 let provider = AnthropicProvider::new("sk-ant-...");
-let hooks = HookRegistry::new();
 
-let operator = SingleShotOperator::new(provider, hooks, config);
+let operator = SingleShotOperator::new(provider, config);
 ```
 
 ### Behavior
