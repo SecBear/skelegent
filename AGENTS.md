@@ -104,93 +104,21 @@ Exceptions are allowed only for:
 2. Pure documentation changes.
 3. Configuration-only changes where tests are not meaningful (but verification is still required).
 
-## Architecture Principles
+## Architecture Quick Reference
 
-### Layer 0 Protocol
+Full architectural positions live in `ARCHITECTURE.md`. Specs govern behavior.
+Before touching architecture, read `ARCHITECTURE.md` first. Key invariants:
 
-- Protocol only: object-safe traits + serde wire types. No execution policy, no technology bindings, no durability semantics.
-- Additive changes preferred; breaking changes planned and versioned.
+- **Layer 0 is protocol only.** Object-safe traits + serde wire types. No execution policy.
+- **Effects boundary is sacred.** Operators declare; orchestrators/environments execute.
+- **Three independent primitives.** Hooks (event-driven), Steering (poll-driven), Planner (execution strategy). Not interchangeable. See `specs/04` and `specs/09`.
+- **Defaults are slim.** Advanced behavior opt-in via composable traits.
 
-### Effects Boundary
-
-- Sacred: operators declare, orchestrators/environments execute. No direct writes from operators.
-
-### Hooks vs Steering vs Planner (Three-Primitive Pattern)
-
-Operators compose three independent primitives:
-
-```rust
-let operator = ReactOperator::new(provider, config)
-    .with_hooks(registry)        // observation + intervention
-    .with_steering(source)       // external control flow
-    .with_planner(barrier);      // execution strategy
-```
-
-Each is optional. Each composes independently. They are NOT interchangeable:
-
-- **Hooks** (`HookRegistry`): event-driven observation/intervention at defined points. Return actions (Halt/Skip/Modify/Continue). Registered with a `HookKind` that determines composition:
-  - `Guardrail`: short-circuits on Halt/Skip. For policy enforcement.
-  - `Transformer`: chains — each feeds the next modified context. For redaction/formatting.
-  - `Observer`: all run, actions ignored. For logging/telemetry.
-
-  Dispatch order: observers first, then transformers, then guardrails.
-
-- **Steering** (`SteeringSource`): poll-driven external control flow. Returns messages to inject. Polled at boundaries; may skip remaining tools. NOT a HookKind because:
-  - Different control flow (poll vs event)
-  - Different returns (messages vs actions)
-  - Different composition (concatenate vs short-circuit/chain/parallel)
-  - Different statefulness (buffers between polls vs stateless per call)
-
-  Hooks **observe** steering via `PreSteeringInject` (guardrails can block) and `PostSteeringSkip` (observers log). This makes steering visible to security hooks without merging the concepts.
-
-- **Planner** (`ToolExecutionPlanner`): execution strategy for tool calls. Barrier scheduling, concurrency decisions. Observation-only (no policy/control flow).
-
-- Optional streaming tool API; forward chunks via ToolExecutionUpdate hook point. Streaming is observation-only; must not alter control flow.
-
-### Defaults
-
-- Slim for simple use cases. Advanced behavior opt-in via small, composable traits. No boolean soup.
-
-### Turn Engine Decomposition
-
-Prefer composing these primitives over monolithic loops:
-ContextAssembler, ToolExecutionPlanner, ConcurrencyDecider, BatchExecutor, SteeringSource, HookDispatcher, EffectSynthesizer, ExitController.
-
-### Tool Metadata
-
-- Source of truth for concurrency: Shared/Exclusive hints live on tool definition. Deciders read metadata first, may layer policy.
-
-### Limits
-
-- Single authority: budget/time/turns live in ExitController. Planners observe remaining budget/time (read-only).
-
-### Local vs Durable
-
-- LocalEffectExecutor: lean, in-order, best-effort.
-- Durable semantics (idempotency keys, retries, sagas) belong to durable orchestrators, not Layer 0 or local executors.
-- Orchestrator owns the reference effect interpreter and minimal signal/query semantics (local first, durable later).
-
-### Credentials
-
-- Resolved/injected via Environment + secret/auth/crypto backends. Tests must prove no secret leakage.
-
-### Invariants
-
-- Preserve tool_use → tool_result pairing; on steering, emit placeholders for skipped tools.
-- Refactor guardrail: behavior-preserving refactors must pass full test suite before adding new capabilities via decomposed traits.
-
-### Conformance
-
-- Integration tests prove provider swap, state swap, operator swap, and orchestration compose deterministically.
-- Enforce CI backpressure (fmt, clippy -D warnings, tests).
-
-## Codifying Learnings (Build Your Stdlib)
+## Codifying Learnings
 
 When a failure mode repeats or an agent needs steering:
 
 1. Fix the immediate issue.
 2. Encode the lesson so it does not recur:
-   - If it's a behavior requirement: update/add a spec in `specs/` and link it from `SPECS.md`.
-   - If it's a process constraint: update/add a rule in `rules/`.
-
-Goal: make the correct outcome the path of least resistance.
+   - Behavior requirement: update/add a spec in `specs/` and link from `SPECS.md`.
+   - Process constraint: update/add a rule in `rules/`.
