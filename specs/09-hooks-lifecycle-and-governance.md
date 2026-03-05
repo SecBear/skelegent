@@ -73,7 +73,9 @@ registry, not the hook itself. This preserves Layer 0 stability.
 
 ### Exit Priority
 
-Safety halt (hook) > budget > max turns > model done. ExitCheck hooks MUST dispatch before limit checks in the operator loop. A guardrail that should block execution must not be checked after a budget limit has already returned.
+See `specs/04-operator-turn-runtime.md §Exit Priority Ordering` for the authoritative
+priority table. ExitCheck hooks MUST dispatch before all limit checks in the operator
+loop — a guardrail must not be checked after a limit has already returned.
 
 ### Hooks vs Steering
 
@@ -110,6 +112,27 @@ and takes action.
 | `TimeoutApproaching` | Operator | When elapsed time approaches the configured `max_duration` |
 | `TimeoutReached` | Operator | When the elapsed time limit is reached and the operator must exit |
 
+
+> **Loop detection is a two-part mechanism:** the operator emits
+> `BudgetEvent::LoopDetected` to sinks (observability notification) **and** returns
+> `ExitReason::Custom("stuck_detected")` (control-flow exit). These are complementary:
+> the event is for observability and audit; the exit reason is for orchestrators deciding
+> what to do next. Similarly, step limit (`max_tool_calls`) emits
+> `BudgetEvent::StepLimitReached` and returns `ExitReason::BudgetExhausted`.
+
+### Budget Governance Authority
+
+Budget decisions have a single authority chain (from `ARCHITECTURE.md §Lifecycle`):
+
+- **Turn** emits `CostIncurred` after each model inference call.
+- **Orchestrator** tracks aggregate cost and emits `BudgetWarning` / `BudgetAction`.
+- **Lifecycle coordinator** (orchestrator role) makes halt/continue/downgrade decisions.
+- **Planners** observe remaining budget read-only — they MUST NOT make halt decisions.
+
+Single authority is required: if the SDK also applies automatic retry on budget exhaustion,
+it conflicts with the orchestrator's halt decision. SDK-level automatic retry MUST be
+disabled when the orchestrator manages budget governance.
+
 ### CompactionEvent
 
 | Variant | Emitted by | When |
@@ -135,3 +158,21 @@ Still required for "core complete":
 
 - Explicit examples showing how orchestration consumes lifecycle vocab to coordinate compaction/budget
 - Tests for edge hook actions (skip tool, modify tool input/output) across the operator runtime
+
+## Observability: Common Event Interface
+
+All layers emit observability data through `layer0::lifecycle::ObservableEvent`. Every
+event carries:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `source` | `EventSource` | Which protocol emitted this event |
+| `event_type` | `String` | Event type (namespaced by convention, e.g. `"turn.cost_incurred"`) |
+| `timestamp` | `DurationMs` | Milliseconds since workflow start |
+| `trace_id` | `Option<String>` | Correlation ID for cross-layer tracing |
+| `data` | `serde_json::Value` | Event payload |
+
+All new lifecycle event types MUST be emitted via `ObservableEvent` so that tracing,
+logging, and audit infrastructure has a single integration point. `BudgetEvent` and
+`CompactionEvent` are domain-specific vocabularies for sink callbacks; `ObservableEvent`
+is the cross-cutting emission interface.

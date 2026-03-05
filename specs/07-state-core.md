@@ -195,70 +195,19 @@ pub enum ContentKind {
 Backends with category-aware storage (e.g., separate vector namespaces per kind) can use
 `ContentKind` for routing. Backends without category support ignore it.
 
-## AnnotatedMessage
+## AnnotatedMessage and CompactionPolicy
 
-`AnnotatedMessage` (defined in `turn/neuron-turn/src/context.rs`) wraps a
-`ProviderMessage` with optional per-message metadata that governs how the turn layer
-treats the message during context compaction.
+`AnnotatedMessage` wraps a `ProviderMessage` with optional per-message compaction metadata
+(`policy`, `source`, `salience`). `CompactionPolicy` controls how a `ContextStrategy`
+treats the message (Pinned / Normal / CompressFirst / DiscardWhenDone).
 
-```rust
-pub struct AnnotatedMessage {
-    pub message: ProviderMessage,
-    pub policy: Option<CompactionPolicy>,  // default: Normal
-    pub source: Option<String>,            // e.g. "mcp:github", "user", "tool:shell"
-    pub salience: Option<f64>,             // 0.0–1.0 write-time importance hint
-}
-```
+Both types are defined in the turn layer (`turn/neuron-turn/src/context.rs` and
+`layer0/src/lifecycle.rs` respectively) and are used by `ContextStrategy` implementations
+to decide what to retain, compress, or discard during compaction.
 
-### Fields
-
-| Field | Type | Meaning |
-|---|---|---|
-| `message` | `ProviderMessage` | The underlying message |
-| `policy` | `Option<CompactionPolicy>` | Compaction treatment; `None` behaves as `Normal` |
-| `source` | `Option<String>` | Human-readable origin tag (for logging and filtering) |
-| `salience` | `Option<f64>` | Importance hint; does not replace `SearchResult.score` |
-
-### Construction
-
-An unannotated message via `AnnotatedMessage::from(msg)` has all metadata fields `None`
-and behaves as `policy = Normal`. Two convenience constructors cover common cases:
-
-```rust
-// Survives all compaction cycles:
-AnnotatedMessage::pinned(msg)
-
-// policy = DiscardWhenDone, source = "mcp:<name>":
-AnnotatedMessage::from_mcp(msg, server_name)
-```
-
-### CompactionPolicy
-
-`CompactionPolicy` (defined in `layer0/src/lifecycle.rs`, re-exported from `layer0`)
-controls how a `ContextStrategy` treats a message:
-
-| Variant | Semantics |
-|---|---|
-| `Pinned` | Never compacted. For architectural decisions, constraints, user instructions. |
-| `Normal` | Default. Subject to standard compaction. |
-| `CompressFirst` | Compress preferentially. For verbose output, build logs. |
-| `DiscardWhenDone` | Discard when the originating tool or MCP session ends. |
-
-### How Metadata Flows Through Context Assembly
-
-1. Every message entering the context window is wrapped as `AnnotatedMessage`.
-2. The `ContextStrategy` (`TieredStrategy` or `NoCompaction`) receives
-   `&[AnnotatedMessage]` and reads `policy` and `salience` when deciding what to retain,
-   compress, or discard.
-3. `source` is carried for observability — hooks and sinks can inspect it to filter log
-   output or emit metrics per origin.
-4. When `Effect::WriteMemory` accompanies a turn, the `salience` on the effect and the
-   `salience` on `AnnotatedMessage` are independent: the former is a persistence hint to
-   the backend, the latter is a context-window retention hint to the compaction strategy.
-
-For the full turn-layer context assembly flow including `TieredStrategy` zone partitioning
-and the pre-compaction flush pattern, see `specs/04-operator-turn-runtime.md §Context
-Assembly`.
+For the full reference — struct fields, variants, convenience constructors, and how
+metadata flows through context assembly — see
+`specs/04-operator-turn-runtime.md §Context Assembly`.
 
 ## Current Implementation Status
 
