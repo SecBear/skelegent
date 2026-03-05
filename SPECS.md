@@ -1,6 +1,6 @@
 # Neuron Specifications
 
-This directory contains the functional and technical specifications for the Neuron redesign (`redesign/v2`).
+This directory contains the functional and technical specifications for Neuron.
 
 These specs are written to ensure the project is *composable by construction*: once the core is complete, the only remaining work to build a fully fledged local or distributed agentic system should be (1) technology-specific implementations (Temporal, Docker/K8s, Postgres, Vault, etc.) and (2) thin glue/configuration.
 

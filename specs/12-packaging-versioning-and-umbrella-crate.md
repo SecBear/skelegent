@@ -22,7 +22,4 @@ The redesign needs an equivalent packaging story.
 
 ## Current Status
 
-On `redesign/v2`, there is no umbrella crate directory.
-
-This is required for “core complete” because it determines whether anyone can actually adopt the redesign without importing 12 crates manually.
-
+The `neuron` umbrella crate exists with feature-gated re-exports and a `prelude` module.

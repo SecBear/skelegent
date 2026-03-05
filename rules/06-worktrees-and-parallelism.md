@@ -14,7 +14,7 @@ When work items are disjoint, isolate them using git worktrees and separate agen
 Use `scripts/new-worktree.sh`:
 
 ```bash
-./scripts/new-worktree.sh orch-temporal redesign/v2
+./scripts/new-worktree.sh orch-temporal main
 ```
 
 This creates:

@@ -70,7 +70,7 @@ If `neuron-orch-kit` becomes constraining (e.g., it encodes product-level policy
 
 ## Current Implementation Status
 
-On `redesign/v2`, `neuron-orch-kit` exists as the unopinionated wiring kit.
+`neuron-orch-kit` exists as the unopinionated wiring kit.
 
 Still required for “core complete”:
 

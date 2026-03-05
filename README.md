@@ -1,4 +1,4 @@
-# Neuron (redesign/v2) — composable agentic runtime
+# Neuron — composable agentic runtime
 
 Neuron is an experiment in building an agentic system that is **composable by construction**:
 layered protocol contracts, swappable providers/tools/state, and deterministic backpressure via

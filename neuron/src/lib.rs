@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 //! # neuron — umbrella crate
 //!
-//! Provides a single import surface for the Neuron redesign (`redesign/v2`).
+//! Provides a single import surface for Neuron.
 //! Re-exports protocol and key implementations behind feature flags, plus a
 //! `prelude` for the happy path.
 
