@@ -129,10 +129,9 @@ and takes action.
 - HookKind-aware three-phase dispatch (Observer → Transformer → Guardrail) is implemented in `neuron-hooks`.
 - All nine hook points — including `PreSteeringInject`, `PostSteeringSkip`, and `PreMemoryWrite` — are in layer0 and tested.
 - Hook error logging via `tracing::warn` is implemented in `neuron-hooks` dispatch.
-- Policy/security hooks exist in `neuron-hook-security`.
+- Policy/security hooks exist in `neuron-hook-security`; `ExfilGuardHook` detects exfiltration in any tool input via generic URL+sensitive-data patterns, shell-specific patterns, and base64 blobs.
 
 Still required for "core complete":
 
-- Generalized ExfilGuardHook for non-shell tools (V32-07)
 - Explicit examples showing how orchestration consumes lifecycle vocab to coordinate compaction/budget
 - Tests for edge hook actions (skip tool, modify tool input/output) across the operator runtime

@@ -107,6 +107,30 @@ Effect::Log {
 }
 ```
 
+### LinkMemory
+
+Create a directed link between two memory entries within the same scope.
+
+```rust
+Effect::LinkMemory {
+    scope: Scope,      // scope containing both entries
+    link: MemoryLink,  // from_key, to_key, relation, optional metadata
+}
+```
+
+### UnlinkMemory
+
+Remove a directed link between two memory entries.
+
+```rust
+Effect::UnlinkMemory {
+    scope: Scope,      // scope containing both entries
+    from_key: String,  // source key
+    to_key: String,    // target key
+    relation: String,  // relationship type to remove
+}
+```
+
 ### Custom
 
 Escape hatch for domain-specific effects that have not yet stabilized into a named variant.

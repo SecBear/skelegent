@@ -35,10 +35,10 @@ Minimum requirements:
 ## Current Implementation Status
 
 - `neuron-orch-local` exists as an in-process dispatcher.
-- It does not track workflows for `signal`/`query` (signal is noop, query returns null).
+- Signals are tracked in-memory per workflow via a per-workflow signal journal; `query` returns the signal count.
+- `neuron-orch-kit` provides composition wiring.
 
 Still required:
 
-- define and test workflow-level semantics for signal/query in at least the local implementation
-- introduce a composition factory layer (orchestration-owned) that wires graphs consistently
+- end-to-end examples exercising orchestration graph wiring
 

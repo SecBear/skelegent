@@ -50,13 +50,11 @@ Exit reasons are explicit and stable. Orchestrators use them to decide what happ
 | `Custom("stuck_detected")` | Identical consecutive tool calls exceed `max_repeat_calls` | — | No (without context change) |
 | `Error` | Unrecoverable execution failure | — | Depends |
 
-### SafetyStop (V32-28 pending)
+### SafetyStop
 
 Provider safety stops are semantically distinct from all `ExitReason` variants above. They arrive as `StopReason::ContentFilter` in the provider response — an HTTP 200 from the provider, not a network or API error.
 
-**Current behavior**: `StopReason::ContentFilter` → `Err(OperatorError::Model("content filtered"))`. This propagates as an error result, not an `OperatorOutput`.
-
-**Required behavior (V32-28)**: Map to `ExitReason::SafetyStop { reason: String }`. Distinction matters:
+**Behavior**: `StopReason::ContentFilter` → `ExitReason::SafetyStop { reason: String }`. Semantically distinct from `Error` (not a transport or execution failure) and `Complete` (model did not finish naturally). Not retriable without modification to the context or request.
 
 | Aspect | `SafetyStop` | `Error` | `Complete` |
 |---|---|---|---|
@@ -69,7 +67,7 @@ Provider mapping: Anthropic `refusal`, OpenAI `content_filter`, Google `SAFETY` 
 
 ### Exit Priority Ordering
 
-Priority is highest-first. ExitCheck hook fires before all limit checks (V32-01 requirement, confirmed implemented):
+Priority is highest-first. ExitCheck hook fires before all limit checks:
 
 1. **PreInference hook** — `ObserverHalt` if guardrail trips
 2. **PostInference hook** — `ObserverHalt` if guardrail trips
@@ -242,17 +240,17 @@ Attach via `ReactOperator::with_compaction_sink(sink)`.
 Implemented:
 - `neuron-op-single-shot` — functional.
 - `neuron-op-react` — full ReAct loop; emits effects.
-- Steering integrated with boundary polling and skip semantics (V32-04 ✓).
+- Steering integrated with boundary polling and skip semantics.
 - Hook dispatch at PreInference, PostInference, PreToolUse, PostToolUse, ExitCheck, ToolExecutionUpdate.
-- ExitCheck hook fires before all limit checks (V32-01 ✓).
-- Compaction reserve enforcement via `compaction_reserve_pct` (V32-05 ✓).
-- Step/loop limits (`max_tool_calls`, `max_repeat_calls`) with BudgetEvent emission (V32-09 ✓).
-- Model selector callback (V32-10 ✓).
+- ExitCheck hook fires before all limit checks.
+- Compaction reserve enforcement via `compaction_reserve_pct`.
+- Step/loop limits (`max_tool_calls`, `max_repeat_calls`) with BudgetEvent emission.
+- Model selector callback.
 - `TieredStrategy` with zone-partitioned compaction.
 - `AnnotatedMessage` and `CompactionPolicy` enabling per-message compaction metadata.
 - `BudgetEventSink` and `CompactionEventSink` opt-in sinks on `ReactOperator`.
+- `ExitReason::SafetyStop`; maps `StopReason::ContentFilter` to it.
 
 Still required:
-- `ExitReason::SafetyStop` variant; map `StopReason::ContentFilter` to it (V32-28).
 - Stronger documentation/examples for building custom operators.
 - Explicit contracts on which effects are emitted in which situations.

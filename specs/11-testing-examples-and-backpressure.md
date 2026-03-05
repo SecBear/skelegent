@@ -23,10 +23,20 @@ These examples must share composition factories so wiring does not drift.
 
 ## Current Implementation Status
 
-- There are workspace tests under `tests/`.
+Examples:
+- `examples/custom_operator_barrier/` — custom Operator with barrier scheduling and tool-use steering; no live API
 
-Still required for “core complete”:
+Workspace tests:
+- `tests/poc.rs` — mock-based composability: provider swap, state swap, operator swap, multi-agent orchestration; runs in CI
+- `tests/cross_provider.rs` — provider parity against Anthropic, OpenAI, Ollama; `#[ignore]`, opt-in with API keys
+- `tests/umbrella_neuron.rs` — prelude compilation smoke test
 
-- a composition factory crate shared by examples/tests
-- a failure/edge-case matrix test suite proving error paths and policy edge behavior
+Wiring kit: `neuron-orch-kit` exists at `orch/neuron-orch-kit/`.
+
+Still required for "core complete":
+
+- `examples/daily_digest` — scheduled + state + signal composition proof
+- `examples/triage` — multi-agent escalation + policy controls proof
+- `examples/provider_parity` — provider swap with parity invariants as a standalone example
+- failure/edge-case matrix test suite proving error paths and policy edge behavior
 
