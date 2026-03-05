@@ -43,6 +43,7 @@ Layer 0 is the stability contract. It defines the four protocol traits (`Operato
 
 **Crates:**
 - `neuron-turn` -- Shared toolkit: `Provider` trait, `ContextStrategy`, type conversions
+- `neuron-turn-kit` -- Turn decomposition primitives and helpers
 - `neuron-provider-anthropic` -- Anthropic Claude API provider
 - `neuron-provider-openai` -- OpenAI API provider
 - `neuron-provider-ollama` -- Ollama local model provider
@@ -59,8 +60,10 @@ Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `
 **Crates:**
 - `neuron-orch-local` -- In-process orchestrator using tokio tasks
 - `neuron-orch-kit` -- Shared orchestration utilities
+- `neuron-effects-core` -- `EffectExecutor` trait and shared effect execution types
+- `neuron-effects-local` -- Local effect interpreter (executes effects in-process)
 
-Layer 2 implements `layer0::Orchestrator`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `AgentId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`.
+Layer 2 implements `layer0::Orchestrator`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `AgentId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
 
 Future implementations could include Temporal workflows (durable, replayable) or Restate (durable execution with virtual objects).
 
@@ -80,6 +83,8 @@ Future implementations could include SQLite (embedded), PostgreSQL (queryable, t
 - `neuron-env-local` -- Local passthrough environment (no isolation)
 - `neuron-secret` -- Secret resolution trait
 - `neuron-secret-vault` -- HashiCorp Vault secrets
+- `neuron-auth` -- Authentication and credential framework
+- `neuron-crypto` -- Cryptographic primitives
 
 Layer 4 implements `layer0::Environment` and provides the credential infrastructure that environments use. `LocalEnv` passes through with no isolation -- it holds an `Arc<dyn Operator>` and calls `execute()` directly. The secret, auth, and crypto backends provide credential resolution for the `EnvironmentSpec`'s `CredentialRef` system.
 

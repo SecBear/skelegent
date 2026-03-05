@@ -2,15 +2,20 @@
 
 ## The confusion this doc prevents
 
-People building on neuron hit the same confusion: "I need to chain multiple LLM calls. Where does that code go? Is it an operator? A new trait? Something between operator and orchestrator?"
+People building on neuron hit the same confusion: "I need to chain multiple LLM
+calls. Where does that code go? Is it an operator? A new trait? Something
+between operator and orchestrator?"
 
-The answer: **it goes in the orchestrator**. There is no missing layer. This doc explains why and how.
+The answer: **it goes in the orchestrator**. There is no missing layer. This doc
+explains why and how.
 
 ## The two roles
 
 ### Operator: one atomic unit of LLM work
 
-An operator receives input, does one reasoning cycle (which may involve multiple LLM calls and tool uses internally via a ReAct loop), and returns output + declared effects.
+An operator receives input, does one reasoning cycle (which may involve multiple
+LLM calls and tool uses internally via a ReAct loop), and returns output +
+declared effects.
 
 ```rust
 // Operator is intentionally one method.
@@ -19,11 +24,13 @@ async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, Operator
 ```
 
 What operators do:
+
 - Assemble context (identity + history + memory + tools)
 - Run a reasoning loop (reason, act, observe, repeat)
 - Declare effects (WriteMemory, Delegate, Signal, etc.)
 
 What operators do NOT do:
+
 - Execute effects (that's the orchestrator's job)
 - Sequence other operators (that's orchestration)
 - Handle durability (that's orchestration)
@@ -31,7 +38,10 @@ What operators do NOT do:
 
 ### Orchestrator: everything else
 
-The orchestrator composes operators into workflows, handles durability, injects credentials, coordinates communication, and executes effects. It is intentionally the vaguest protocol in neuron because composition semantics vary wildly by deployment.
+The orchestrator composes operators into workflows, handles durability, injects
+credentials, coordinates communication, and executes effects. It is
+intentionally the vaguest protocol in neuron because composition semantics vary
+wildly by deployment.
 
 ```rust
 // dispatch() RETURNS the result. This is synchronous from the caller's perspective.
@@ -39,6 +49,7 @@ async fn dispatch(&self, agent: &AgentId, input: OperatorInput) -> Result<Operat
 ```
 
 The orchestrator implementation decides:
+
 - Whether dispatch is a function call or a Temporal activity
 - Whether there's checkpointing between steps
 - How credentials get injected per-operator
@@ -48,7 +59,7 @@ The orchestrator implementation decides:
 
 ## Multi-step workflows are just sequential dispatches
 
-This is the key insight people miss. Pipeline composition doesn't need a framework — it's just code:
+Pipeline composition doesn't need a framework — it's just code:
 
 ```rust
 // A sweep workflow: three operators, sequenced, with data flow.
@@ -91,36 +102,40 @@ async fn run_sweep(
 ```
 
 This code works unchanged with any orchestrator:
+
 - `LocalOrch`: dispatches are function calls, no durability
-- `TemporalOrch`: each dispatch is a Temporal activity, workflow replays on crash
+- `TemporalOrch`: each dispatch is a Temporal activity, workflow replays on
+  crash
 - `RestateOrch`: each dispatch is a Restate handler, automatic checkpointing
 
-**Same operators. Same workflow code. Different durability guarantees.** That's the architectural position: "deployment choice, not code change."
+**Same operators. Same workflow code. Different durability guarantees.** That's
+the architectural position: "deployment choice, not code change."
 
 ## Where each concern lives
 
-| Concern | Owner | NOT |
-|---------|-------|-----|
-| LLM reasoning | Operator | Orchestrator |
-| Tool execution | Operator (within turn) | Orchestrator |
-| Context assembly | Operator (via ContextStrategy) | Orchestrator |
-| Effect declaration | Operator | Orchestrator |
-| Effect execution | Orchestrator (via EffectInterpreter) | Operator |
-| Operator sequencing | Orchestrator / application code | Operator |
-| Data flow between operators | Orchestrator / application code | Operator |
-| Credential injection | Environment (mediated by Orchestrator) | Operator |
-| Durability / checkpointing | Orchestrator implementation | Operator |
-| Crash recovery | Orchestrator implementation | Operator |
-| Retry policy | Orchestrator implementation | Operator |
-| Budget enforcement | Operator (per-turn) + Orchestrator (cross-turn) | Either alone |
-| Communication | Orchestrator implementation | Operator |
-| Result return | Orchestrator (dispatch returns OperatorOutput) | Operator |
+| Concern                     | Owner                                           | NOT          |
+| --------------------------- | ----------------------------------------------- | ------------ |
+| LLM reasoning               | Operator                                        | Orchestrator |
+| Tool execution              | Operator (within turn)                          | Orchestrator |
+| Context assembly            | Operator (via ContextStrategy)                  | Orchestrator |
+| Effect declaration          | Operator                                        | Orchestrator |
+| Effect execution            | Orchestrator (via EffectInterpreter)            | Operator     |
+| Operator sequencing         | Orchestrator / application code                 | Operator     |
+| Data flow between operators | Orchestrator / application code                 | Operator     |
+| Credential injection        | Environment (mediated by Orchestrator)          | Operator     |
+| Durability / checkpointing  | Orchestrator implementation                     | Operator     |
+| Crash recovery              | Orchestrator implementation                     | Operator     |
+| Retry policy                | Orchestrator implementation                     | Operator     |
+| Budget enforcement          | Operator (per-turn) + Orchestrator (cross-turn) | Either alone |
+| Communication               | Orchestrator implementation                     | Operator     |
+| Result return               | Orchestrator (dispatch returns OperatorOutput)  | Operator     |
 
 ## Anti-patterns
 
 ### Orchestration inside an operator
 
-**Wrong**: A single operator that sequences multiple LLM calls, reads/writes state directly, and handles its own retries.
+**Wrong**: A single operator that sequences multiple LLM calls, reads/writes
+state directly, and handles its own retries.
 
 ```rust
 // BAD: This is orchestration masquerading as an operator
@@ -134,6 +149,7 @@ pub async fn run(&self, store: &dyn StateStore) -> Result<Verdict, Error> {
 ```
 
 Problems:
+
 - Direct state writes bypass the effect pipeline (hooks don't fire)
 - No checkpointing between steps (crash loses all work)
 - Not composable (can't swap in durable execution)
@@ -145,35 +161,45 @@ Problems:
 
 **Wrong**: Adding a new protocol trait for multi-step workflows.
 
-The Orchestrator trait already handles this. `dispatch()` returns results. Sequential calls with data transformation between them IS a pipeline. No new abstraction needed.
+The Orchestrator trait already handles this. `dispatch()` returns results.
+Sequential calls with data transformation between them IS a pipeline. No new
+abstraction needed.
 
 ### Separate "client" crates for HTTP APIs
 
 **Wrong**: Creating `neuron-client-parallel-ai` or `neuron-client-github`.
 
-Per the architecture: HTTP clients are implementation details inside provider/effect crates. They embed inside the operator or effect executor that uses them. The Orchestrator doesn't need to know about HTTP.
+Per the architecture: HTTP clients are implementation details inside
+provider/effect crates. They embed inside the operator or effect executor that
+uses them. The Orchestrator doesn't need to know about HTTP.
 
 ## When to create a new orchestrator implementation
 
-Create a new orchestrator implementation when you need different composition semantics:
+Create a new orchestrator implementation when you need different composition
+semantics:
 
 - **LocalOrch**: In-process, no durability. For dev/test.
 - **TemporalOrch**: Temporal workflows. For production durable execution.
 - **RestateOrch**: Restate handlers. Alternative durable execution.
 - **HttpOrch**: Dispatch over HTTP. For microservice deployments.
 
-Each implementation gives the same operators different durability, retry, and communication guarantees. The operators don't change.
+Each implementation gives the same operators different durability, retry, and
+communication guarantees. The operators don't change.
 
 ## Composition and lifecycle implementation
 
-The orchestrator is where most composition and lifecycle decisions get implemented:
+The orchestrator is where most composition and lifecycle decisions get
+implemented:
 
-- **Child context assembly**: The orchestrator builds OperatorInput for child dispatches
+- **Child context assembly**: The orchestrator builds OperatorInput for child
+  dispatches
 - **Result return**: `dispatch()` returns OperatorOutput synchronously
 - **Lifecycle management**: The orchestrator manages agent lifetimes
-- **Communication routing**: The orchestrator routes signals, queries, and events
+- **Communication routing**: The orchestrator routes signals, queries, and
+  events
 - **Durability**: The orchestrator implementation provides durability
 - **Retry policy**: The orchestrator implementation decides retry policy
 - **Crash recovery**: The orchestrator implementation handles recovery
 
-Single-turn decisions (trigger, agent internals, exit conditions, memory writes, compaction, budget, observability) live in the operator and its support crates.
+Single-turn decisions (trigger, agent internals, exit conditions, memory writes,
+compaction, budget, observability) live in the operator and its support crates.

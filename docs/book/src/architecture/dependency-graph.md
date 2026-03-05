@@ -2,6 +2,11 @@
 
 This page shows how neuron's crates depend on each other. The fundamental rule is that dependencies flow downward: higher layers depend on lower layers, never the reverse.
 
+> **Note:** The ASCII diagram below reflects the core dependency relationships but is
+> incomplete — `neuron-effects-core`, `neuron-effects-local`, `neuron-turn-kit`,
+> `neuron-auth`, and `neuron-crypto` are not shown. See the crate list in
+> [layers.md](layers.md) for the complete and authoritative crate inventory.
+
 ## ASCII dependency graph
 
 ```
@@ -105,3 +110,16 @@ The operator ecosystem has several internal dependencies:
 | 3 | `tokio` |
 | 4 | Provider-specific SDKs (`aws-sdk`, `gcp`, `reqwest`) |
 | 5 | `layer0` only (hooks are pure logic) |
+
+## Crates not shown in the ASCII diagram
+
+The following crates were added after the diagram was drawn and are not yet reflected in
+the ASCII art above:
+
+| Crate | Layer | Depends on |
+|---|---|---|
+| `neuron-turn-kit` | 1 | `layer0`, `neuron-turn` |
+| `neuron-effects-core` | 2 | `layer0` |
+| `neuron-effects-local` | 2 | `layer0`, `neuron-effects-core` |
+| `neuron-auth` | 4 | `layer0` |
+| `neuron-crypto` | 4 | `layer0` |
