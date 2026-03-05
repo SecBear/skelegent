@@ -119,14 +119,15 @@ chore: add release-please config and initial CHANGELOGs
 
 ## Running checks
 
-Before submitting a PR, ensure all of the following pass:
+Before submitting a PR, run full verification:
 
 ```bash
-cargo fmt --check
-cargo clippy --workspace --all-features -- -D warnings
-cargo test --workspace
-cargo doc --workspace --no-deps
+./scripts/verify.sh
 ```
+
+The canonical command set is defined in `AGENTS.md §Verification`. CI runs the same
+checks. If `cargo doc` warnings matter for your change, also run:
+`nix develop -c cargo doc --workspace --no-deps`.
 
 ## Pull request process
 

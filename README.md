@@ -10,10 +10,8 @@ Specs are the source of truth: `SPECS.md` and `specs/`.
 
 This repo assumes Rust tooling is provided by the Nix flake.
 
-- Run tests: `nix develop -c cargo test`
-- Run lints: `nix develop -c cargo clippy -- -D warnings`
-- Format: `nix develop -c nix fmt`
-- Full local verification: `./scripts/verify.sh`
+- Full verification: `./scripts/verify.sh`
+- Canonical commands: see `AGENTS.md §Verification`
 
 ## Crate map (workspace members)
 

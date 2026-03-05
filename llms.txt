@@ -19,11 +19,9 @@ management — lives in exactly one place.
 Neuron builds inside a Nix devshell:
 
 ```sh
-nix develop --command cargo build --workspace
 nix develop --command cargo test --workspace --all-targets
 nix develop --command cargo clippy --workspace --all-targets -- -D warnings
-nix develop --command cargo doc --no-deps
-```
+nix develop --command cargo doc --workspace --no-deps
 
 ## Reading Order
 
