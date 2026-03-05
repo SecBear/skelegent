@@ -1,25 +1,11 @@
-# Rule 11 — Protocol Philosophy Alignment
+# Rule 11 — Protocol Trait Implementation Checklist
 
-## Problem
+Before implementing any protocol trait, read (in order):
 
-Every protocol trait in Layer 0 has a design philosophy — a set of invariants, extension patterns, and semantic contracts that are not captured by the Rust type system alone. When implementing a new crate against a protocol trait, an agent (human or AI) may produce code that compiles and passes tests but violates the protocol's intent. This drift is invisible until it causes composition failures in production.
-
-Example: StateStore's `search()` returns `Vec<SearchResult>` — an agent could implement it as a hard error for backends without search, but the protocol philosophy says "return empty vec, not error." The type system permits both. Only the philosophy distinguishes them.
-
-## Rationale
-
-Compilation verifies syntax. Tests verify behavior. Neither verifies philosophy. Philosophy drift compounds silently — each implementation that gets it slightly wrong becomes a precedent for the next. By the time the drift is visible, it's load-bearing.
-
-## MUST / MUST NOT
-
-### Before implementing any protocol trait
-
-Every agent MUST read and internalize the protocol trait's philosophy BEFORE writing implementation code. The required reading order is:
-
-1. **The trait definition** in `layer0/src/` — read every doc comment, default method, and the trait-level rustdoc.
-2. **The governing spec** in `specs/` — find the spec that covers this trait. Read it fully.
-3. **The architectural position** in `ARCHITECTURE.md` — find the relevant core value or design principle.
-4. **At least one existing implementation** — read a complete, reviewed implementation of the same trait to understand the established patterns.
+1. The trait definition in `layer0/src/` — every doc comment and default method.
+2. The governing spec in `specs/`.
+3. The relevant section of `ARCHITECTURE.md`.
+4. At least one existing implementation of the same trait.
 
 An agent MUST NOT begin writing code until it can answer these questions:
 
@@ -29,7 +15,7 @@ An agent MUST NOT begin writing code until it can answer these questions:
 - What is the extension pattern? (How do new capabilities get added without breaking existing backends?)
 - What composition contracts does this trait participate in? (Who calls it? What do they assume?)
 
-### Protocol philosophy checklist
+## Checklist
 
 For each protocol trait, the philosophy is captured in this checklist. Implementations MUST satisfy all applicable items:
 
@@ -67,24 +53,18 @@ For each protocol trait, the philosophy is captured in this checklist. Implement
 - [ ] `HookAction::Continue` MUST be the default. Hooks that fail MUST be treated as Continue (logged, not fatal).
 - [ ] Observer hooks MUST all run. Guardrail hooks MUST short-circuit on Halt. Transformer hooks MUST chain.
 
-### When adding new default methods to a protocol trait
+## When adding new default methods to a protocol trait
 
 - The new method MUST have a default implementation that preserves backward compatibility.
 - The default MUST follow the trait's established degradation pattern (empty vec, no-op, delegate to basic method).
 - The method MUST be added to the philosophy checklist above.
 - The governing spec MUST be updated before the code change (Rule 03).
 
-### When implementing a new backend crate
+## When implementing a new backend crate
 
 - The crate MUST include a doc comment on its `impl` block stating which optional capabilities it supports and which it degrades on.
 - The crate MUST include a trait compliance test (e.g., `fn _assert_state_store<T: StateStore>() {}`).
 - The crate SHOULD include tests that verify graceful degradation for capabilities it does NOT support.
-
-## Process
-
-1. Before any new protocol trait implementation, the implementing agent MUST open the trait source, governing spec, and one existing implementation. Reading these is not optional — it is the first step of the task.
-2. After implementation, the reviewing agent MUST verify philosophy alignment by checking the applicable checklist items above.
-3. When a new default method is added to any protocol trait, the checklist in this rule MUST be updated in the same commit.
 
 ## Anti-patterns
 

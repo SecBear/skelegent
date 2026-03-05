@@ -207,8 +207,4 @@ interpretation of the hints to the backend.
 
 ### Hook Integration
 
-Before calling `write_hinted()`, executors that carry a `HookRegistry` **SHOULD** fire
-the `PreMemoryWrite` hook point. The hook receives a `HookContext` that includes the
-key, value, and `StoreOptions`. A guardrail hook returning `Halt` skips the write
-without error. A transformer hook returning `ModifyToolOutput` replaces the value before
-the write proceeds.
+Before calling `write_hinted()`, executors with a `HookRegistry` fire the `PreMemoryWrite` hook point. See `specs/09-hooks-lifecycle-and-governance.md` for hook dispatch semantics and actions.

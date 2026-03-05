@@ -69,14 +69,13 @@ Provider mapping: Anthropic `refusal`, OpenAI `content_filter`, Google `SAFETY` 
 
 Priority is highest-first. ExitCheck hook fires before all limit checks:
 
-1. **PreInference hook** — `ObserverHalt` if guardrail trips
-2. **PostInference hook** — `ObserverHalt` if guardrail trips
-3. **ExitCheck hook** — `ObserverHalt`; fires before any limit check
-4. **Step limit** — `BudgetExhausted` when `total_tool_calls ≥ max_tool_calls`
-5. **Loop detection** — `Custom("stuck_detected")` when identical calls exceed `max_repeat_calls`
-6. **MaxTurns** — `MaxTurns`
-7. **Budget** — `BudgetExhausted` when `total_cost ≥ max_cost`
-8. **Timeout** — `Timeout` when `elapsed ≥ max_duration`
+1. Hook halts (PreInference, PostInference, ExitCheck) — `ObserverHalt`
+2. Step/loop limits — `BudgetExhausted` / `Custom("stuck_detected")`
+3. Turn limit — `MaxTurns`
+4. Budget limit — `BudgetExhausted`
+5. Timeout — `Timeout`
+
+See `specs/09` for full hook dispatch semantics.
 
 ## Steering Observability
 
@@ -176,64 +175,9 @@ If the flush fails, `CompactionEvent::FlushFailed` is emitted with the scope and
 
 ## Lifecycle Events
 
-Lifecycle events (`layer0/src/lifecycle.rs`) are the cross-protocol coordination vocabulary. They are not a trait — each protocol emits and consumes them through whatever mechanism is appropriate.
+Operators emit `BudgetEvent` and `CompactionEvent` lifecycle events. See `specs/09-hooks-lifecycle-and-governance.md` for the full vocabulary and semantics.
 
-### BudgetEvent
-
-Emitted by operators (5 variants) and orchestrators (3 variants):
-
-**Operator-emitted** (step and time limits):
-
-| Variant | Emitter | Firing condition |
-|---|---|---|
-| `StepLimitApproaching { agent, current, max }` | Operator | Tool call count ≥ 80% of `max_tool_calls` and < `max_tool_calls` |
-| `StepLimitReached { agent, total_tool_calls }` | Operator | Tool call count ≥ `max_tool_calls`; triggers `BudgetExhausted` exit |
-| `LoopDetected { agent, tool_name, consecutive_count, max }` | Operator | All recent calls are identical (same name + input hash); triggers `Custom("stuck_detected")` exit |
-| `TimeoutApproaching { agent, elapsed, max_duration }` | Operator | Elapsed ≥ 80% of `max_duration` and < `max_duration` |
-| `TimeoutReached { agent, elapsed }` | Operator | Elapsed ≥ `max_duration`; triggers `Timeout` exit |
-
-**Orchestrator-emitted** (cost tracking):
-
-| Variant | Emitter | Firing condition |
-|---|---|---|
-| `CostIncurred { agent, cost, cumulative }` | Turn layer | After each model call |
-| `BudgetWarning { workflow, spent, limit }` | Orchestrator | Workflow nearing its budget limit |
-| `BudgetAction { workflow, action: BudgetDecision }` | Orchestrator | Orchestrator decides: `Continue`, `DowngradeModel`, `HaltWorkflow`, `RequestIncrease` |
-
-BudgetEvents are delivered to an optional `BudgetEventSink` (trait in `neuron-op-react`):
-
-```rust
-pub trait BudgetEventSink: Send + Sync {
-    fn on_budget_event(&self, event: BudgetEvent);
-}
-```
-
-Attach via `ReactOperator::with_budget_sink(sink)`.
-
-### CompactionEvent
-
-Emitted by the operator to coordinate context compaction:
-
-| Variant | Firing condition |
-|---|---|
-| `ContextPressure { agent, fill_percent, tokens_used, tokens_available }` | Context window filling; fill_percent is the fraction used |
-| `PreCompactionFlush { agent, scope }` | Immediately before compaction runs; receiver must flush important state |
-| `CompactionComplete { agent, strategy, tokens_freed }` | Compaction succeeded |
-| `ProviderManaged { agent, provider, tokens_before, tokens_after, summary }` | Provider performed server-side compaction (e.g., Anthropic context compaction) |
-| `CompactionFailed { agent, error, strategy }` | Compaction failed; error is human-readable; strategy identifies what was tried |
-| `CompactionSkipped { agent, reason }` | Compaction conditions not met, or a hook blocked it |
-| `FlushFailed { agent, scope, key, error }` | Pre-compaction memory flush failed for a specific key |
-| `CompactionQuality { agent, tokens_before, tokens_after, items_preserved, items_lost }` | Post-compaction quality metrics |
-
-CompactionEvents are delivered to an optional `CompactionEventSink` (trait in `neuron-op-react`):
-
-```rust
-pub trait CompactionEventSink: Send + Sync {
-    fn on_compaction_event(&self, event: CompactionEvent);
-}
-```
-
-Attach via `ReactOperator::with_compaction_sink(sink)`.
+Attach optional sinks via `ReactOperator::with_budget_sink(sink)` and `ReactOperator::with_compaction_sink(sink)`.
 
 ## Current Implementation Status
 
