@@ -1,5 +1,16 @@
 name: Structural Change Detection
 
+# Runs on every merged PR to main.
+#
+# Step 1: Detect which crates and modules changed.
+# Step 2: If any changed, dispatch a generic "structural-change" event to the
+#         repo configured in secrets.AUDIT_REPO.  That repo decides what to do
+#         with the payload — neuron has no knowledge of its identity or purpose.
+#
+# Required secrets (optional — workflow degrades gracefully when absent):
+#   AUDIT_REPO            — "owner/repo" of the receiving repo
+#   AUDIT_DISPATCH_TOKEN  — PAT with contents:write on AUDIT_REPO
+
 on:
   pull_request:
     types: [closed]
@@ -14,29 +25,73 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect changed crates
+      - name: Detect changed crates and modules
         id: changes
         run: |
-          # Get list of changed files in the merged PR
-          CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.merge_commit_sha }})
+          CHANGED=$(git diff --name-only \
+            ${{ github.event.pull_request.base.sha }} \
+            ${{ github.event.pull_request.merge_commit_sha }})
+
           echo "Changed files:"
           echo "$CHANGED"
 
-          # Extract unique crate directories (first two path segments for workspace members)
-          CRATES=$(echo "$CHANGED" | grep -E '\.(rs|toml)$' | sed -n 's|^\([^/]*/[^/]*\)/.*|\1|p' | sort -u)
+          # First two path segments identify workspace members (e.g. layer0/layer0).
+          CRATES=$(echo "$CHANGED" \
+            | grep -E '\.(rs|toml)$' \
+            | sed -n 's|^\([^/]*/[^/]*\)/.*|\1|p' \
+            | sort -u || true)
+
+          # Module paths are .rs files without the extension.
+          MODULES=$(echo "$CHANGED" \
+            | grep '\.rs$' \
+            | sed 's/\.rs$//' \
+            | sort -u || true)
+
           echo "Affected crates:"
           echo "$CRATES"
-
-          # Also extract module paths (file paths without extension)
-          MODULES=$(echo "$CHANGED" | grep '\.rs$' | sed 's/\.rs$//' | sort -u)
           echo "Affected modules:"
           echo "$MODULES"
 
-          # Write to outputs
-          echo "crates<<EOF" >> $GITHUB_OUTPUT
-          echo "$CRATES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "crates<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$CRATES"    >> "$GITHUB_OUTPUT"
+          echo "EOF"        >> "$GITHUB_OUTPUT"
 
-          echo "modules<<EOF" >> $GITHUB_OUTPUT
-          echo "$MODULES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "modules<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$MODULES"    >> "$GITHUB_OUTPUT"
+          echo "EOF"         >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch structural-change event
+        if: steps.changes.outputs.crates != '' || steps.changes.outputs.modules != ''
+        env:
+          GH_TOKEN:   ${{ secrets.AUDIT_DISPATCH_TOKEN }}
+          AUDIT_REPO: ${{ secrets.AUDIT_REPO }}
+          CRATES:     ${{ steps.changes.outputs.crates }}
+          MODULES:    ${{ steps.changes.outputs.modules }}
+          SHA:        ${{ github.sha }}
+          PR_NUMBER:  ${{ github.event.pull_request.number }}
+        run: |
+          if [[ -z "${AUDIT_REPO:-}" ]]; then
+            echo "AUDIT_REPO secret not configured; skipping dispatch"
+            exit 0
+          fi
+
+          PAYLOAD=$(python3 - <<'PYEOF'
+          import json, os
+          crates  = [c for c in os.environ.get('CRATES',  '').split('\n') if c.strip()]
+          modules = [m for m in os.environ.get('MODULES', '').split('\n') if m.strip()]
+          pr_raw  = os.environ.get('PR_NUMBER', '0').strip()
+          print(json.dumps({
+              'event_type': 'structural-change',
+              'client_payload': {
+                  'crates':    crates,
+                  'modules':   modules,
+                  'sha':       os.environ.get('SHA', ''),
+                  'pr_number': int(pr_raw) if pr_raw.isdigit() else 0,
+              },
+          }))
+          PYEOF
+          )
+
+          echo "Dispatching structural-change to ${AUDIT_REPO}"
+          echo "$PAYLOAD" \
+            | gh api "repos/${AUDIT_REPO}/dispatches" --method POST --input -
