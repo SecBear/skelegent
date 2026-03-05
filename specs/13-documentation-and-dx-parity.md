@@ -15,12 +15,10 @@ Documentation is part of core completeness because the architecture is only valu
 
 ## Current Status
 
-On `redesign/v2`, there is no root README.
+Root README, crate map, and ARCHITECTURE.md are in place.
+Progressive tutorial series is underway in `docs/book/`.
 
-There are deep architecture docs under `docs/architecture` and plans under `docs/plans`.
+Still required:
 
-Still required for “core complete”:
-
-- a user-facing entrypoint document set aligned to the current codebase
 - examples that match docs
-
+- clear guidance on mock vs real path testing
