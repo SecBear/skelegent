@@ -68,6 +68,22 @@ If writing Sortie from scratch, Sortie SHOULD depend on `neuron-orch-kit`.
 
 If `neuron-orch-kit` becomes constraining (e.g., it encodes product-level policy or freezes topology), Sortie SHOULD bypass it and wire directly against `layer0` instead. This “escape hatch” is not a failure; it is the signal that `neuron-orch-kit` needs to become less opinionated.
 
+## Context Transfer Rules
+
+From `ARCHITECTURE.md §Composition`:
+
+- **Task-only injection is the default.** When wiring a `Delegate` or `Handoff` effect,
+  the `OperatorInput` passed to the sub-agent SHOULD contain only the task description
+  and directly relevant context — not the full parent conversation history.
+- **Enforce boundaries via infrastructure, not prompts.** Running sub-agents in a
+  separate process (or separate context window) is more reliable than instructing an
+  agent to "ignore" parent context. `neuron-orch-kit` wiring SHOULD respect this.
+- **Summary injection for multi-level delegation.** When a parent delegates to a child
+  that further delegates, prefer passing a summary of the parent's work product rather
+  than the full inherited context. Full context inheritance does not scale past 2-3 levels.
+- **Result routing**: two-path preferred — full output to persistent storage (via
+  `Effect::WriteMemory`) for audit, summary to parent context for token efficiency.
+
 ## Current Implementation Status
 
 `neuron-orch-kit` exists as the unopinionated wiring kit.

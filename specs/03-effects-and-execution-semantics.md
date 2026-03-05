@@ -72,6 +72,13 @@ Effect::Delegate {
 }
 ```
 
+Context transfer for delegation follows the principle from `ARCHITECTURE.md §Composition`:
+task-only injection is the default. The `input: Box<OperatorInput>` SHOULD contain only
+the task description and necessary context for the sub-agent — not the full parent
+conversation history. Context boundaries are more reliably enforced by infrastructure
+(separate process) than by prompt instructions. For multi-level delegation, prefer
+summary injection over full context inheritance to prevent unbounded context growth.
+
 ### Handoff
 
 Transfer control to another agent. Unlike `Delegate`, the current operator is finished —
@@ -83,6 +90,11 @@ Effect::Handoff {
     state: serde_json::Value,  // context to pass to the next agent
 }
 ```
+
+Handoff transfers responsibility entirely — the receiving agent takes over the
+conversation. The `state` field carries only the minimal context the next agent needs
+to continue; it is NOT the full parent context window. The parent operator terminates
+after emitting this effect.
 
 ### Signal
 

@@ -22,6 +22,31 @@ It owns:
 
 The protocol does not prescribe whether execution is local, remote, durable, or ephemeral.
 
+## Retry and Durability
+
+### Retry Authority
+
+Retry has a single authority — the orchestrator. SDK-level automatic retry and
+orchestrator-level retry MUST NOT coexist: if both fire, a single operator failure
+produces multiple retry attempts with conflicting backoff and budget accounting.
+
+Concrete requirement: when wiring a provider client, disable any built-in SDK-level
+automatic retry. The orchestrator (or the caller of `dispatch`) is the sole site that
+decides whether and when to retry.
+
+The turn classifies errors as retriable or not:
+- `ExitReason::BudgetExhausted` and `ExitReason::SafetyStop` — never retry without
+  changing the budget limit or context respectively.
+- `ExitReason::Error` — retriable depending on the error kind (transient vs permanent).
+- `ExitReason::Timeout` — retriable via a new invocation.
+
+### Durability Boundary
+
+Local orchestration provides no durability — acceptable for short, low-stakes tasks.
+Durable orchestration (e.g. Temporal, Restate) provides checkpoint/replay recovery.
+The same `Operator` implementation works in both deployments — durability is a
+configuration and infrastructure choice, not an operator-level change.
+
 ## Required “Core Complete” Features
 
 Even if technology-specific orchestrators are stubs, Neuron core needs a reference orchestration story that is testable.
