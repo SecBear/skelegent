@@ -22,7 +22,7 @@ Core capabilities expected from turn/operator implementations:
 
 ## Three-Primitive Composition
 
-Operators compose three independent, optional primitives:
+Operators compose three independent primitives:
 
 ```rust
 let operator = ReactOperator::new(
@@ -71,10 +71,16 @@ Provider mapping: Anthropic `refusal`, OpenAI `content_filter`, Google `SAFETY` 
 Priority is highest-first. ExitCheck hook fires before all limit checks:
 
 1. Hook halts (PreInference, PostInference, ExitCheck) — `ObserverHalt`
-2. Step/loop limits — `BudgetExhausted` / `Custom("stuck_detected")`
+2. Step/loop limits:
+   - `max_tool_calls` reached → `BudgetExhausted` (also emits `BudgetEvent::StepLimitReached`)
+   - `max_repeat_calls` exceeded → `Custom("stuck_detected")` (also emits `BudgetEvent::LoopDetected`)
 3. Turn limit — `MaxTurns`
-4. Budget limit — `BudgetExhausted`
+4. Cost budget — `BudgetExhausted`
 5. Timeout — `Timeout`
+
+Note: `BudgetExhausted` appears at both priority 2 and 4. Orchestrators that need to
+distinguish step exhaustion from cost exhaustion should inspect the `BudgetEvent` sink
+events rather than relying on `ExitReason` alone.
 
 See `specs/09` for full hook dispatch semantics.
 
@@ -161,7 +167,7 @@ An unannotated `ProviderMessage` wrapped via `AnnotatedMessage::from(msg)` behav
 
 ### Pre-Compaction Flush
 
-Before compaction destroys in-memory context, important state must be written to persistent storage. This is the `PreCompactionFlush` lifecycle event pattern.
+Pre-compaction flush is mandatory. Before compaction destroys in-memory context, important state MUST be written to persistent storage. This is the `PreCompactionFlush` lifecycle event pattern.
 
 Flow:
 1. Context pressure detected → `CompactionEvent::ContextPressure` emitted

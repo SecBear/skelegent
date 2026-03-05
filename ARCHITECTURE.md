@@ -162,8 +162,9 @@ security-sensitive content before backfill.
 Layer multiple independent stop conditions. "Model signals done" alone risks
 infinite loops. "Max turns" alone cuts off hard tasks.
 
-Exit can be triggered from multiple sources. Priority resolves conflicts:
-**safety halt > budget > max turns > model done**. The `ExitReason` enum is
+Exit can be triggered from multiple sources. See `specs/04-operator-turn-runtime.md
+§Exit Priority Ordering` for the authoritative priority table. In summary:
+safety halt > turn/step limits > cost budget > completion. The `ExitReason` enum is
 explicit — every exit path has a named variant.
 
 ---
@@ -238,10 +239,11 @@ debugging.
 
 ## Three-Primitive Operator Composition
 
-Operators compose three independent, optional primitives: **hooks**
-(observation + intervention), **steering** (external control flow), and
-**planner** (execution strategy). These are structurally different and must
-not be unified:
+Operators compose three independent primitives: **hooks** (observation +
+intervention, always wired — constructor parameter, may be an empty registry),
+**steering** (opt-in via builder, external control flow), and **planner**
+(opt-in via builder, execution strategy). These are structurally different
+and must not be unified:
 
 - Hooks are event-driven, return actions, compose by kind
   (guardrail/transformer/observer).
@@ -254,5 +256,5 @@ conflating two architecturally distinct primitives.
 
 Hook composition varies by `HookKind`: guardrails short-circuit on Halt;
 transformers chain modifications; observers run unconditionally. Dispatch
-order: observers, then transformers, then guardrails. Exit priority: safety
-halt (hook) > budget > max turns > model done.
+order: observers, then transformers, then guardrails. For exit priority ordering,
+see `specs/04-operator-turn-runtime.md §Exit Priority Ordering`.
