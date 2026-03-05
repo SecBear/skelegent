@@ -19,12 +19,10 @@
     "AGENTS.md",
     "CLAUDE.md",
     "CONTRIBUTING.md",
-    "PROMPT.md",
     "SECURITY.md",
     "README.md",
     "SPECS.md",
-    "ARCHITECTURE.md",
-    "ralph_queue.md"
+    "ARCHITECTURE.md"
   ],
   "packages": {
     "layer0": {

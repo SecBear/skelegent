@@ -25,7 +25,7 @@ Examples:
 
 ## Suggested Workflow
 
-1. Implement one item from `ralph_queue.md`.
+1. Implement one work item.
 2. Run `./scripts/verify.sh`.
 3. Commit with `./scripts/agent-commit.sh "feat(scope): message"`.
 

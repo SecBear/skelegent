@@ -15,13 +15,6 @@ This repo assumes Rust tooling is provided by the Nix flake.
 - Format: `nix develop -c nix fmt`
 - Full local verification: `./scripts/verify.sh`
 
-## Ralph loop (agentic queue)
-
-The repo has a deterministic “what next” queue at `ralph_queue.md`, driven by `PROMPT.md`.
-
-- Claude Code: `./scripts/ralph.sh`
-- Codex: `CODEX=1 ./scripts/ralph.sh`
-
 ## Crate map (workspace members)
 
 Core:
@@ -74,6 +67,7 @@ Providers (`provider/`):
 
 Security (`secret/`, `auth/`, `crypto/`):
 
-- `neuron-secret` + backends (env, vault, aws, gcp, keystore, k8s)
-- `neuron-auth` + backends (static, file, oidc, k8s)
-- `neuron-crypto` + backends (vault, hardware)
+- `neuron-secret` — secret resolution
+- `neuron-secret-vault` — HashiCorp Vault backend
+- `neuron-auth` — auth/credential framework
+- `neuron-crypto` — cryptographic primitives

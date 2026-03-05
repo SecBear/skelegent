@@ -194,10 +194,3 @@ When a failure mode repeats or an agent needs steering:
    - If it's a process constraint: update/add a rule in `rules/`.
 
 Goal: make the correct outcome the path of least resistance.
-
-## Loop Files
-
-This repo is designed to be run in a deterministic loop:
-
-1. `PROMPT.md` is the loop prompt.
-2. `ralph_queue.md` is the single prioritized queue.
