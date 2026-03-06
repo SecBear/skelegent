@@ -5,6 +5,8 @@
 //! [`ToolRegistry`] for managing collections of tools. Any tool source
 //! (local function, MCP server, HTTP endpoint) implements [`ToolDyn`].
 
+pub mod adapter;
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;

@@ -21,7 +21,7 @@ All crates in the neuron workspace, organized by architectural layer.
 | `neuron-mcp` | MCP (Model Context Protocol) client. Wraps MCP server tools as `ToolDyn` implementations. |
 | `neuron-op-react` | ReAct operator. Implements `Operator` with the reason-act-observe loop and tool execution. |
 | `neuron-op-single-shot` | Single-shot operator. Implements `Operator` with one model call and no tools. |
-| `neuron-turn-kit` | Turn engine primitives: `ToolExecutionPlanner`, `ConcurrencyDecider`, `BatchExecutor` (execution-only), `SteeringSource`. |
+| `neuron-turn-kit` | Turn engine primitives: `DispatchPlanner`, `ConcurrencyDecider`, `BatchExecutor` (execution-only), `SteeringSource`. |
 
 ## Layer 2 -- Orchestration
 

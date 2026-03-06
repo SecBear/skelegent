@@ -1090,6 +1090,8 @@ dependencies = [
 name = "neuron-tool"
 version = "0.4.0"
 dependencies = [
+ "async-trait",
+ "layer0",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

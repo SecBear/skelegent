@@ -127,9 +127,11 @@ impl Operator for BarrierOperator {
                         content: msg.clone(),
                         is_error: true,
                     });
-                    metadata
-                        .sub_dispatches
-                        .push(SubDispatchRecord::new(name, DurationMs::ZERO, false));
+                    metadata.sub_dispatches.push(SubDispatchRecord::new(
+                        name,
+                        DurationMs::ZERO,
+                        false,
+                    ));
                 }
             }
             // Inject a steering message after each batch flush
