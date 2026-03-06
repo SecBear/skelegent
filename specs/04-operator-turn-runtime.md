@@ -32,7 +32,7 @@ let operator = ReactOperator::new(
     .with_planner(barrier);      // execution strategy (optional)
 ```
 
-Hooks, tools, context strategy, and state reader are required constructor parameters. Steering and planner are optional builder methods. Default: no steering, sequential planner. See `ARCHITECTURE.md` §Three-Primitive and `specs/09-hooks-lifecycle-and-governance.md` for full architectural position.
+Hooks, operators registered with `ToolMetadata` (`tools`), context strategy, and state reader are required constructor parameters. Steering and planner are optional builder methods; the planner type is `DispatchPlanner` (renamed from `ToolExecutionPlanner`). Default: no steering, sequential planner. See `ARCHITECTURE.md` §Three-Primitive and `specs/09-hooks-lifecycle-and-governance.md` for full architectural position.
 
 ## Exit Reasons
 
@@ -42,13 +42,13 @@ Exit reasons are explicit and stable. Orchestrators use them to decide what happ
 
 | Variant | Trigger | HTTP side | Retriable? |
 |---|---|---|---|
-| `Complete` | Model returns no tool calls (natural end) | Provider HTTP 200, `EndTurn` | No |
+| `Complete` | Model returns no sub-dispatch requests (natural end) | Provider HTTP 200, `EndTurn` | No |
 | `MaxTurns` | `max_turns` counter reached | — | Yes (new turn) |
-| `BudgetExhausted` | Cost limit or total tool call count (`max_tool_calls`) reached | — | No (without budget change) |
+| `BudgetExhausted` | Cost limit or total sub-dispatch count (`max_sub_dispatches`) reached | — | No (without budget change) |
 | `CircuitBreaker` | Consecutive failure counter trips | — | Possibly (with backoff) |
 | `Timeout` | Wall-clock elapsed ≥ `max_duration` | — | Yes (new invocation) |
 | `ObserverHalt { reason }` | ExitCheck hook returned `HookAction::Halt` | — | No |
-| `Custom("stuck_detected")` | Identical consecutive tool calls exceed `max_repeat_calls` | — | No (without context change) |
+| `Custom("stuck_detected")` | Identical consecutive sub-dispatches exceed `max_repeat_dispatches` | — | No (without context change) |
 | `Error` | Unrecoverable execution failure | — | Depends |
 
 ### SafetyStop
@@ -72,8 +72,8 @@ Priority is highest-first. ExitCheck hook fires before all limit checks:
 
 1. Hook halts (PreInference, PostInference, ExitCheck) — `ObserverHalt`
 2. Step/loop limits:
-   - `max_tool_calls` reached → `BudgetExhausted` (also emits `BudgetEvent::StepLimitReached`)
-   - `max_repeat_calls` exceeded → `Custom("stuck_detected")` (also emits `BudgetEvent::LoopDetected`)
+   - `max_sub_dispatches` reached → `BudgetExhausted` (also emits `BudgetEvent::StepLimitReached`)
+   - `max_repeat_dispatches` exceeded → `Custom("stuck_detected")` (also emits `BudgetEvent::LoopDetected`)
 3. Turn limit — `MaxTurns`
 4. Cost budget — `BudgetExhausted`
 5. Timeout — `Timeout`
@@ -195,7 +195,7 @@ Implemented:
 - Hook dispatch at PreInference, PostInference, PreSubDispatch, PostSubDispatch, ExitCheck, SubDispatchUpdate.
 - ExitCheck hook fires before all limit checks.
 - Compaction reserve enforcement via `compaction_reserve_pct`.
-- Step/loop limits (`max_tool_calls`, `max_repeat_calls`) with BudgetEvent emission.
+- Step/loop limits (`max_sub_dispatches`, `max_repeat_dispatches`) with BudgetEvent emission.
 - Model selector callback.
 - `TieredStrategy` with zone-partitioned compaction.
 - `AnnotatedMessage` and `CompactionPolicy` enabling per-message compaction metadata.

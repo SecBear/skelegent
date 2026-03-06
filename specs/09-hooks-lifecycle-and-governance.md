@@ -10,7 +10,7 @@ This is how you enforce budget, tool policy, redaction, audit, and observability
 
 `layer0::Hook` defines:
 
-- hook points (pre/post inference, tool use, exit checks, steering, memory writes)
+- hook points (pre/post inference, sub-dispatch, exit checks, steering, memory writes)
 - actions (continue, halt, skip tool, modify input/output)
 
 Hook errors should not implicitly halt execution; a hook must explicitly choose `Halt`.
@@ -24,7 +24,7 @@ and `elapsed`. The table lists only the fields that are *unique* to each point.
 | HookPoint | When | Key Context Fields |
 |---|---|---|
 | `PreInference` | Before each model call | *(baseline only)* |
-| `PostInference` | After model responds, before tool execution | `model_output` |
+| `PostInference` | After model responds, before sub-operator dispatch | `model_output` |
 | `PreSubDispatch` | Before each tool executes | `operator_name`, `operator_input` |
 | `PostSubDispatch` | After tool completes, before result enters context | `operator_name`, `operator_result` |
 | `ExitCheck` | At each exit-condition check | *(baseline only)* |
@@ -106,9 +106,9 @@ and takes action.
 | `CostIncurred` | Turn | After each model inference call; carries per-call and cumulative cost |
 | `BudgetWarning` | Orchestrator | When a workflow's cumulative spend nears its configured limit |
 | `BudgetAction` | Orchestrator | When the orchestrator decides how to respond to budget pressure (continue / downgrade model / halt / request increase) |
-| `StepLimitApproaching` | Operator | When tool call count approaches the configured `max_tool_calls` limit |
-| `StepLimitReached` | Operator | When the step (tool call) limit is reached and the operator must exit |
-| `LoopDetected` | Operator | When identical consecutive tool calls exceed the configured loop detection threshold |
+| `StepLimitApproaching` | Operator | When sub-dispatch count approaches the configured `max_sub_dispatches` limit |
+| `StepLimitReached` | Operator | When the step (sub-dispatch) limit is reached and the operator must exit |
+| `LoopDetected` | Operator | When identical consecutive sub-dispatches exceed the configured loop detection threshold |
 | `TimeoutApproaching` | Operator | When elapsed time approaches the configured `max_duration` |
 | `TimeoutReached` | Operator | When the elapsed time limit is reached and the operator must exit |
 
@@ -117,7 +117,7 @@ and takes action.
 > `BudgetEvent::LoopDetected` to sinks (observability notification) **and** returns
 > `ExitReason::Custom("stuck_detected")` (control-flow exit). These are complementary:
 > the event is for observability and audit; the exit reason is for orchestrators deciding
-> what to do next. Similarly, step limit (`max_tool_calls`) emits
+> what to do next. Similarly, step limit (`max_sub_dispatches`) emits
 > `BudgetEvent::StepLimitReached` and returns `ExitReason::BudgetExhausted`.
 
 ### Budget Governance Authority

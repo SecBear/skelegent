@@ -26,6 +26,13 @@ Layer 0 also defines cross-cutting governance interfaces:
 - `Hook` (observation/intervention at hook points)
 - lifecycle vocabulary types (`BudgetEvent`, `CompactionEvent`, `ObservableEvent`)
 
+## Type Inventory
+
+Core types that cross layer boundaries:
+
+- `SubDispatchRecord` — record of a single sub-operator dispatch within a turn. Fields: `name: String`, `duration: DurationMs`, `success: bool`. Accumulated in `OperatorMetadata.sub_dispatches` and used to report what was dispatched during a turn.
+- `ToolMetadata` — metadata that makes an operator callable as an LLM tool. Fields: `name: String`, `description: String`, `input_schema: serde_json::Value`, `parallel_safe: bool`. Not part of the `Operator` trait — attached at registration time by the orchestrator, so the same operator can be registered with different metadata in different contexts.
+
 ## Compatibility Rules
 
 - Traits must remain object-safe and usable behind `dyn` for composition.

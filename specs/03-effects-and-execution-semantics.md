@@ -175,6 +175,10 @@ Effects should be executed by orchestration/runtime glue, not by the operator it
 - Local orchestration may execute them immediately.
 - Durable orchestration may serialize and execute them inside workflow engines.
 
+### Scoped State Exception
+
+Operators may read and write their own state partition directly via an injected `ScopedState` capability. Own-scope state access does not cross the effects boundary — it is a direct, synchronous read/write within the operator’s own scope and is not queued for later execution. Cross-scope writes remain as `Effect::WriteMemory` and are handled by the executing layer. This exception exists because own-scope state is semantically local to the operator; routing it through the effect pipeline would add latency without providing meaningful isolation benefit.
+
 ## Executor Guidance: Threading Advisory Fields
 
 ### Contract

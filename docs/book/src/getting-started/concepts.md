@@ -126,3 +126,12 @@ Orchestr.  = LocalOrch { agent_a -> Operator, agent_b -> Operator }
 ```
 
 Each component is constructed independently, then composed through trait objects. The orchestrator holds `Arc<dyn Operator>` references. The environment holds its own operator reference. Nothing knows about concrete types beyond its own construction site.
+
+
+## Tools and agents
+
+These terms name configuration patterns built on top of `Operator`, not separate types.
+
+**Tool:** An operator registered with `ToolMetadata` (name, description, JSON input schema, concurrency hint). The metadata makes the operator callable from an LLM reasoning loop. The distinction between a tool and any other operator is configuration, not type — the `Operator` trait is the same.
+
+**Agent:** A configured operator. Concretely: an `Operator` implementation (typically `ReactOperator`) wired with a provider, identity, tools, and optionally an `Arc<dyn Orchestrator>` for sub-dispatching to other agents. The term 'agent' has no corresponding trait; it describes how an operator is assembled and what capabilities it receives at construction time.

@@ -57,6 +57,17 @@ it's a configuration change.
 When you see an operator importing a concrete state store, database client, or
 filesystem API — that's a violation.
 
+Two narrow exceptions to the effects boundary are permitted by design.
+
+**Scoped state**: Operators may read and write their own state partition directly
+via injected `ScopedState`. This is internal state — not a cross-boundary
+side-effect. Cross-scope writes remain as `Effect::WriteMemory`.
+
+**Composition dispatch**: Operators may directly dispatch to other operators via
+an injected `Arc<dyn Orchestrator>` capability. The dispatched operator's I/O
+effects are handled by the orchestrator that executes it — the boundary is
+preserved transitively.
+
 ### 3. Slim Defaults, Opt-In Complexity
 
 The simplest useful configuration must work without understanding the full
@@ -114,12 +125,7 @@ state backend is swappable without turn changes. Serialized snapshots
 (on-demand within session), cold (cross-session search). Tier assignment is
 per-agent configuration.
 
-**Tools**: Definitions are the source of truth for execution metadata, including
-concurrency hints. Tool execution is mediated by the environment protocol, not
-the turn. Antipattern: naive API-to-MCP conversion — exposing every REST
-endpoint as an MCP tool without filtering causes context pollution and token
-waste. Expose only the tools the agent actually needs; use lazy catalog or
-progressive disclosure for the rest.
+**Tools**: Tools are operators registered with `ToolMetadata` — name, description, input schema, and concurrency hints (`parallel_safe`) are carried in the metadata, not a separate tool registry. Sub-operator dispatch (formerly 'tool execution') is mediated by an injected `Arc<dyn Orchestrator>` capability, not the environment protocol directly. Antipattern: naive API-to-MCP conversion — exposing every REST endpoint as an MCP tool without filtering causes context pollution and token waste. Expose only the tools the agent actually needs; use lazy catalog or progressive disclosure for the rest.
 
 **Context budget**: Turn-owned. The compaction reserve must never be zero — a
 system at 100% capacity before compacting has no room to run compaction.
@@ -141,10 +147,9 @@ Same operator works in both — deployment choice, not code change.
 (budget exhaustion and safety refusals: never retry). A single retry
 authority — SDK and orchestrator retry must not coexist.
 
-### Tool Execution
+### Sub-Operator Dispatch
 
-Where reasoning meets the real world. Three independent boundaries: trust,
-credentials, and result integration.
+Where reasoning meets the real world. Three independent boundaries govern sub-operator dispatch: trust, credentials, and result integration.
 
 **Isolation**: Environment-owned. The full spectrum is supported. The turn
 does not know its isolation level — moving from none to container is an
@@ -153,7 +158,7 @@ environment swap.
 **Credentials**: Environment-owned. Boundary injection preferred — credentials
 added at the edge, stripped from context. Tests must prove no secret leakage.
 
-**Backfill**: Turn-owned. Tool outputs are the majority of what the model
+**Backfill**: Turn-owned. Dispatch outputs are the majority of what the model
 reasons over. Format them with the same care as prompt design. Strip
 security-sensitive content before backfill.
 
@@ -179,6 +184,9 @@ All patterns are built from six primitives: **Chain**, **Fan-out**, **Fan-in**,
 Observe watches concurrently and may intervene. If a new pattern can't be
 expressed as a combination of these six, the framework may need a new primitive.
 
+**Dispatch capability**: Operators receive dispatch capability via `Arc<dyn Orchestrator>`
+injected at construction time.
+
 **Context transfer**: Task-only injection is the default. Context boundaries
 should be enforced by infrastructure (separate process), not by prompt
 instruction (fragile). Summary injection preferred over full context inheritance
@@ -199,6 +207,10 @@ ordering and conflict resolution.
 **Observation**: Mediated by hooks, attached by orchestration. Three forms:
 oracle (pull, advisory), guardrail (checkpoint, can halt), observer agent
 (continuous, full intervention). Hook handlers must not block indefinitely.
+
+**Antipattern — no Workflow trait**: There is no Workflow trait. Workflows are
+application-layer code — typed functions or LLM-backed orchestrating operators —
+not a framework abstraction.
 
 ---
 
@@ -258,3 +270,7 @@ Hook composition varies by `HookKind`: guardrails short-circuit on Halt;
 transformers chain modifications; observers run unconditionally. Dispatch
 order: observers, then transformers, then guardrails. For exit priority ordering,
 see `specs/04-operator-turn-runtime.md §Exit Priority Ordering`.
+
+The planner primitive is `DispatchPlanner` (renamed from `ToolExecutionPlanner`).
+It plans sub-operator dispatches — not just tool calls — and is the canonical
+extension point for custom execution strategies.

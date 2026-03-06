@@ -25,6 +25,17 @@ A separate wrapper product (outside Neuron) can exist to provide:
 
 That wrapper depends on Neuron and uses the composition factories.
 
+## Composition Patterns
+
+Two patterns for composing operators are idiomatic in Neuron:
+
+1. **Application-layer functions** (e.g., `async fn run_sweep(orch: Arc<dyn Orchestrator>, state: ScopedState)`) — deterministic, typed sequences of operator dispatches. The calling code controls the flow; this is plain Rust with no framework overhead.
+2. **Orchestrating operators** — operators that receive dispatch capability via an injected `Arc<dyn Orchestrator>` and use LLM reasoning to decide what to dispatch next. The LLM drives the sequencing; the operator drives the dispatch.
+
+Both are valid. The choice depends on whether the sequencing logic is deterministic (use functions) or requires LLM judgment (use an orchestrating operator).
+
+**Anti-pattern: No Workflow trait.** There is no `Workflow` trait. Workflows are application-layer code, not a framework abstraction. Adding a `Workflow` trait would conflate sequencing (application concern) with execution (infrastructure concern), creating an abstraction that provides no isolation benefit but forces all callers through a fixed interface.
+
 ## Required APIs
 
 Neuron core should provide an *unopinionated wiring kit* plus (optionally) a small set of reference factories.

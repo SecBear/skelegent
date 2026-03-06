@@ -38,8 +38,8 @@ use neuron_op_react::{BarrierPlanner, ConcurrencyDecider, Concurrency};
 
 struct MyDecider;
 impl ConcurrencyDecider for MyDecider {
-    fn concurrency(&self, tool_name: &str) -> Concurrency {
-        match tool_name {
+    fn concurrency(&self, operator_name: &str) -> Concurrency {
+        match operator_name {
             "read_file" | "search" => Concurrency::Shared,
             _ => Concurrency::Exclusive,
         }

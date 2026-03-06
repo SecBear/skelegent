@@ -2,6 +2,8 @@
 
 Tools give operators the ability to take actions: read files, make HTTP requests, query databases, or perform any side-effecting operation. The tool system is built around the `ToolDyn` trait and the `ToolRegistry`.
 
+> **Unified model:** In the neuron architecture, tools are operators registered with `ToolMetadata`. `ToolDyn` and `ToolRegistry` are the Layer 1 convenience API; at the protocol level, tools are dispatched as operators. The `ToolOperator` adapter (from `neuron_tool::adapter`) bridges `ToolDyn` to the `Operator` trait, so any `ToolDyn` implementation can be used anywhere an `Operator` is expected.
+
 ## The ToolDyn trait
 
 ```rust

@@ -51,6 +51,8 @@ pub struct OperatorConfig {
 
 Every field is optional. `None` means "use the implementation's default."
 
+Tools are operators registered with `ToolMetadata`. The `allowed_operators` field restricts which operators can be sub-dispatched during a turn; tool names in this list are operator names.
+
 ### OperatorOutput
 
 ```rust
@@ -93,6 +95,18 @@ pub struct OperatorMetadata {
 ```
 
 Every field is concrete (not optional) because every operator produces this data. Implementations that cannot track a field (e.g., cost for a local model) use zero.
+
+### SubDispatchRecord
+
+`SubDispatchRecord` captures the result of a single sub-operator dispatch within a turn:
+
+```rust
+pub struct SubDispatchRecord {
+    pub name: String,         // Operator name that was dispatched
+    pub duration: DurationMs, // Wall-clock time for that dispatch
+    pub success: bool,        // Whether the dispatch completed without error
+}
+```
 
 ## Protocol 2: Orchestrator
 
@@ -225,11 +239,11 @@ Hooks fire at five defined points:
 |-----------|------|
 | `PreInference` | Before each model call |
 | `PostInference` | After model responds, before tool execution |
-| `PreSubDispatch` | Before each tool is executed |
-| `PostSubDispatch` | After each tool completes |
+| `PreSubDispatch` | Before each sub-operator dispatch |
+| `PostSubDispatch` | After each sub-operator dispatch completes |
 | `ExitCheck` | At each exit-condition check |
 
-`HookContext` provides read-only access to the current state: tool name/input/result, model output, running token count, running cost, turns completed, elapsed time.
+`HookContext` provides read-only access to the current state: operator name/input/result, model output, running token count, running cost, turns completed, elapsed time.
 
 `HookAction` determines what happens next:
 
