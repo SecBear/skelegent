@@ -21,8 +21,8 @@ The hook points are: `PreInference`, `PostInference`, `PreSubDispatch`, `PostSub
 A hook can:
 - **Observe** -- Log, emit telemetry, track metrics (return `HookAction::Continue`).
 - **Halt** -- Stop execution with a reason (return `HookAction::Halt`).
-- **Skip a tool** -- Prevent a tool call (return `HookAction::SkipDispatch` at `PreSubDispatch`).
-- **Modify input/output** -- Sanitize tool input or redact tool output (return `ModifyDispatchInput` or `ModifyDispatchOutput`).
+- **Skip a sub-dispatch** -- Prevent a sub-dispatch (return `HookAction::SkipDispatch` at `PreSubDispatch`).
+- **Modify input/output** -- Sanitize dispatch input or redact dispatch output (return `ModifyDispatchInput` or `ModifyDispatchOutput`).
 
 Hook errors are logged but do not halt execution. Use `HookAction::Halt` to halt.
 
@@ -137,7 +137,7 @@ impl Hook for SteeringAuditHook {
 
 ### Observing skipped tools: `PostSteeringSkip`
 
-Fires after tools are skipped because steering messages were injected. `ctx.skipped_operators` holds the names of the tools that did not execute. This point is observation-only: `Halt` here halts the turn, but the skip already occurred.
+Fires after tools are skipped because steering messages were injected. `ctx.skipped_operators` holds the names of the operators that did not execute. This point is observation-only: `Halt` here halts the turn, but the skip already occurred.
 
 ```rust,no_run
 use async_trait::async_trait;
@@ -166,7 +166,7 @@ impl Hook for SkipAuditHook {
 ## Use cases
 
 - **Budget enforcement** -- Track accumulated cost at `PostInference`, halt if over budget.
-- **Guardrails** -- Validate tool calls at `PreSubDispatch`, skip dangerous operations.
+- **Guardrails** -- Validate sub-dispatches at `PreSubDispatch`, skip dangerous operations.
 - **Telemetry** -- Emit OpenTelemetry spans at each hook point.
 - **Heartbeat** -- Signal liveness to an orchestrator (e.g., Temporal heartbeat) at `PreInference`.
 - **Secret redaction** -- Redact sensitive data from tool output at `PostSubDispatch`.

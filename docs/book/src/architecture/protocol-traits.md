@@ -251,9 +251,9 @@ Hooks fire at five defined points:
 |--------|--------|
 | `Continue` | Proceed normally |
 | `Halt { reason }` | Stop the operator with `ExitReason::ObserverHalt` |
-| `SkipDispatch { reason }` | Skip this tool call (PreSubDispatch only) |
-| `ModifyDispatchInput { new_input }` | Replace tool input before execution (PreSubDispatch only) |
-| `ModifyDispatchOutput { new_output }` | Replace tool output (PostSubDispatch only) |
+| `SkipDispatch { reason }` | Skip this sub-dispatch (PreSubDispatch only) |
+| `ModifyDispatchInput { new_input }` | Replace dispatch input before execution (PreSubDispatch only) |
+| `ModifyDispatchOutput { new_output }` | Replace dispatch output (PostSubDispatch only) |
 
 Hook errors are logged but do **not** halt execution. Use `HookAction::Halt` to halt.
 

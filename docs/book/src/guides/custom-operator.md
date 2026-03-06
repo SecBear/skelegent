@@ -234,9 +234,9 @@ impl Hook for SteeringLogger {
 // registry.add_guardrail(Arc::new(SteeringLogger));
 ```
 
-### PostSteeringSkip: observe skipped tools
+### PostSteeringSkip: observe skipped operators
 
-Fires after tools are skipped because steering injected messages. `ctx.skipped_operators` contains the names of the tools that were skipped.
+Fires after tools are skipped because steering injected messages. `ctx.skipped_operators` contains the names of the operators that were skipped.
 
 ```rust,no_run
 use async_trait::async_trait;
