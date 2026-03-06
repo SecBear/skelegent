@@ -200,9 +200,9 @@ pub struct ReactOperator<P: Provider> {
     steering: Option<Arc<dyn SteeringSource>>,
     budget_sink: Option<Arc<dyn BudgetEventSink>>,
     compaction_sink: Option<Arc<dyn CompactionEventSink>>,
-    /// Optional orchestrator for tool dispatch; when set, bypasses the direct
-    /// `ToolDyn::call()` path in favour of `Orchestrator::dispatch()`.
-    orchestrator: Option<Arc<dyn Orchestrator>>,
+    /// Orchestrator for sub-operator dispatch. All tool calls route through
+    /// this; direct `ToolDyn::call()` is no longer supported.
+    orchestrator: Arc<dyn Orchestrator>,
     /// Live snapshot buffer, updated at key mutation points during `execute`.
     current_context: Arc<Mutex<Vec<AnnotatedMessage>>>,
     /// Number of messages removed in the most recent compaction cycle.
@@ -219,6 +219,8 @@ impl<P: Provider> ReactOperator<P> {
         state_reader: Arc<dyn layer0::StateReader>,
         config: ReactConfig,
     ) -> Self {
+        let orchestrator: Arc<dyn Orchestrator> =
+            Arc::new(ToolRegistryOrchestrator::new(tools.clone()));
         Self {
             provider,
             tools,
@@ -231,7 +233,7 @@ impl<P: Provider> ReactOperator<P> {
             steering: None,
             budget_sink: None,
             compaction_sink: None,
-            orchestrator: None,
+            orchestrator,
             current_context: Arc::new(Mutex::new(Vec::new())),
             last_compaction_removed: Arc::new(Mutex::new(0)),
         }
@@ -268,20 +270,16 @@ impl<P: Provider> ReactOperator<P> {
         self.compaction_sink = Some(sink);
         self
     }
-    /// Opt-in: dispatch tool calls through the given orchestrator instead of
-    /// directly invoking `ToolDyn::call()`. Streaming is bypassed when an
-    /// orchestrator is set (orchestrator dispatch is request-response only).
+    /// Override the orchestrator used for sub-operator dispatch.
+    ///
+    /// By default, `new()` creates a `ToolRegistryOrchestrator` from the
+    /// provided `ToolRegistry`. Use this to substitute a custom orchestrator
+    /// (e.g. one that routes to remote agents or applies middleware).
+    ///
+    /// **Note:** streaming is not supported through the orchestrator path;
+    /// dispatch is request-response only.
     pub fn with_orchestrator(mut self, orch: Arc<dyn Orchestrator>) -> Self {
-        self.orchestrator = Some(orch);
-        self
-    }
-
-    /// Opt-in: dispatch tool calls through an orchestrator backed by the
-    /// operator's own `ToolRegistry`.  This provides a migration path toward
-    /// orchestrator-native dispatch without changing existing call-sites.
-    pub fn with_tool_orchestrator(mut self) -> Self {
-        let orch = Arc::new(ToolRegistryOrchestrator::new(self.tools.clone()));
-        self.orchestrator = Some(orch);
+        self.orchestrator = orch;
         self
     }
     /// Opt-in: set a model selector callback for per-inference routing.
@@ -986,145 +984,46 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     HookAction::Continue => {}
                                     _ => {}
                                 }
-                                // Execute tool (streaming if supported)
+                                // Execute via orchestrator dispatch
                                 let tool_start = Instant::now();
-                                // Defaults for non-streaming path
-                                let (mut result_content, is_error, success, duration) =
-                                    if let Some(orch) = &self.orchestrator {
-                                        let orch_input = OperatorInput::new(
-                                            Content::text(actual_input.to_string()),
-                                            layer0::operator::TriggerType::Task,
-                                        );
-                                        match orch.dispatch(&AgentId::new(&name), orch_input).await
-                                        {
-                                            Ok(output) => {
-                                                let text = output
-                                                    .message
-                                                    .as_text()
-                                                    .unwrap_or("null")
-                                                    .to_string();
-                                                (
-                                                    text,
-                                                    false,
-                                                    true,
-                                                    DurationMs::from(tool_start.elapsed()),
-                                                )
-                                            }
-                                            Err(OrchError::AgentNotFound(_)) => (
-                                                neuron_tool::ToolError::NotFound(name.clone())
-                                                    .to_string(),
-                                                true,
+                                let (mut result_content, is_error, success, duration) = {
+                                    let orch_input = OperatorInput::new(
+                                        Content::text(actual_input.to_string()),
+                                        layer0::operator::TriggerType::Task,
+                                    );
+                                    match self
+                                        .orchestrator
+                                        .dispatch(&AgentId::new(&name), orch_input)
+                                        .await
+                                    {
+                                        Ok(output) => {
+                                            let text = output
+                                                .message
+                                                .as_text()
+                                                .unwrap_or("null")
+                                                .to_string();
+                                            (
+                                                text,
                                                 false,
-                                                DurationMs::from(tool_start.elapsed()),
-                                            ),
-                                            Err(e) => (
-                                                e.to_string(),
                                                 true,
-                                                false,
                                                 DurationMs::from(tool_start.elapsed()),
-                                            ),
+                                            )
                                         }
-                                    } else {
-                                        match self.tools.get(&name) {
-                                            Some(tool) => {
-                                                if let Some(stream) = tool.maybe_streaming() {
-                                                    // Collect chunks during streaming
-                                                    let chunks_arc = std::sync::Arc::new(
-                                                        std::sync::Mutex::new(Vec::<String>::new()),
-                                                    );
-                                                    let chunks_cb = chunks_arc.clone();
-                                                    let res = stream
-                                                        .call_streaming(
-                                                            actual_input.clone(),
-                                                            Box::new(move |c: &str| {
-                                                                if let Ok(mut v) = chunks_cb.lock()
-                                                                {
-                                                                    v.push(c.to_string());
-                                                                }
-                                                            }),
-                                                        )
-                                                        .await;
-                                                    let tool_duration =
-                                                        DurationMs::from(tool_start.elapsed());
-                                                    // Dispatch chunk updates in order, ignoring actions/errors
-                                                    if let Ok(chunks) =
-                                                        std::sync::Arc::try_unwrap(chunks_arc)
-                                                            .map(|m| m.into_inner().unwrap())
-                                                    {
-                                                        for ch in &chunks {
-                                                            let mut uctx = HookContext::new(
-                                                                HookPoint::SubDispatchUpdate,
-                                                            );
-                                                            uctx.operator_name = Some(name.clone());
-                                                            uctx.operator_chunk = Some(ch.clone());
-                                                            uctx.tokens_used =
-                                                                total_tokens_in + total_tokens_out;
-                                                            uctx.cost = total_cost;
-                                                            uctx.turns_completed = turns_used;
-                                                            uctx.elapsed =
-                                                                DurationMs::from(start.elapsed());
-                                                            let _ =
-                                                                self.hooks.dispatch(&uctx).await;
-                                                        }
-                                                        match res {
-                                                            Ok(()) => (
-                                                                chunks.concat(),
-                                                                false,
-                                                                true,
-                                                                tool_duration,
-                                                            ),
-                                                            Err(e) => (
-                                                                e.to_string(),
-                                                                true,
-                                                                false,
-                                                                tool_duration,
-                                                            ),
-                                                        }
-                                                    } else {
-                                                        // Fallback if Arc could not be unwrapped
-                                                        match res {
-                                                            Ok(()) => (
-                                                                String::new(),
-                                                                false,
-                                                                true,
-                                                                tool_duration,
-                                                            ),
-                                                            Err(e) => (
-                                                                e.to_string(),
-                                                                true,
-                                                                false,
-                                                                tool_duration,
-                                                            ),
-                                                        }
-                                                    }
-                                                } else {
-                                                    // Non-streaming
-                                                    match tool.call(actual_input.clone()).await {
-                                                        Ok(value) => (
-                                                            serde_json::to_string(&value)
-                                                                .unwrap_or_default(),
-                                                            false,
-                                                            true,
-                                                            DurationMs::from(tool_start.elapsed()),
-                                                        ),
-                                                        Err(e) => (
-                                                            e.to_string(),
-                                                            true,
-                                                            false,
-                                                            DurationMs::from(tool_start.elapsed()),
-                                                        ),
-                                                    }
-                                                }
-                                            }
-                                            None => (
-                                                neuron_tool::ToolError::NotFound(name.clone())
-                                                    .to_string(),
-                                                true,
-                                                false,
-                                                DurationMs::from(tool_start.elapsed()),
-                                            ),
-                                        }
-                                    };
+                                        Err(OrchError::AgentNotFound(_)) => (
+                                            neuron_tool::ToolError::NotFound(name.clone())
+                                                .to_string(),
+                                            true,
+                                            false,
+                                            DurationMs::from(tool_start.elapsed()),
+                                        ),
+                                        Err(e) => (
+                                            e.to_string(),
+                                            true,
+                                            false,
+                                            DurationMs::from(tool_start.elapsed()),
+                                        ),
+                                    }
+                                };
                                 // PostSubDispatch hook
                                 let mut hook_ctx = HookContext::new(HookPoint::PostSubDispatch);
                                 hook_ctx.operator_name = Some(name.clone());
@@ -1368,107 +1267,36 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             _ => {}
                         }
                         let tool_start = Instant::now();
-                        // Execute tool (streaming if supported)
-                        let (mut result_content, is_error, success, tool_duration) =
-                            if let Some(orch) = &self.orchestrator {
-                                let orch_input = OperatorInput::new(
-                                    Content::text(actual_input.to_string()),
-                                    layer0::operator::TriggerType::Task,
-                                );
-                                match orch.dispatch(&AgentId::new(&name), orch_input).await {
-                                    Ok(output) => {
-                                        let text =
-                                            output.message.as_text().unwrap_or("null").to_string();
-                                        (text, false, true, DurationMs::from(tool_start.elapsed()))
-                                    }
-                                    Err(OrchError::AgentNotFound(_)) => (
-                                        neuron_tool::ToolError::NotFound(name.clone()).to_string(),
-                                        true,
-                                        false,
-                                        DurationMs::from(tool_start.elapsed()),
-                                    ),
-                                    Err(e) => (
-                                        e.to_string(),
-                                        true,
-                                        false,
-                                        DurationMs::from(tool_start.elapsed()),
-                                    ),
+                        // Execute via orchestrator dispatch
+                        let (mut result_content, is_error, success, tool_duration) = {
+                            let orch_input = OperatorInput::new(
+                                Content::text(actual_input.to_string()),
+                                layer0::operator::TriggerType::Task,
+                            );
+                            match self
+                                .orchestrator
+                                .dispatch(&AgentId::new(&name), orch_input)
+                                .await
+                            {
+                                Ok(output) => {
+                                    let text =
+                                        output.message.as_text().unwrap_or("null").to_string();
+                                    (text, false, true, DurationMs::from(tool_start.elapsed()))
                                 }
-                            } else {
-                                match self.tools.get(&name) {
-                                    Some(tool) => {
-                                        if let Some(stream) = tool.maybe_streaming() {
-                                            let chunks_arc =
-                                                std::sync::Arc::new(std::sync::Mutex::new(Vec::<
-                                                    String,
-                                                >::new(
-                                                )));
-                                            let chunks_cb = chunks_arc.clone();
-                                            let res = stream
-                                                .call_streaming(
-                                                    actual_input.clone(),
-                                                    Box::new(move |c: &str| {
-                                                        if let Ok(mut v) = chunks_cb.lock() {
-                                                            v.push(c.to_string());
-                                                        }
-                                                    }),
-                                                )
-                                                .await;
-                                            let dur = DurationMs::from(tool_start.elapsed());
-                                            if let Ok(chunks) =
-                                                std::sync::Arc::try_unwrap(chunks_arc)
-                                                    .map(|m| m.into_inner().unwrap())
-                                            {
-                                                for ch in &chunks {
-                                                    let mut uctx = HookContext::new(
-                                                        HookPoint::SubDispatchUpdate,
-                                                    );
-                                                    uctx.operator_name = Some(name.clone());
-                                                    uctx.operator_chunk = Some(ch.clone());
-                                                    uctx.tokens_used =
-                                                        total_tokens_in + total_tokens_out;
-                                                    uctx.cost = total_cost;
-                                                    uctx.turns_completed = turns_used;
-                                                    uctx.elapsed =
-                                                        DurationMs::from(start.elapsed());
-                                                    let _ = self.hooks.dispatch(&uctx).await;
-                                                }
-                                                match res {
-                                                    Ok(()) => (chunks.concat(), false, true, dur),
-                                                    Err(e) => (e.to_string(), true, false, dur),
-                                                }
-                                            } else {
-                                                match res {
-                                                    Ok(()) => (String::new(), false, true, dur),
-                                                    Err(e) => (e.to_string(), true, false, dur),
-                                                }
-                                            }
-                                        } else {
-                                            match tool.call(actual_input.clone()).await {
-                                                Ok(value) => (
-                                                    serde_json::to_string(&value)
-                                                        .unwrap_or_default(),
-                                                    false,
-                                                    true,
-                                                    DurationMs::from(tool_start.elapsed()),
-                                                ),
-                                                Err(e) => (
-                                                    e.to_string(),
-                                                    true,
-                                                    false,
-                                                    DurationMs::from(tool_start.elapsed()),
-                                                ),
-                                            }
-                                        }
-                                    }
-                                    None => (
-                                        neuron_tool::ToolError::NotFound(name.clone()).to_string(),
-                                        true,
-                                        false,
-                                        DurationMs::from(tool_start.elapsed()),
-                                    ),
-                                }
-                            };
+                                Err(OrchError::AgentNotFound(_)) => (
+                                    neuron_tool::ToolError::NotFound(name.clone()).to_string(),
+                                    true,
+                                    false,
+                                    DurationMs::from(tool_start.elapsed()),
+                                ),
+                                Err(e) => (
+                                    e.to_string(),
+                                    true,
+                                    false,
+                                    DurationMs::from(tool_start.elapsed()),
+                                ),
+                            }
+                        };
                         let mut hook_ctx = HookContext::new(HookPoint::PostSubDispatch);
                         hook_ctx.operator_name = Some(name.clone());
                         hook_ctx.operator_result = Some(result_content.clone());
@@ -2819,15 +2647,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streaming_chunks_forwarded_and_concatenated() {
-        // Provider returns a single tool use then an EndTurn
-        let _provider = MockProvider::new(vec![
-            tool_use_response("tu_s", "stream_echo", json!({"n":1})),
-            simple_text_response("OK"),
-        ]);
+    async fn streaming_tool_dispatched_via_orchestrator_no_chunks() {
+        // After Phase 4.4, all tool dispatch goes through the orchestrator.
+        // Orchestrator dispatch is request-response only (no streaming).
+        // StreamEcho.call() returns {"note":"non-stream fallback"} — that
+        // is what we get. No SubDispatchUpdate chunks are emitted.
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(StreamEcho));
-        // Hook to collect updates
         let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let finals = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let mut hooks = HookRegistry::new();
@@ -2848,11 +2674,21 @@ mod tests {
             ReactConfig::default(),
         );
         let _ = op.execute(simple_input("run")).await.unwrap();
+        // No streaming chunks — orchestrator dispatch is request-response only
         let got_chunks = chunks.lock().unwrap().clone();
-        assert_eq!(got_chunks, vec!["A", "B", "C"]);
+        assert!(
+            got_chunks.is_empty(),
+            "orchestrator dispatch does not emit streaming chunks"
+        );
+        // PostSubDispatch still fires with the non-streaming result
         let got_finals = finals.lock().unwrap().clone();
         assert_eq!(got_finals.len(), 1);
-        assert_eq!(got_finals[0], "ABC");
+        // ToolOperator wraps the call() output as JSON text
+        assert!(
+            got_finals[0].contains("non-stream fallback"),
+            "expected non-streaming fallback output, got: {}",
+            got_finals[0]
+        );
     }
 
     struct CountingSharedEchoTool {
@@ -3798,14 +3634,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_tool_orchestrator_wraps_registry() {
+    async fn default_orchestrator_dispatches_via_tool_registry() {
+        // new() auto-creates a ToolRegistryOrchestrator from the tools arg.
+        // Verify that tool dispatch works without explicit with_orchestrator().
         let provider = MockProvider::new(vec![
             tool_use_response("tu_1", "echo", json!({"msg": "hello"})),
             simple_text_response("Done via orch."),
         ]);
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        let op = make_op_with_tools(provider, tools).with_tool_orchestrator();
+        let op = make_op_with_tools(provider, tools);
 
         let output = op.execute(simple_input("Test")).await.unwrap();
 
