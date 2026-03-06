@@ -117,15 +117,6 @@ impl ReactConfig {
     }
 }
 
-/// Names of tools that produce Effects instead of executing locally.
-const EFFECT_TOOL_NAMES: &[&str] = &[
-    "write_memory",
-    "delete_memory",
-    "delegate",
-    "handoff",
-    "signal",
-];
-
 /// Resolved configuration merging defaults with per-request overrides.
 struct ResolvedConfig {
     model: Option<String>,
@@ -907,10 +898,8 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             }
                             let (id, name, dispatch_input) = call_group[idx].clone();
                             // Effects handled immediately
-                            if EFFECT_TOOL_NAMES.contains(&name.as_str()) {
-                                if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
-                                    effects.push(effect);
-                                }
+                            if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
+                                effects.push(effect);
                                 dispatch_results.push(ContentPart::ToolResult {
                                     tool_use_id: id,
                                     content: format!("{name} effect recorded."),
@@ -1190,10 +1179,8 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 break 'batches;
                             }
                         }
-                        if EFFECT_TOOL_NAMES.contains(&name.as_str()) {
-                            if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
-                                effects.push(effect);
-                            }
+                        if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
+                            effects.push(effect);
                             dispatch_results.push(ContentPart::ToolResult {
                                 tool_use_id: id,
                                 content: format!("{name} effect recorded."),
