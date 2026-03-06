@@ -26,25 +26,36 @@ neuron-turn = "0.4"
 
 ### Setup
 
-Set `ANTHROPIC_API_KEY` in your environment (or inject via `neuron-env-local`).
+Three constructors are available:
 
 ```rust
-use neuron_provider_anthropic::AnthropicProvider;
-use neuron_turn::Provider;
+// Static key
+let provider = AnthropicProvider::new("sk-ant-...");
 
-let provider = AnthropicProvider::from_env()?;
-// Use provider with ReactOperator or SingleShotOperator
+// Environment variable (resolved per request)
+let provider = AnthropicProvider::from_env_var("ANTHROPIC_API_KEY");
+
+// AuthProvider — pi coding agent OAuth or OMP (recommended)
+use std::sync::Arc;
+use neuron_auth_pi::PiAuthProvider; // from neuron-extras
+
+let auth = PiAuthProvider::from_env().expect("~/.pi/agent/auth.json not found");
+let provider = AnthropicProvider::with_auth(Arc::new(auth));
 ```
 
-### Custom base URL (proxy / testing)
+For proxy or test overrides, use `provider.with_url(url)`.
 
-```rust
-let provider = AnthropicProvider::builder()
-    .api_key("sk-ant-...")
-    .base_url("https://my-proxy/anthropic")
-    .model("claude-sonnet-4-5")
-    .build()?;
-```
+### OAuth tokens (Claude Max / pi coding agent)
+
+`with_auth()` calls the provider at every request, so token refresh is transparent — no
+manual re-initialization required.
+
+OAuth tokens (`sk-ant-oat*`) are automatically sent as `Authorization: Bearer` with the
+`anthropic-beta: oauth-2025-04-20` header, which the Anthropic API requires for Claude Max
+subscription tokens. Regular API keys continue to use `x-api-key`.
+
+`PiAuthProvider` and `OmpAuthProvider` live in `neuron-extras` (separate repo:
+<https://github.com/SecBear/neuron-extras>).
 
 ## Part of the neuron workspace
 
