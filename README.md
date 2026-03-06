@@ -69,3 +69,11 @@ Security (`secret/`, `auth/`, `crypto/`):
 - `neuron-secret-vault` — HashiCorp Vault backend
 - `neuron-auth` — auth/credential framework
 - `neuron-crypto` — cryptographic primitives
+
+## Implementations
+
+Heavy-dependency implementations — SQLite, CozoDB, Temporal, Git effects, sweep
+operators, and auth providers — live in a separate repository to keep this core
+dependency-free:
+
+[**neuron-extras**](https://github.com/SecBear/neuron-extras) — provider ecosystem
