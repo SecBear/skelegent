@@ -57,10 +57,8 @@ impl ToolDyn for OperatorToolAdapter {
         Box::pin(async move {
             let json_str = serde_json::to_string(&input)
                 .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
-            let op_input = layer0::OperatorInput::new(
-                layer0::Content::text(json_str),
-                TriggerType::Task,
-            );
+            let op_input =
+                layer0::OperatorInput::new(layer0::Content::text(json_str), TriggerType::Task);
             let output = operator
                 .execute(op_input)
                 .await
@@ -681,8 +679,8 @@ mod tests {
     #[tokio::test]
     async fn mcp_server_from_operators_constructs() {
         use async_trait::async_trait;
-        use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
         use layer0::OperatorError;
+        use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
 
         struct EchoOperator;
 
@@ -720,9 +718,15 @@ mod tests {
 
         #[async_trait]
         impl layer0::operator::Operator for ConstOperator {
-            async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+            async fn execute(
+                &self,
+                _input: OperatorInput,
+            ) -> Result<OperatorOutput, OperatorError> {
                 let text = self.response.to_string();
-                Ok(OperatorOutput::new(Content::text(text), ExitReason::Complete))
+                Ok(OperatorOutput::new(
+                    Content::text(text),
+                    ExitReason::Complete,
+                ))
             }
         }
 

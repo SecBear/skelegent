@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn parse_simple_response() {
-        let provider = AnthropicProvider::new("test-key");
+        let _provider = AnthropicProvider::new("test-key");
         let api_response = AnthropicResponse {
             content: vec![AnthropicContentBlock::Text {
                 text: "Hello!".into(),
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn parse_tool_use_response() {
-        let provider = AnthropicProvider::new("test-key");
+        let _provider = AnthropicProvider::new("test-key");
         let api_response = AnthropicResponse {
             content: vec![AnthropicContentBlock::ToolUse {
                 id: "tu_1".into(),
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn parse_cache_tokens() {
-        let provider = AnthropicProvider::new("test-key");
+        let _provider = AnthropicProvider::new("test-key");
         let api_response = AnthropicResponse {
             content: vec![AnthropicContentBlock::Text {
                 text: "Cached.".into(),

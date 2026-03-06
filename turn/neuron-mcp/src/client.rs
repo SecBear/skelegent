@@ -11,9 +11,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use neuron_tool::{AliasedTool, ToolDyn, ToolError};
 use layer0::ToolMetadata;
 use neuron_tool::adapter::ToolOperator;
+use neuron_tool::{AliasedTool, ToolDyn, ToolError};
 use rmcp::ServiceExt;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams, PromptMessage,
@@ -123,9 +123,7 @@ impl McpClient {
     /// # Errors
     ///
     /// Returns [`McpError::Protocol`] if the tool listing request fails.
-    pub async fn discover_operators(
-        &self,
-    ) -> Result<Vec<(ToolOperator, ToolMetadata)>, McpError> {
+    pub async fn discover_operators(&self) -> Result<Vec<(ToolOperator, ToolMetadata)>, McpError> {
         let result = self
             .service
             .list_all_tools()
@@ -147,8 +145,8 @@ impl McpClient {
         let operators: Vec<(ToolOperator, ToolMetadata)> = result
             .into_iter()
             .map(|tool| {
-                let arc = Arc::new(McpToolWrapper::new(tool, Arc::clone(&peer)))
-                    as Arc<dyn ToolDyn>;
+                let arc =
+                    Arc::new(McpToolWrapper::new(tool, Arc::clone(&peer))) as Arc<dyn ToolDyn>;
                 let op = ToolOperator::new(arc);
                 let meta = op.metadata();
                 (op, meta)
@@ -446,7 +444,6 @@ fn extract_text_from_content(content: &[Content]) -> String {
         .join("\n")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,8 +668,13 @@ mod tests {
             fn call(
                 &self,
                 _: serde_json::Value,
-            ) -> Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
-            {
+            ) -> Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>
+                        + Send
+                        + '_,
+                >,
+            > {
                 Box::pin(async { Ok(serde_json::Value::Null) })
             }
             // concurrency_hint() not overridden → defaults to Exclusive → parallel_safe = false
@@ -713,15 +715,16 @@ mod tests {
     /// `tool_budget_tokens_empty` / `tool_budget_tokens_counts_descriptions`).
     #[test]
     fn discover_operators_preserves_tool_count_logic() {
+        // The threshold constant is part of the public API contract.
         assert_eq!(
-            TOOL_COUNT_WARN_THRESHOLD,
-            20,
+            TOOL_COUNT_WARN_THRESHOLD, 20,
             "threshold must be 20 for context budget calculations"
         );
 
         // Boundary: at-threshold must NOT trigger the warning (strict greater-than).
+        let at_threshold = TOOL_COUNT_WARN_THRESHOLD;
         assert!(
-            !(TOOL_COUNT_WARN_THRESHOLD > TOOL_COUNT_WARN_THRESHOLD),
+            at_threshold <= TOOL_COUNT_WARN_THRESHOLD,
             "count == threshold should not warn"
         );
 
