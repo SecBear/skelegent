@@ -5,17 +5,27 @@
 
 mod types;
 
+use neuron_auth::{AuthProvider, AuthRequest};
 use neuron_turn::provider::{Provider, ProviderError};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
+use std::sync::Arc;
 use types::*;
 
-/// API key source — static string or environment variable resolved per request.
+/// Credential source — resolved per request.
+#[derive(Clone)]
 enum ApiKeySource {
-    /// Key material provided at construction time.
+    /// Static key provided at construction time.
     Static(String),
-    /// Environment variable name; resolved at each `complete()` call.
+    /// Environment variable name resolved via [`std::env::var`] at each call.
     EnvVar(String),
+    /// [`AuthProvider`] called at each request; supports token refresh.
+    Auth {
+        /// The provider to call.
+        provider: Arc<dyn AuthProvider>,
+        /// Audience string forwarded to [`AuthProvider::provide`].
+        audience: String,
+    },
 }
 
 /// Anthropic API provider.
@@ -51,25 +61,30 @@ impl AnthropicProvider {
         }
     }
 
-    fn resolve_api_key(&self) -> Result<String, ProviderError> {
-        match &self.api_key_source {
-            ApiKeySource::Static(key) => Ok(key.clone()),
-            ApiKeySource::EnvVar(var_name) => {
-                let key = std::env::var(var_name).map_err(|_| {
-                    ProviderError::AuthFailed(format!(
-                        "env var '{}' not set or not unicode",
-                        var_name
-                    ))
-                })?;
-                if key.is_empty() {
-                    return Err(ProviderError::AuthFailed(format!(
-                        "env var '{}' is empty",
-                        var_name
-                    )));
-                }
-                Ok(key)
-            }
+    /// Create a provider that authenticates via a [`neuron_auth::AuthProvider`].
+    ///
+    /// The provider is called at **every** request, so token refresh is
+    /// transparent. Use this with `PiAuthProvider` or `OmpAuthProvider`
+    /// from `neuron-extras`.
+    ///
+    /// OAuth tokens (`sk-ant-oat*`) returned by the provider are sent as
+    /// `Authorization: Bearer` with the required `anthropic-beta:
+    /// oauth-2025-04-20` header. Regular API keys use `x-api-key`.
+    pub fn with_auth(provider: Arc<dyn AuthProvider>) -> Self {
+        Self {
+            api_key_source: ApiKeySource::Auth {
+                provider,
+                audience: "anthropic".into(),
+            },
+            client: reqwest::Client::new(),
+            api_url: "https://api.anthropic.com/v1/messages".into(),
+            api_version: "2023-06-01".into(),
         }
+    }
+
+    #[cfg(test)]
+    async fn resolve_api_key(&self) -> Result<String, ProviderError> {
+        resolve_key(&self.api_key_source).await
     }
 
     /// Override the API URL (for testing or proxies).
@@ -116,46 +131,81 @@ impl AnthropicProvider {
             tools,
         }
     }
+}
 
-    fn parse_response(
-        &self,
-        response: AnthropicResponse,
-    ) -> Result<ProviderResponse, ProviderError> {
-        let content: Vec<ContentPart> = response
-            .content
-            .iter()
-            .map(anthropic_block_to_content_part)
-            .collect();
+/// Parse a raw [`AnthropicResponse`] into a [`ProviderResponse`].
+fn parse_anthropic_response(
+    response: AnthropicResponse,
+) -> Result<ProviderResponse, ProviderError> {
+    let content: Vec<ContentPart> = response
+        .content
+        .iter()
+        .map(anthropic_block_to_content_part)
+        .collect();
 
-        let stop_reason = match response.stop_reason.as_str() {
-            "end_turn" => StopReason::EndTurn,
-            "tool_use" => StopReason::ToolUse,
-            "max_tokens" => StopReason::MaxTokens,
-            "refusal" => StopReason::ContentFilter,
-            _ => StopReason::EndTurn,
-        };
+    let stop_reason = match response.stop_reason.as_str() {
+        "end_turn" => StopReason::EndTurn,
+        "tool_use" => StopReason::ToolUse,
+        "max_tokens" => StopReason::MaxTokens,
+        "refusal" => StopReason::ContentFilter,
+        _ => StopReason::EndTurn,
+    };
 
-        let usage = TokenUsage {
-            input_tokens: response.usage.input_tokens,
-            output_tokens: response.usage.output_tokens,
-            cache_read_tokens: response.usage.cache_read_input_tokens,
-            cache_creation_tokens: response.usage.cache_creation_input_tokens,
-        };
+    let usage = TokenUsage {
+        input_tokens: response.usage.input_tokens,
+        output_tokens: response.usage.output_tokens,
+        cache_read_tokens: response.usage.cache_read_input_tokens,
+        cache_creation_tokens: response.usage.cache_creation_input_tokens,
+    };
 
-        // Simple cost calculation for Haiku
-        // Haiku: $0.25/MTok input, $1.25/MTok output (as of 2025)
-        let input_cost = Decimal::from(response.usage.input_tokens) * Decimal::new(25, 8);
-        let output_cost = Decimal::from(response.usage.output_tokens) * Decimal::new(125, 8);
-        let cost = input_cost + output_cost;
+    // Cost calculation for Haiku: $0.25/MTok input, $1.25/MTok output
+    let input_cost = Decimal::from(response.usage.input_tokens) * Decimal::new(25, 8);
+    let output_cost = Decimal::from(response.usage.output_tokens) * Decimal::new(125, 8);
+    let cost = input_cost + output_cost;
 
-        Ok(ProviderResponse {
-            content,
-            stop_reason,
-            usage,
-            model: response.model,
-            cost: Some(cost),
-            truncated: None,
-        })
+    Ok(ProviderResponse {
+        content,
+        stop_reason,
+        usage,
+        model: response.model,
+        cost: Some(cost),
+        truncated: None,
+    })
+}
+
+/// Returns `true` if `key` is an Anthropic OAuth token.
+///
+/// OAuth tokens use prefix `sk-ant-oat` and require `Authorization: Bearer`
+/// plus the `anthropic-beta: oauth-2025-04-20` header. Standard API keys use
+/// the `x-api-key` header.
+fn is_oauth_token(key: &str) -> bool {
+    key.starts_with("sk-ant-oat")
+}
+
+/// Resolve the credential from any [`ApiKeySource`] variant.
+async fn resolve_key(source: &ApiKeySource) -> Result<String, ProviderError> {
+    match source {
+        ApiKeySource::Static(key) => Ok(key.clone()),
+        ApiKeySource::EnvVar(var_name) => {
+            let key = std::env::var(var_name).map_err(|_| {
+                ProviderError::AuthFailed(format!("env var '{}' not set or not unicode", var_name))
+            })?;
+            if key.is_empty() {
+                return Err(ProviderError::AuthFailed(format!(
+                    "env var '{}' is empty",
+                    var_name
+                )));
+            }
+            Ok(key)
+        }
+        ApiKeySource::Auth { provider, audience } => {
+            let req = AuthRequest::new().with_audience(audience.as_str());
+            let token = provider
+                .provide(&req)
+                .await
+                .map_err(|e| ProviderError::AuthFailed(format!("auth provider: {e}")))?;
+            Ok(token.with_bytes(|b| String::from_utf8_lossy(b).into_owned()))
+        }
     }
 }
 
@@ -164,22 +214,32 @@ impl Provider for AnthropicProvider {
         &self,
         request: ProviderRequest,
     ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send {
-        let api_key_result = self.resolve_api_key();
+        // Clone the parts we need to move into the async block without
+        // holding a reference to `self`.
+        let source = self.api_key_source.clone();
         let api_request = self.build_request(&request);
-        let http_opt = api_key_result.map(|key| {
-            self.client
-                .post(&self.api_url)
-                .header("x-api-key", key)
-                .header("anthropic-version", &self.api_version)
-                .header("content-type", "application/json")
-                .json(&api_request)
-        });
+        let client = self.client.clone();
+        let api_url = self.api_url.clone();
+        let api_version = self.api_version.clone();
 
         async move {
-            let http_request = match http_opt {
-                Err(e) => return Err(e),
-                Ok(r) => r,
-            };
+            let key = resolve_key(&source).await?;
+
+            // OAuth tokens require Bearer auth + the oauth beta header.
+            // Standard API keys use x-api-key.
+            let mut builder = client.post(&api_url);
+            if is_oauth_token(&key) {
+                builder = builder
+                    .header("Authorization", format!("Bearer {key}"))
+                    .header("anthropic-beta", "oauth-2025-04-20");
+            } else {
+                builder = builder.header("x-api-key", key);
+            }
+            let http_request = builder
+                .header("anthropic-version", &api_version)
+                .header("content-type", "application/json")
+                .json(&api_request);
+
             let http_response =
                 http_request
                     .send()
@@ -209,7 +269,7 @@ impl Provider for AnthropicProvider {
                 .await
                 .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
 
-            self.parse_response(api_response)
+            parse_anthropic_response(api_response)
         }
     }
 }
@@ -344,7 +404,7 @@ mod tests {
             },
         };
 
-        let response = provider.parse_response(api_response).unwrap();
+        let response = parse_anthropic_response(api_response).unwrap();
         assert_eq!(response.stop_reason, StopReason::EndTurn);
         assert_eq!(response.usage.input_tokens, 10);
         assert_eq!(response.usage.output_tokens, 5);
@@ -371,7 +431,7 @@ mod tests {
             },
         };
 
-        let response = provider.parse_response(api_response).unwrap();
+        let response = parse_anthropic_response(api_response).unwrap();
         assert_eq!(response.stop_reason, StopReason::ToolUse);
         assert_eq!(response.content.len(), 1);
         match &response.content[0] {
@@ -414,7 +474,7 @@ mod tests {
             },
         };
 
-        let response = provider.parse_response(api_response).unwrap();
+        let response = parse_anthropic_response(api_response).unwrap();
         assert_eq!(response.usage.cache_read_tokens, Some(50));
         assert_eq!(response.usage.cache_creation_tokens, Some(25));
     }
@@ -494,7 +554,6 @@ mod tests {
 
     #[test]
     fn parse_response_refusal_maps_to_content_filter() {
-        let provider = AnthropicProvider::new("test-key");
         let api_response = AnthropicResponse {
             content: vec![AnthropicContentBlock::Text {
                 text: "I cannot help with that.".into(),
@@ -508,8 +567,7 @@ mod tests {
                 cache_creation_input_tokens: None,
             },
         };
-        let result = provider.parse_response(api_response);
-        let resp = result.expect("refusal should be Ok, not Err");
+        let resp = parse_anthropic_response(api_response).expect("refusal should be Ok");
         assert_eq!(resp.stop_reason, StopReason::ContentFilter);
         assert_eq!(resp.usage.input_tokens, 5);
         assert_eq!(resp.usage.output_tokens, 8);
@@ -558,77 +616,148 @@ mod tests {
 #[cfg(test)]
 mod tests_credential {
     use super::*;
+    use async_trait::async_trait;
+    use neuron_auth::{AuthError, AuthToken};
 
-    #[test]
-    fn new_uses_static_key() {
+    // ── Static / env var ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn new_uses_static_key() {
         let p = AnthropicProvider::new("sk-static");
-        assert_eq!(p.resolve_api_key().unwrap(), "sk-static");
+        assert_eq!(p.resolve_api_key().await.unwrap(), "sk-static");
     }
 
-    #[test]
-    fn from_env_var_resolves_when_set() {
+    #[tokio::test]
+    async fn from_env_var_resolves_when_set() {
         let var = "NEURON_ANTHROPIC_TEST_CRED_A";
         unsafe {
             std::env::set_var(var, "sk-from-env");
         }
         let p = AnthropicProvider::from_env_var(var);
-        assert_eq!(p.resolve_api_key().unwrap(), "sk-from-env");
+        assert_eq!(p.resolve_api_key().await.unwrap(), "sk-from-env");
         unsafe {
             std::env::remove_var(var);
         }
     }
 
-    #[test]
-    fn from_env_var_missing_returns_auth_failed() {
+    #[tokio::test]
+    async fn from_env_var_missing_returns_auth_failed() {
         let var = "NEURON_ANTHROPIC_TEST_CRED_MISSING_ZZZ";
         unsafe {
             std::env::remove_var(var);
         }
         let p = AnthropicProvider::from_env_var(var);
-        let err = p.resolve_api_key().unwrap_err();
+        let err = p.resolve_api_key().await.unwrap_err();
         assert!(matches!(err, ProviderError::AuthFailed(_)));
-        let msg = err.to_string();
-        assert!(msg.contains(var), "error should name the variable");
+        assert!(
+            err.to_string().contains(var),
+            "error should name the variable"
+        );
     }
 
-    #[test]
-    fn from_env_var_empty_returns_auth_failed() {
+    #[tokio::test]
+    async fn from_env_var_empty_returns_auth_failed() {
         let var = "NEURON_ANTHROPIC_TEST_CRED_EMPTY_ZZZ";
         unsafe {
             std::env::set_var(var, "");
         }
         let p = AnthropicProvider::from_env_var(var);
-        let err = p.resolve_api_key().unwrap_err();
+        let err = p.resolve_api_key().await.unwrap_err();
         assert!(matches!(err, ProviderError::AuthFailed(_)));
-        let msg = err.to_string();
-        assert!(msg.contains(var), "error should name the variable");
+        assert!(
+            err.to_string().contains(var),
+            "error should name the variable"
+        );
         unsafe {
             std::env::remove_var(var);
         }
     }
 
-    #[test]
-    fn error_message_does_not_contain_secret_value() {
-        // Set a var to a secret value, then empty it — verify the empty-key error
-        // only names the variable, never surfaces the value.
+    #[tokio::test]
+    async fn error_message_does_not_contain_secret_value() {
         let var = "NEURON_ANTHROPIC_TEST_CRED_REDACT_ZZZ";
         let secret = "sk-must-not-appear-in-any-error-message";
         unsafe {
             std::env::set_var(var, "");
         }
         let p = AnthropicProvider::from_env_var(var);
-        // Secret value is not in the env var (it's empty), but confirm var name is present.
-        let msg = p.resolve_api_key().unwrap_err().to_string();
+        let msg = p.resolve_api_key().await.unwrap_err().to_string();
         assert!(msg.contains(var));
         assert!(!msg.contains(secret));
-        // Now set the var to the secret and confirm that the happy path
-        // (resolved key) is NOT leaked into any error type.
         unsafe {
             std::env::set_var(var, secret);
         }
-        assert_eq!(p.resolve_api_key().unwrap(), secret); // key resolved correctly
+        assert_eq!(p.resolve_api_key().await.unwrap(), secret);
         unsafe {
             std::env::remove_var(var);
         }
+    }
+
+    // ── OAuth token detection ────────────────────────────────────────────────
+
+    #[test]
+    fn oauth_token_prefix_detected() {
+        assert!(is_oauth_token("sk-ant-oat01-abc"));
+        assert!(is_oauth_token("sk-ant-oat-xyz"));
+        assert!(!is_oauth_token("sk-ant-api123"));
+        assert!(!is_oauth_token("sk-ant-api03-abc"));
+        assert!(!is_oauth_token(""));
+    }
+
+    // ── Auth provider variant ────────────────────────────────────────────────
+
+    /// Minimal stub that returns a pre-set token.
+    struct StubAuth {
+        token: String,
+        expected_audience: String,
+    }
+
+    #[async_trait]
+    impl neuron_auth::AuthProvider for StubAuth {
+        async fn provide(
+            &self,
+            request: &neuron_auth::AuthRequest,
+        ) -> Result<AuthToken, AuthError> {
+            assert_eq!(
+                request.audience.as_deref().unwrap_or(""),
+                self.expected_audience,
+            );
+            Ok(AuthToken::permanent(self.token.as_bytes().to_vec()))
+        }
+    }
+
+    #[tokio::test]
+    async fn with_auth_resolves_via_provider() {
+        let stub = Arc::new(StubAuth {
+            token: "sk-ant-test".into(),
+            expected_audience: "anthropic".into(),
+        });
+        let p = AnthropicProvider::with_auth(stub);
+        assert_eq!(p.resolve_api_key().await.unwrap(), "sk-ant-test");
+    }
+
+    #[tokio::test]
+    async fn with_auth_oauth_token_detected() {
+        let stub = Arc::new(StubAuth {
+            token: "sk-ant-oat01-mytoken".into(),
+            expected_audience: "anthropic".into(),
+        });
+        let p = AnthropicProvider::with_auth(stub);
+        let key = p.resolve_api_key().await.unwrap();
+        assert!(is_oauth_token(&key), "token should be detected as OAuth");
+    }
+
+    #[tokio::test]
+    async fn with_auth_provider_error_maps_to_auth_failed() {
+        struct FailAuth;
+        #[async_trait]
+        impl neuron_auth::AuthProvider for FailAuth {
+            async fn provide(&self, _: &neuron_auth::AuthRequest) -> Result<AuthToken, AuthError> {
+                Err(AuthError::ScopeUnavailable("no anthropic key".into()))
+            }
+        }
+        let p = AnthropicProvider::with_auth(Arc::new(FailAuth));
+        let err = p.resolve_api_key().await.unwrap_err();
+        assert!(matches!(err, ProviderError::AuthFailed(_)));
     }
 }

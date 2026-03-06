@@ -989,7 +989,9 @@ dependencies = [
 name = "neuron-provider-anthropic"
 version = "0.4.0"
 dependencies = [
+ "async-trait",
  "layer0",
+ "neuron-auth",
  "neuron-context",
  "neuron-hooks",
  "neuron-op-react",
