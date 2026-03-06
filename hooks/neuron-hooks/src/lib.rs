@@ -13,7 +13,7 @@
 //!    accumulate (last writer wins per field).
 //! 3. **Guardrails** — run in registration order against the *original*
 //!    context (not the transformer-modified one). Short-circuit on the
-//!    first `Halt` or `SkipTool`. Errors are logged and the pipeline
+//!    first `Halt` or `SkipDispatch`. Errors are logged and the pipeline
 //!    continues.
 //!
 //! Within each phase, hooks execute in the order they were registered.
@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// How a hook composes with others of the same kind at the same point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookKind {
-    /// Short-circuits on `Halt` or `SkipTool`. For policy enforcement.
+    /// Short-circuits on `Halt` or `SkipDispatch`. For policy enforcement.
     Guardrail,
     /// Chains `Modify` actions — each sees the previous hook's modified
     /// context. A `Halt` from a `Transformer` escalates like a `Guardrail`.
@@ -74,9 +74,9 @@ impl HookRegistry {
     ///
     /// - If a transformer or guardrail returns `Halt`, that is returned
     ///   immediately.
-    /// - If a guardrail returns `SkipTool`, that is returned immediately.
-    /// - If any transformer produced a `ModifyToolInput` or
-    ///   `ModifyToolOutput`, the last such modification (with its final
+    /// - If a guardrail returns `SkipDispatch`, that is returned immediately.
+    /// - If any transformer produced a `ModifyDispatchInput` or
+    ///   `ModifyDispatchOutput`, the last such modification (with its final
     ///   accumulated value) is returned.
     /// - Otherwise `Continue` is returned.
     ///
@@ -107,8 +107,8 @@ impl HookRegistry {
         // Each transformer sees the working context mutated by its
         // predecessors. A `Halt` from any transformer escalates immediately.
         //
-        // `ModifyToolOutput` yields a `serde_json::Value`; we serialise it
-        // to a JSON string and store it in `working_ctx.tool_result` so
+        // `ModifyDispatchOutput` yields a `serde_json::Value`; we serialise it
+        // to a JSON string and store it in `working_ctx.operator_result` so
         // subsequent transformers can read it for further chaining.
         let mut working_ctx = ctx.clone();
         let mut transformer_result: Option<HookAction> = None;
@@ -122,14 +122,14 @@ impl HookRegistry {
             }
             match hook.on_event(&working_ctx).await {
                 Ok(HookAction::Continue) => {}
-                Ok(HookAction::ModifyToolInput { new_input }) => {
-                    working_ctx.tool_input = Some(new_input.clone());
-                    transformer_result = Some(HookAction::ModifyToolInput { new_input });
+                Ok(HookAction::ModifyDispatchInput { new_input }) => {
+                    working_ctx.operator_input = Some(new_input.clone());
+                    transformer_result = Some(HookAction::ModifyDispatchInput { new_input });
                 }
-                Ok(HookAction::ModifyToolOutput { new_output }) => {
-                    // Serialise Value → JSON string for chaining via tool_result.
-                    working_ctx.tool_result = Some(new_output.to_string());
-                    transformer_result = Some(HookAction::ModifyToolOutput { new_output });
+                Ok(HookAction::ModifyDispatchOutput { new_output }) => {
+                    // Serialise Value → JSON string for chaining via operator_result.
+                    working_ctx.operator_result = Some(new_output.to_string());
+                    transformer_result = Some(HookAction::ModifyDispatchOutput { new_output });
                 }
                 Ok(HookAction::Halt { reason }) => {
                     return HookAction::Halt { reason };
@@ -159,8 +159,8 @@ impl HookRegistry {
                 Ok(HookAction::Halt { reason }) => {
                     return HookAction::Halt { reason };
                 }
-                Ok(HookAction::SkipTool { reason }) => {
-                    return HookAction::SkipTool { reason };
+                Ok(HookAction::SkipDispatch { reason }) => {
+                    return HookAction::SkipDispatch { reason };
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!(
@@ -238,9 +238,9 @@ mod tests {
         }
     }
 
-    /// A transformer that appends a suffix to `ctx.tool_result`.
+    /// A transformer that appends a suffix to `ctx.operator_result`.
     ///
-    /// Reads the raw string stored in `tool_result` (which is the JSON
+    /// Reads the raw string stored in `operator_result` (which is the JSON
     /// serialisation of the previous transformer's `Value`) and appends
     /// its suffix directly. This lets chaining tests verify that each
     /// transformer sees the prior transformer's output.
@@ -255,8 +255,8 @@ mod tests {
             &self.points
         }
         async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-            let base = ctx.tool_result.as_deref().unwrap_or("");
-            Ok(HookAction::ModifyToolOutput {
+            let base = ctx.operator_result.as_deref().unwrap_or("");
+            Ok(HookAction::ModifyDispatchOutput {
                 new_output: serde_json::Value::String(format!("{}{}", base, self.suffix)),
             })
         }
@@ -393,27 +393,27 @@ mod tests {
     #[tokio::test]
     async fn transformer_hooks_chain() {
         let mut registry = HookRegistry::new();
-        // First transformer appends "A" to the (empty) tool_result.
+        // First transformer appends "A" to the (empty) operator_result.
         registry.add_transformer(Arc::new(AppendOutputTransformer {
-            points: vec![HookPoint::PostToolUse],
+            points: vec![HookPoint::PostSubDispatch],
             suffix: "A",
         }));
-        // Second transformer reads working_ctx.tool_result (= JSON repr of
+        // Second transformer reads working_ctx.operator_result (= JSON repr of
         // "A") and appends "+B".
         registry.add_transformer(Arc::new(AppendOutputTransformer {
-            points: vec![HookPoint::PostToolUse],
+            points: vec![HookPoint::PostSubDispatch],
             suffix: "+B",
         }));
 
-        let ctx = HookContext::new(HookPoint::PostToolUse);
+        let ctx = HookContext::new(HookPoint::PostSubDispatch);
         let action = registry.dispatch(&ctx).await;
         match action {
-            HookAction::ModifyToolOutput { new_output } => {
+            HookAction::ModifyDispatchOutput { new_output } => {
                 let s = new_output.as_str().expect("string Value");
                 assert!(s.contains('A'), "expected 'A' in output, got: {s}");
                 assert!(s.contains("+B"), "expected '+B' in output, got: {s}");
             }
-            _ => panic!("expected ModifyToolOutput, got {:?}", action),
+            _ => panic!("expected ModifyDispatchOutput, got {:?}", action),
         }
     }
 

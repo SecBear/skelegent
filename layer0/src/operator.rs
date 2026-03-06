@@ -78,9 +78,10 @@ pub struct OperatorConfig {
     /// Model override (implementation-specific string).
     pub model: Option<String>,
 
-    /// Tool restrictions for this operator invocation.
-    /// None = use defaults. Some(list) = only these tools.
-    pub allowed_tools: Option<Vec<String>>,
+    /// Operator restrictions for this operator invocation.
+    /// None = use defaults. Some(list) = only these operators.
+    #[serde(alias = "allowed_tools")]
+    pub allowed_operators: Option<Vec<String>>,
 
     /// Additional system prompt content to prepend/append.
     /// Does not replace the operator runtime's base identity —
@@ -169,19 +170,20 @@ pub struct OperatorMetadata {
     pub cost: Decimal,
     /// Number of ReAct loop iterations used.
     pub turns_used: u32,
-    /// Record of each tool call made.
-    pub tools_called: Vec<ToolCallRecord>,
+    /// Record of each sub-dispatch made.
+    #[serde(alias = "tools_called")]
+    pub sub_dispatches: Vec<SubDispatchRecord>,
     /// Wall-clock duration of the operator invocation.
     pub duration: DurationMs,
 }
 
-/// Record of a single tool invocation within an operator execution.
+/// Record of a single sub-dispatch within an operator execution.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallRecord {
-    /// Name of the tool that was called.
+pub struct SubDispatchRecord {
+    /// Name of the operator (sub-dispatch) that was called.
     pub name: String,
-    /// How long the tool call took.
+    /// How long the sub-dispatch took.
     pub duration: DurationMs,
     /// Whether the call succeeded.
     pub success: bool,
@@ -194,7 +196,7 @@ impl Default for OperatorMetadata {
             tokens_out: 0,
             cost: Decimal::ZERO,
             turns_used: 0,
-            tools_called: vec![],
+            sub_dispatches: vec![],
             duration: DurationMs::ZERO,
         }
     }
@@ -225,8 +227,8 @@ impl OperatorOutput {
     }
 }
 
-impl ToolCallRecord {
-    /// Create a new ToolCallRecord.
+impl SubDispatchRecord {
+    /// Create a new SubDispatchRecord.
     pub fn new(name: impl Into<String>, duration: DurationMs, success: bool) -> Self {
         Self {
             name: name.into(),

@@ -211,7 +211,7 @@ fn sample_operator_input() -> OperatorInput {
     config.max_cost = Some(Decimal::new(100, 2)); // $1.00
     config.max_duration = Some(DurationMs::from_secs(60));
     config.model = Some("claude-sonnet-4-20250514".into());
-    config.allowed_tools = Some(vec!["read_file".into()]);
+    config.allowed_operators = Some(vec!["read_file".into()]);
     config.system_addendum = Some("Be concise.".into());
 
     let mut input = OperatorInput::new(
@@ -241,7 +241,7 @@ fn sample_operator_output() -> OperatorOutput {
     meta.tokens_out = 50;
     meta.cost = Decimal::new(5, 3); // $0.005
     meta.turns_used = 1;
-    meta.tools_called = vec![ToolCallRecord::new(
+    meta.sub_dispatches = vec![SubDispatchRecord::new(
         "read_file",
         DurationMs::from_millis(150),
         true,
@@ -269,7 +269,7 @@ fn operator_metadata_default() {
     assert_eq!(m.tokens_out, 0);
     assert_eq!(m.cost, Decimal::ZERO);
     assert_eq!(m.turns_used, 0);
-    assert!(m.tools_called.is_empty());
+    assert!(m.sub_dispatches.is_empty());
     assert_eq!(m.duration, DurationMs::ZERO);
 }
 
@@ -506,8 +506,8 @@ fn hook_point_round_trip() {
     let points = vec![
         HookPoint::PreInference,
         HookPoint::PostInference,
-        HookPoint::PreToolUse,
-        HookPoint::PostToolUse,
+        HookPoint::PreSubDispatch,
+        HookPoint::PostSubDispatch,
         HookPoint::ExitCheck,
     ];
     for p in points {
@@ -814,11 +814,11 @@ fn operator_error_display() {
     let e = OperatorError::Model("rate limited".into());
     assert_eq!(e.to_string(), "model error: rate limited");
 
-    let e = OperatorError::Tool {
-        tool: "bash".into(),
+    let e = OperatorError::SubDispatch {
+        operator: "bash".into(),
         message: "command failed".into(),
     };
-    assert_eq!(e.to_string(), "tool error in bash: command failed");
+    assert_eq!(e.to_string(), "sub-dispatch error in bash: command failed");
 }
 
 #[test]
@@ -1145,7 +1145,7 @@ fn operator_config_default_all_none() {
     assert!(c.max_cost.is_none());
     assert!(c.max_duration.is_none());
     assert!(c.model.is_none());
-    assert!(c.allowed_tools.is_none());
+    assert!(c.allowed_operators.is_none());
     assert!(c.system_addendum.is_none());
 }
 
@@ -1301,13 +1301,13 @@ fn hook_action_variants_round_trip() {
         HookAction::Halt {
             reason: "policy violation".into(),
         },
-        HookAction::SkipTool {
+        HookAction::SkipDispatch {
             reason: "not allowed".into(),
         },
-        HookAction::ModifyToolInput {
+        HookAction::ModifyDispatchInput {
             new_input: json!({"key": "modified"}),
         },
-        HookAction::ModifyToolOutput {
+        HookAction::ModifyDispatchOutput {
             new_output: json!({"redacted": true}),
         },
     ];
@@ -1636,9 +1636,9 @@ fn credential_ref_with_source_round_trip() {
 }
 
 #[test]
-fn hook_action_modify_tool_output_round_trip() {
+fn hook_action_modify_dispatch_output_round_trip() {
     use layer0::hook::HookAction;
-    let action = HookAction::ModifyToolOutput {
+    let action = HookAction::ModifyDispatchOutput {
         new_output: json!({"redacted": true}),
     };
     let json = serde_json::to_string(&action).unwrap();

@@ -30,8 +30,8 @@ impl LoggingHook {
             points: vec![
                 HookPoint::PreInference,
                 HookPoint::PostInference,
-                HookPoint::PreToolUse,
-                HookPoint::PostToolUse,
+                HookPoint::PreSubDispatch,
+                HookPoint::PostSubDispatch,
                 HookPoint::ExitCheck,
             ],
             events: Mutex::new(Vec::new()),

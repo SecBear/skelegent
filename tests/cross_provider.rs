@@ -149,7 +149,7 @@ async fn anthropic_single_shot() {
     assert!(output.metadata.tokens_out > 0);
     assert!(output.metadata.cost >= rust_decimal::Decimal::ZERO);
     assert_eq!(output.metadata.turns_used, 1);
-    assert!(output.metadata.tools_called.is_empty());
+    assert!(output.metadata.sub_dispatches.is_empty());
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

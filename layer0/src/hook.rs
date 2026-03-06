@@ -14,14 +14,17 @@ pub enum HookPoint {
     PreInference,
     /// After model responds, before tool execution.
     PostInference,
-    /// Before each tool is executed.
-    PreToolUse,
-    /// After each tool completes, before result enters context.
-    PostToolUse,
+    /// Before each sub-dispatch is executed.
+    #[serde(alias = "pre_tool_use")]
+    PreSubDispatch,
+    /// After each sub-dispatch completes, before result enters context.
+    #[serde(alias = "post_tool_use")]
+    PostSubDispatch,
     /// At each exit-condition check.
     ExitCheck,
-    /// During tool execution: a streaming update chunk is available.
-    ToolExecutionUpdate,
+    /// During sub-dispatch execution: a streaming update chunk is available.
+    #[serde(alias = "tool_execution_update")]
+    SubDispatchUpdate,
     /// After steering source returns messages, before they enter context.
     /// Guardrails can Halt to reject the steering injection.
     PreSteeringInject,
@@ -39,12 +42,15 @@ pub enum HookPoint {
 pub struct HookContext {
     /// Current hook point.
     pub point: HookPoint,
-    /// Current tool being called (only at Pre/PostToolUse).
-    pub tool_name: Option<String>,
-    /// Tool input (only at PreToolUse).
-    pub tool_input: Option<serde_json::Value>,
-    /// Tool result (only at PostToolUse).
-    pub tool_result: Option<String>,
+    /// Current operator being called (only at Pre/PostSubDispatch).
+    #[serde(alias = "tool_name")]
+    pub operator_name: Option<String>,
+    /// Operator input (only at PreSubDispatch).
+    #[serde(alias = "tool_input")]
+    pub operator_input: Option<serde_json::Value>,
+    /// Operator result (only at PostSubDispatch).
+    #[serde(alias = "tool_result")]
+    pub operator_result: Option<String>,
     /// Model response (only at PostInference).
     pub model_output: Option<Content>,
     /// Running count of tokens used.
@@ -55,14 +61,16 @@ pub struct HookContext {
     pub turns_completed: u32,
     /// Time elapsed since the turn started.
     pub elapsed: crate::duration::DurationMs,
-    /// Streaming chunk text (only at ToolExecutionUpdate).
-    pub tool_chunk: Option<String>,
+    /// Streaming chunk text (only at SubDispatchUpdate).
+    #[serde(alias = "tool_chunk")]
+    pub operator_chunk: Option<String>,
     /// Steering messages about to be injected (only at PreSteeringInject).
     #[serde(default)]
     pub steering_messages: Option<Vec<String>>,
-    /// Tool names skipped due to steering (only at PostSteeringSkip).
+    /// Operator names skipped due to steering (only at PostSteeringSkip).
     #[serde(default)]
-    pub skipped_tools: Option<Vec<String>>,
+    #[serde(alias = "skipped_tools")]
+    pub skipped_operators: Option<Vec<String>>,
     /// Memory key being written (only at PreMemoryWrite).
     #[serde(default)]
     pub memory_key: Option<String>,
@@ -81,17 +89,17 @@ impl HookContext {
     pub fn new(point: HookPoint) -> Self {
         Self {
             point,
-            tool_name: None,
-            tool_input: None,
-            tool_result: None,
+            operator_name: None,
+            operator_input: None,
+            operator_result: None,
             model_output: None,
             tokens_used: 0,
             cost: rust_decimal::Decimal::ZERO,
             turns_completed: 0,
             elapsed: crate::duration::DurationMs::ZERO,
-            tool_chunk: None,
+            operator_chunk: None,
             steering_messages: None,
-            skipped_tools: None,
+            skipped_operators: None,
             memory_key: None,
             memory_value: None,
             memory_options: None,
@@ -112,23 +120,26 @@ pub enum HookAction {
         /// Reason for halting.
         reason: String,
     },
-    /// Skip this tool call (only valid at PreToolUse).
-    /// The tool is not executed and a synthetic "skipped by policy"
+    /// Skip this sub-dispatch (only valid at PreSubDispatch).
+    /// The operator is not executed and a synthetic "skipped by policy"
     /// result is backfilled.
-    SkipTool {
+    #[serde(alias = "skip_tool")]
+    SkipDispatch {
         /// Reason for skipping.
         reason: String,
     },
-    /// Modify the tool input before execution (only at PreToolUse).
+    /// Modify the operator input before execution (only at PreSubDispatch).
     /// Used for: parameter sanitization, injection of defaults.
-    ModifyToolInput {
-        /// The replacement tool input.
+    #[serde(alias = "modify_tool_input")]
+    ModifyDispatchInput {
+        /// The replacement operator input.
         new_input: serde_json::Value,
     },
-    /// Replace the tool output with a modified version (e.g., redacted secrets).
-    /// Only valid at PostToolUse. v0 scope: PostToolUse only.
+    /// Replace the operator output with a modified version (e.g., redacted secrets).
+    /// Only valid at PostSubDispatch. v0 scope: PostSubDispatch only.
     /// Future: PostInference for redacting final assistant text before return/logging.
-    ModifyToolOutput {
+    #[serde(alias = "modify_tool_output")]
+    ModifyDispatchOutput {
         /// The replacement output.
         new_output: serde_json::Value,
     },
@@ -183,7 +194,7 @@ mod tests {
     fn hookcontext_new_steering_fields_are_none() {
         let ctx = HookContext::new(HookPoint::PreSteeringInject);
         assert!(ctx.steering_messages.is_none());
-        assert!(ctx.skipped_tools.is_none());
+        assert!(ctx.skipped_operators.is_none());
     }
 
     #[test]

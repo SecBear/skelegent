@@ -16,13 +16,13 @@ pub trait Hook: Send + Sync {
 }
 ```
 
-The hook points are: `PreInference`, `PostInference`, `PreToolUse`, `PostToolUse`, `ExitCheck`, `ToolExecutionUpdate`, `PreSteeringInject`, and `PostSteeringSkip`.
+The hook points are: `PreInference`, `PostInference`, `PreSubDispatch`, `PostSubDispatch`, `ExitCheck`, `SubDispatchUpdate`, `PreSteeringInject`, and `PostSteeringSkip`.
 
 A hook can:
 - **Observe** -- Log, emit telemetry, track metrics (return `HookAction::Continue`).
 - **Halt** -- Stop execution with a reason (return `HookAction::Halt`).
-- **Skip a tool** -- Prevent a tool call (return `HookAction::SkipTool` at `PreToolUse`).
-- **Modify input/output** -- Sanitize tool input or redact tool output (return `ModifyToolInput` or `ModifyToolOutput`).
+- **Skip a tool** -- Prevent a tool call (return `HookAction::SkipDispatch` at `PreSubDispatch`).
+- **Modify input/output** -- Sanitize tool input or redact tool output (return `ModifyDispatchInput` or `ModifyDispatchOutput`).
 
 Hook errors are logged but do not halt execution. Use `HookAction::Halt` to halt.
 
@@ -32,7 +32,7 @@ The `HookRegistry` collects hooks into a kind-aware three-phase pipeline. At eac
 
 1. **Observers** — all run; returned actions and errors are discarded.
 2. **Transformers** — each sees the context modified by the previous transformer; a `Halt` escalates immediately.
-3. **Guardrails** — run against the original (pre-transformer) context; short-circuit on the first `Halt` or `SkipTool`.
+3. **Guardrails** — run against the original (pre-transformer) context; short-circuit on the first `Halt` or `SkipDispatch`.
 
 ```rust,no_run
 use neuron_hooks::HookRegistry;
@@ -60,7 +60,7 @@ Every hook is registered with a `HookKind` that controls how its action composes
 ```
 Observers (all run, actions discarded)
   → Transformers (chain in order; Halt escalates)
-  → Guardrails (short-circuit on Halt or SkipTool)
+  → Guardrails (short-circuit on Halt or SkipDispatch)
 ```
 
 Registration order within each phase matters. If two guardrails are registered, the first one to return `Halt` stops the second from running.
@@ -137,7 +137,7 @@ impl Hook for SteeringAuditHook {
 
 ### Observing skipped tools: `PostSteeringSkip`
 
-Fires after tools are skipped because steering messages were injected. `ctx.skipped_tools` holds the names of the tools that did not execute. This point is observation-only: `Halt` here halts the turn, but the skip already occurred.
+Fires after tools are skipped because steering messages were injected. `ctx.skipped_operators` holds the names of the tools that did not execute. This point is observation-only: `Halt` here halts the turn, but the skip already occurred.
 
 ```rust,no_run
 use async_trait::async_trait;
@@ -153,7 +153,7 @@ impl Hook for SkipAuditHook {
     }
 
     async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-        if let Some(skipped) = &ctx.skipped_tools {
+        if let Some(skipped) = &ctx.skipped_operators {
             tracing::warn!(tools = ?skipped, "tools skipped by steering");
         }
         Ok(HookAction::Continue)
@@ -166,9 +166,9 @@ impl Hook for SkipAuditHook {
 ## Use cases
 
 - **Budget enforcement** -- Track accumulated cost at `PostInference`, halt if over budget.
-- **Guardrails** -- Validate tool calls at `PreToolUse`, skip dangerous operations.
+- **Guardrails** -- Validate tool calls at `PreSubDispatch`, skip dangerous operations.
 - **Telemetry** -- Emit OpenTelemetry spans at each hook point.
 - **Heartbeat** -- Signal liveness to an orchestrator (e.g., Temporal heartbeat) at `PreInference`.
-- **Secret redaction** -- Redact sensitive data from tool output at `PostToolUse`.
+- **Secret redaction** -- Redact sensitive data from tool output at `PostSubDispatch`.
 
 For security-focused hooks, see the `neuron-hook-security` crate.

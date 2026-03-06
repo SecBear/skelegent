@@ -10,7 +10,7 @@
 
 `neuron-hooks` provides `HookRegistry`, which collects multiple `Hook` implementations into an
 ordered dispatch pipeline. At each hook point, hooks are called in registration order. The pipeline
-short-circuits on `Halt`, `SkipTool`, or `ModifyToolInput` — subsequent hooks are not called. Hook
+short-circuits on `Halt`, `SkipDispatch`, or `ModifyDispatchInput` — subsequent hooks are not called. Hook
 errors are logged and the pipeline continues.
 
 The `Hook` trait and all associated types (`HookPoint`, `HookAction`, `HookContext`, `HookError`)

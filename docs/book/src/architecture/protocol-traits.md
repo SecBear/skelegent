@@ -44,7 +44,7 @@ pub struct OperatorConfig {
     pub max_cost: Option<Decimal>,        // Budget in USD
     pub max_duration: Option<DurationMs>, // Wall-clock timeout
     pub model: Option<String>,            // Model override
-    pub allowed_tools: Option<Vec<String>>, // Tool restrictions
+    pub allowed_operators: Option<Vec<String>>, // Operator restrictions
     pub system_addendum: Option<String>,  // Additional system prompt
 }
 ```
@@ -87,7 +87,7 @@ pub struct OperatorMetadata {
     pub tokens_out: u64,
     pub cost: Decimal,                    // USD, precise
     pub turns_used: u32,
-    pub tools_called: Vec<ToolCallRecord>,
+    pub sub_dispatches: Vec<SubDispatchRecord>,
     pub duration: DurationMs,
 }
 ```
@@ -225,8 +225,8 @@ Hooks fire at five defined points:
 |-----------|------|
 | `PreInference` | Before each model call |
 | `PostInference` | After model responds, before tool execution |
-| `PreToolUse` | Before each tool is executed |
-| `PostToolUse` | After each tool completes |
+| `PreSubDispatch` | Before each tool is executed |
+| `PostSubDispatch` | After each tool completes |
 | `ExitCheck` | At each exit-condition check |
 
 `HookContext` provides read-only access to the current state: tool name/input/result, model output, running token count, running cost, turns completed, elapsed time.
@@ -237,9 +237,9 @@ Hooks fire at five defined points:
 |--------|--------|
 | `Continue` | Proceed normally |
 | `Halt { reason }` | Stop the operator with `ExitReason::ObserverHalt` |
-| `SkipTool { reason }` | Skip this tool call (PreToolUse only) |
-| `ModifyToolInput { new_input }` | Replace tool input before execution (PreToolUse only) |
-| `ModifyToolOutput { new_output }` | Replace tool output (PostToolUse only) |
+| `SkipDispatch { reason }` | Skip this tool call (PreSubDispatch only) |
+| `ModifyDispatchInput { new_input }` | Replace tool input before execution (PreSubDispatch only) |
+| `ModifyDispatchOutput { new_output }` | Replace tool output (PostSubDispatch only) |
 
 Hook errors are logged but do **not** halt execution. Use `HookAction::Halt` to halt.
 

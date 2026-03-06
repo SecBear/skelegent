@@ -56,7 +56,7 @@ impl<S: StateStore + ?Sized, O: Orchestrator + ?Sized> LocalEffectExecutor<S, O>
     /// Attach a hook registry. `PreMemoryWrite` fires before every `WriteMemory` effect.
     ///
     /// If a guardrail returns `Halt`, the write is skipped (not an error).
-    /// If a transformer returns `ModifyToolOutput`, its value replaces the original.
+    /// If a transformer returns `ModifyDispatchOutput`, its value replaces the original.
     pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
         self.hooks = Some(hooks);
         self
@@ -103,7 +103,7 @@ where
                                 );
                                 continue;
                             }
-                            HookAction::ModifyToolOutput { new_output } => new_output,
+                            HookAction::ModifyDispatchOutput { new_output } => new_output,
                             _ => value.clone(),
                         }
                     } else {

@@ -134,12 +134,12 @@ async fn hooks_only_fire_at_registered_points() {
     registry.dispatch(&ctx).await;
     assert_eq!(hook.events().len(), 1);
 
-    // A hook that only registers for PreToolUse should not fire on PreInference
-    struct PreToolOnly;
+    // A hook that only registers for PreSubDispatch should not fire on PreInference
+    struct PreDispatchOnly;
     #[async_trait::async_trait]
-    impl Hook for PreToolOnly {
+    impl Hook for PreDispatchOnly {
         fn points(&self) -> &[HookPoint] {
-            &[HookPoint::PreToolUse]
+            &[HookPoint::PreSubDispatch]
         }
         async fn on_event(&self, _ctx: &HookContext) -> Result<HookAction, HookError> {
             panic!("should not fire at PreInference!");
@@ -147,7 +147,7 @@ async fn hooks_only_fire_at_registered_points() {
     }
 
     let mut registry2 = HookRegistry::new();
-    registry2.add_guardrail(Arc::new(PreToolOnly));
+    registry2.add_guardrail(Arc::new(PreDispatchOnly));
 
     let ctx = HookContext::new(HookPoint::PreInference);
     let action = registry2.dispatch(&ctx).await;
@@ -190,31 +190,31 @@ async fn hook_error_does_not_halt_pipeline() {
     assert_eq!(*log, vec!["after-error"]);
 }
 
-// --- SkipTool and ModifyToolInput propagation ---
+// --- SkipDispatch and ModifyDispatchInput propagation ---
 
-struct SkipToolHook;
+struct SkipDispatchHook;
 
 #[async_trait::async_trait]
-impl Hook for SkipToolHook {
+impl Hook for SkipDispatchHook {
     fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreToolUse]
+        &[HookPoint::PreSubDispatch]
     }
 
     async fn on_event(&self, _ctx: &HookContext) -> Result<HookAction, HookError> {
-        Ok(HookAction::SkipTool {
+        Ok(HookAction::SkipDispatch {
             reason: "not allowed".into(),
         })
     }
 }
 
 #[tokio::test]
-async fn skip_tool_stops_pipeline() {
+async fn skip_dispatch_stops_pipeline() {
     let mut registry = HookRegistry::new();
-    registry.add_guardrail(Arc::new(SkipToolHook));
+    registry.add_guardrail(Arc::new(SkipDispatchHook));
 
-    let ctx = HookContext::new(HookPoint::PreToolUse);
+    let ctx = HookContext::new(HookPoint::PreSubDispatch);
     let action = registry.dispatch(&ctx).await;
-    assert!(matches!(action, HookAction::SkipTool { .. }));
+    assert!(matches!(action, HookAction::SkipDispatch { .. }));
 }
 
 struct ModifyInputHook;
@@ -222,22 +222,22 @@ struct ModifyInputHook;
 #[async_trait::async_trait]
 impl Hook for ModifyInputHook {
     fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreToolUse]
+        &[HookPoint::PreSubDispatch]
     }
 
     async fn on_event(&self, _ctx: &HookContext) -> Result<HookAction, HookError> {
-        Ok(HookAction::ModifyToolInput {
+        Ok(HookAction::ModifyDispatchInput {
             new_input: serde_json::json!({"sanitized": true}),
         })
     }
 }
 
 #[tokio::test]
-async fn modify_tool_input_stops_pipeline() {
+async fn modify_dispatch_input_stops_pipeline() {
     let mut registry = HookRegistry::new();
     registry.add_transformer(Arc::new(ModifyInputHook));
 
-    let ctx = HookContext::new(HookPoint::PreToolUse);
+    let ctx = HookContext::new(HookPoint::PreSubDispatch);
     let action = registry.dispatch(&ctx).await;
-    assert!(matches!(action, HookAction::ModifyToolInput { .. }));
+    assert!(matches!(action, HookAction::ModifyDispatchInput { .. }));
 }

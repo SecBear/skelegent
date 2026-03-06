@@ -25,7 +25,7 @@ Four protocol traits + two cross-cutting interfaces:
 ## Exports
 
 **Operator:** `Operator`, `OperatorInput`, `OperatorOutput`, `OperatorConfig`, `OperatorMetadata`,
-`ToolCallRecord`, `ToolMetadata`, `ExitReason`
+`SubDispatchRecord`, `ToolMetadata`, `ExitReason`
 
 **Orchestrator:** `Orchestrator`, `QueryPayload`
 

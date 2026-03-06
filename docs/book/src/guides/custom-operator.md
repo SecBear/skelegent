@@ -59,7 +59,7 @@ Hooks attach to the turn's inner loop at typed `HookPoint`s. `HookKind` controls
 
 ### Guardrail: deny a tool by name
 
-A guardrail short-circuits on `Halt` or `SkipTool`. Register one when you want hard policy enforcement:
+A guardrail short-circuits on `Halt` or `SkipDispatch`. Register one when you want hard policy enforcement:
 
 ```rust,no_run
 use async_trait::async_trait;
@@ -74,11 +74,11 @@ struct DenyToolHook {
 #[async_trait]
 impl Hook for DenyToolHook {
     fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreToolUse]
+        &[HookPoint::PreSubDispatch]
     }
 
     async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-        if ctx.tool_name.as_deref() == Some(&self.denied) {
+        if ctx.operator_name.as_deref() == Some(&self.denied) {
             Ok(HookAction::Halt {
                 reason: format!("tool {} is denied by policy", self.denied),
             })
@@ -92,7 +92,7 @@ impl Hook for DenyToolHook {
 // registry.add_guardrail(Arc::new(DenyToolHook { denied: "rm".into() }));
 ```
 
-Use `HookAction::SkipTool` instead of `Halt` if you want the agent to continue after skipping — `SkipTool` replaces the tool result with a synthetic "skipped by policy" message and lets the loop proceed.
+Use `HookAction::SkipDispatch` instead of `Halt` if you want the agent to continue after skipping — `SkipDispatch` replaces the tool result with a synthetic "skipped by policy" message and lets the loop proceed.
 
 ### Transformer: sanitize tool input
 
@@ -108,15 +108,15 @@ struct StripSecretTransformer;
 #[async_trait]
 impl Hook for StripSecretTransformer {
     fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreToolUse]
+        &[HookPoint::PreSubDispatch]
     }
 
     async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-        if let Some(mut input) = ctx.tool_input.clone() {
+        if let Some(mut input) = ctx.operator_input.clone() {
             if let Some(obj) = input.as_object_mut() {
                 obj.remove("api_key");
             }
-            return Ok(HookAction::ModifyToolInput { new_input: input });
+            return Ok(HookAction::ModifyDispatchInput { new_input: input });
         }
         Ok(HookAction::Continue)
     }
@@ -140,12 +140,12 @@ struct MetricsHook;
 #[async_trait]
 impl Hook for MetricsHook {
     fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreToolUse, HookPoint::PostToolUse]
+        &[HookPoint::PreSubDispatch, HookPoint::PostSubDispatch]
     }
 
     async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
         tracing::info!(
-            tool = ?ctx.tool_name,
+            tool = ?ctx.operator_name,
             point = ?ctx.point,
             cost = %ctx.cost,
             "hook fired"
@@ -236,7 +236,7 @@ impl Hook for SteeringLogger {
 
 ### PostSteeringSkip: observe skipped tools
 
-Fires after tools are skipped because steering injected messages. `ctx.skipped_tools` contains the names of the tools that were skipped.
+Fires after tools are skipped because steering injected messages. `ctx.skipped_operators` contains the names of the tools that were skipped.
 
 ```rust,no_run
 use async_trait::async_trait;
@@ -252,7 +252,7 @@ impl Hook for SkipAuditor {
     }
 
     async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-        if let Some(skipped) = &ctx.skipped_tools {
+        if let Some(skipped) = &ctx.skipped_operators {
             tracing::warn!(tools = ?skipped, "tools skipped by steering");
         }
         Ok(HookAction::Continue)

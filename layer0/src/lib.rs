@@ -76,7 +76,7 @@ pub use id::{AgentId, ScopeId, SessionId, WorkflowId};
 pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy, ObservableEvent};
 pub use operator::{
     ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMetadata, OperatorOutput,
-    ToolCallRecord, ToolMetadata,
+    ToolMetadata, SubDispatchRecord,
 };
 pub use orchestrator::{Orchestrator, QueryPayload};
 pub use secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};

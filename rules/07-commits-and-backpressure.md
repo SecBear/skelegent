@@ -21,7 +21,7 @@ Use:
 Examples:
 
 1. `feat(orch-local): add workflow cancellation support`
-2. `test(hooks): cover SkipTool and ModifyToolInput`
+2. `test(hooks): cover SkipDispatch and ModifyDispatchInput`
 
 ## Suggested Workflow
 

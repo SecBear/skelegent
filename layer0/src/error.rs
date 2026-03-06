@@ -10,11 +10,11 @@ pub enum OperatorError {
     #[error("model error: {0}")]
     Model(String),
 
-    /// An error during tool execution.
-    #[error("tool error in {tool}: {message}")]
-    Tool {
-        /// Name of the tool that failed.
-        tool: String,
+    /// An error during sub-dispatch execution.
+    #[error("sub-dispatch error in {operator}: {message}")]
+    SubDispatch {
+        /// Name of the operator that failed.
+        operator: String,
         /// Error message.
         message: String,
     },

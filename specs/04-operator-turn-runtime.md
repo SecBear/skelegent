@@ -192,7 +192,7 @@ Implemented:
 - `neuron-op-single-shot` — functional.
 - `neuron-op-react` — full ReAct loop; emits effects.
 - Steering integrated with boundary polling and skip semantics.
-- Hook dispatch at PreInference, PostInference, PreToolUse, PostToolUse, ExitCheck, ToolExecutionUpdate.
+- Hook dispatch at PreInference, PostInference, PreSubDispatch, PostSubDispatch, ExitCheck, SubDispatchUpdate.
 - ExitCheck hook fires before all limit checks.
 - Compaction reserve enforcement via `compaction_reserve_pct`.
 - Step/loop limits (`max_tool_calls`, `max_repeat_calls`) with BudgetEvent emission.

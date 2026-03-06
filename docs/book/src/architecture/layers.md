@@ -94,7 +94,7 @@ Layer 4 implements `layer0::Environment` and provides the credential infrastruct
 - `neuron-hooks` -- `HookRegistry` for ordered hook pipeline dispatch
 - `neuron-hook-security` -- Security-focused hooks (guardrails, policy enforcement)
 
-Layer 5 provides the hook registry that operators use to dispatch hook events. The `HookRegistry` collects `Arc<dyn Hook>` implementations into an ordered pipeline. At each hook point, hooks fire in registration order. The pipeline short-circuits on `Halt`, `SkipTool`, or `ModifyToolInput`.
+Layer 5 provides the hook registry that operators use to dispatch hook events. The `HookRegistry` collects `Arc<dyn Hook>` implementations into an ordered pipeline. At each hook point, hooks fire in registration order. The pipeline short-circuits on `Halt`, `SkipDispatch`, or `ModifyDispatchInput`.
 
 ## The umbrella crate
 

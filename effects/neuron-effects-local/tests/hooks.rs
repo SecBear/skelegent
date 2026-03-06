@@ -120,7 +120,7 @@ impl Hook for ModifyTransformer {
     }
 
     async fn on_event(&self, _ctx: &HookContext) -> Result<HookAction, HookError> {
-        Ok(HookAction::ModifyToolOutput {
+        Ok(HookAction::ModifyDispatchOutput {
             new_output: self.new_value.clone(),
         })
     }
@@ -227,7 +227,7 @@ async fn observer_hook_sees_key_and_value() {
     assert_eq!(got, Some(json!({"x": 1})));
 }
 
-/// Transformer returning `ModifyToolOutput` replaces the written value.
+/// Transformer returning `ModifyDispatchOutput` replaces the written value.
 #[tokio::test]
 async fn modify_hook_replaces_value() {
     let state = Arc::new(InMemoryStore::new());

@@ -25,12 +25,12 @@ and `elapsed`. The table lists only the fields that are *unique* to each point.
 |---|---|---|
 | `PreInference` | Before each model call | *(baseline only)* |
 | `PostInference` | After model responds, before tool execution | `model_output` |
-| `PreToolUse` | Before each tool executes | `tool_name`, `tool_input` |
-| `PostToolUse` | After tool completes, before result enters context | `tool_name`, `tool_result` |
+| `PreSubDispatch` | Before each tool executes | `operator_name`, `operator_input` |
+| `PostSubDispatch` | After tool completes, before result enters context | `operator_name`, `operator_result` |
 | `ExitCheck` | At each exit-condition check | *(baseline only)* |
-| `ToolExecutionUpdate` | Streaming chunk available | `tool_name`, `tool_chunk` |
+| `SubDispatchUpdate` | Streaming chunk available | `operator_name`, `operator_chunk` |
 | `PreSteeringInject` | After steering drain, before messages enter context | `steering_messages` |
-| `PostSteeringSkip` | After tools skipped due to steering | `skipped_tools` |
+| `PostSteeringSkip` | After tools skipped due to steering | `skipped_operators` |
 | `PreMemoryWrite` | Before WriteMemory effect executes | `memory_key`, `memory_value`, `memory_options` |
 
 ### Hook Kinds and Composition
@@ -53,7 +53,7 @@ At each hook point, the registry runs three phases in this order:
 
 2. **Transformers** — Run in registration order. Each transformer receives the
    context as *modified by the previous transformer* (chaining). Accumulated
-   `ModifyToolInput`/`ModifyToolOutput` actions are applied to `working_ctx` so
+   `ModifyDispatchInput`/`ModifyDispatchOutput` actions are applied to `working_ctx` so
    the next transformer sees them. A `Halt` from any transformer escalates
    immediately and short-circuits the entire pipeline (no guardrails run).
    Errors are logged and treated as `Continue`.
@@ -61,10 +61,10 @@ At each hook point, the registry runs three phases in this order:
 3. **Guardrails** — Run in registration order against the **original, unmodified**
    context (not the transformer-modified working context). Policy must be enforced
    against what actually arrived, not what transformers produced. Short-circuit on
-   the first `Halt` or `SkipTool`. Errors are logged and execution continues to
+   the first `Halt` or `SkipDispatch`. Errors are logged and execution continues to
    the next guardrail.
 
-If no phase produced a `Halt` or `SkipTool`, the last transformer modification
+If no phase produced a `Halt` or `SkipDispatch`, the last transformer modification
 (if any) is returned; otherwise `Continue` is returned.
 
 `HookKind` lives in `neuron-hooks` (Layer 1), NOT in `layer0`. The `Hook` trait

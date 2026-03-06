@@ -201,8 +201,8 @@ async fn logging_hook_registers_all_points() {
     let points = hook.points();
     assert!(points.contains(&HookPoint::PreInference));
     assert!(points.contains(&HookPoint::PostInference));
-    assert!(points.contains(&HookPoint::PreToolUse));
-    assert!(points.contains(&HookPoint::PostToolUse));
+    assert!(points.contains(&HookPoint::PreSubDispatch));
+    assert!(points.contains(&HookPoint::PostSubDispatch));
     assert!(points.contains(&HookPoint::ExitCheck));
 }
 
@@ -212,8 +212,8 @@ async fn logging_hook_returns_continue_at_every_point() {
     let all_points = [
         HookPoint::PreInference,
         HookPoint::PostInference,
-        HookPoint::PreToolUse,
-        HookPoint::PostToolUse,
+        HookPoint::PreSubDispatch,
+        HookPoint::PostSubDispatch,
         HookPoint::ExitCheck,
     ];
     for point in all_points {

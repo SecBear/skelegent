@@ -125,7 +125,7 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         metadata.tokens_out = response.usage.output_tokens;
         metadata.cost = response.cost.unwrap_or(Decimal::ZERO);
         metadata.turns_used = 1;
-        metadata.tools_called = vec![];
+        metadata.sub_dispatches = vec![];
         metadata.duration = duration;
 
         // Convert response content to layer0 Content

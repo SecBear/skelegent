@@ -133,9 +133,9 @@ pub enum ToolError {
 The `ReactOperator` uses a `ToolRegistry` internally. When the model responds with a `ToolUse` content block, the operator:
 
 1. Looks up the tool by name in the registry.
-2. Fires `PreToolUse` hooks (which may skip or modify the call).
+2. Fires `PreSubDispatch` hooks (which may skip or modify the call).
 3. Calls `tool.call(input)`.
-4. Fires `PostToolUse` hooks (which may modify the output).
+4. Fires `PostSubDispatch` hooks (which may modify the output).
 5. Backfills the tool result into the conversation context.
 6. Calls the model again with the updated context.
 

@@ -13,7 +13,7 @@ use layer0::hook::{HookAction, HookContext, HookPoint};
 use layer0::id::{AgentId, WorkflowId};
 use layer0::lifecycle::{BudgetEvent, CompactionEvent};
 use layer0::operator::{
-    ExitReason, Operator, OperatorInput, OperatorMetadata, OperatorOutput, ToolCallRecord,
+    ExitReason, Operator, OperatorInput, OperatorMetadata, OperatorOutput, SubDispatchRecord,
 };
 use neuron_hooks::HookRegistry;
 use neuron_tool::{ToolConcurrencyHint, ToolRegistry};
@@ -130,7 +130,7 @@ struct ResolvedConfig {
     max_turns: u32,
     max_cost: Option<Decimal>,
     max_duration: Option<DurationMs>,
-    allowed_tools: Option<Vec<String>>,
+    allowed_operators: Option<Vec<String>>,
     max_tokens: u32,
 }
 
@@ -144,7 +144,7 @@ pub use neuron_turn_kit::{
 struct DefaultDecider;
 impl ConcurrencyDecider for DefaultDecider {
     /// Return the concurrency class for a tool by name.
-    fn concurrency(&self, _tool_name: &str) -> Concurrency {
+    fn concurrency(&self, _operator_name: &str) -> Concurrency {
         Concurrency::Exclusive
     }
 }
@@ -154,8 +154,8 @@ struct MetadataDecider {
     tools: ToolRegistry,
 }
 impl ConcurrencyDecider for MetadataDecider {
-    fn concurrency(&self, tool_name: &str) -> Concurrency {
-        match self.tools.get(tool_name) {
+    fn concurrency(&self, operator_name: &str) -> Concurrency {
+        match self.tools.get(operator_name) {
             Some(tool) => match tool.concurrency_hint() {
                 ToolConcurrencyHint::Shared => Concurrency::Shared,
                 ToolConcurrencyHint::Exclusive => Concurrency::Exclusive,
@@ -324,7 +324,7 @@ impl<P: Provider> ReactOperator<P> {
                 .unwrap_or(self.config.default_max_turns),
             max_cost: tc.and_then(|c| c.max_cost),
             max_duration: tc.and_then(|c| c.max_duration),
-            allowed_tools: tc.and_then(|c| c.allowed_tools.clone()),
+            allowed_operators: tc.and_then(|c| c.allowed_operators.clone()),
             max_tokens: self.config.default_max_tokens,
         }
     }
@@ -343,8 +343,8 @@ impl<P: Provider> ReactOperator<P> {
         // Add effect tool schemas
         schemas.extend(effect_tool_schemas());
 
-        // Filter by allowed_tools if specified
-        if let Some(allowed) = &config.allowed_tools {
+        // Filter by allowed_operators if specified
+        if let Some(allowed) = &config.allowed_operators {
             schemas.retain(|s| allowed.contains(&s.name));
         }
 
@@ -454,7 +454,7 @@ impl<P: Provider> ReactOperator<P> {
         tokens_out: u64,
         cost: Decimal,
         turns_used: u32,
-        tools_called: Vec<ToolCallRecord>,
+        sub_dispatches: Vec<SubDispatchRecord>,
         duration: DurationMs,
     ) -> OperatorMetadata {
         let mut meta = OperatorMetadata::default();
@@ -462,7 +462,7 @@ impl<P: Provider> ReactOperator<P> {
         meta.tokens_out = tokens_out;
         meta.cost = cost;
         meta.turns_used = turns_used;
-        meta.tools_called = tools_called;
+        meta.sub_dispatches = sub_dispatches;
         meta.duration = duration;
         meta
     }
@@ -616,7 +616,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
         let mut total_tokens_out: u64 = 0;
         let mut total_cost = Decimal::ZERO;
         let mut turns_used: u32 = 0;
-        let mut tool_records: Vec<ToolCallRecord> = vec![];
+        let mut dispatch_records: Vec<SubDispatchRecord> = vec![];
         let mut effects: Vec<Effect> = vec![];
         let mut last_content: Vec<ContentPart> = vec![];
         let mut total_tool_calls: u32 = 0;
@@ -645,7 +645,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         total_tokens_out,
                         total_cost,
                         turns_used,
-                        tool_records,
+                        dispatch_records,
                         DurationMs::from(start.elapsed()),
                     ),
                     effects,
@@ -702,7 +702,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         total_tokens_out + response.usage.output_tokens,
                         total_cost + response.cost.unwrap_or(Decimal::ZERO),
                         turns_used,
-                        tool_records,
+                        dispatch_records,
                         DurationMs::from(start.elapsed()),
                     ),
                     effects,
@@ -734,7 +734,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             total_tokens_out,
                             total_cost,
                             turns_used,
-                            tool_records,
+                            dispatch_records,
                             DurationMs::from(start.elapsed()),
                         ),
                         effects,
@@ -749,7 +749,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             total_tokens_out,
                             total_cost,
                             turns_used,
-                            tool_records,
+                            dispatch_records,
                             DurationMs::from(start.elapsed()),
                         ),
                         effects,
@@ -767,7 +767,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 content: response.content.clone(),
             }));
 
-            let mut tool_results: Vec<ContentPart> = Vec::new();
+            let mut dispatch_results: Vec<ContentPart> = Vec::new();
             // Use planner to decide batches. Build (id,name,input) vector first.
             let planned = {
                 let calls: Vec<(String, String, serde_json::Value)> = response
@@ -805,12 +805,12 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 let skipped_names: Vec<String> =
                                     call_group.iter().map(|(_, n, _)| n.clone()).collect();
                                 for (id, name, _input) in call_group.into_iter() {
-                                    tool_results.push(ContentPart::ToolResult {
+                                    dispatch_results.push(ContentPart::ToolResult {
                                         tool_use_id: id,
                                         content: "Skipped due to steering".into(),
                                         is_error: false,
                                     });
-                                    tool_records.push(ToolCallRecord::new(
+                                    dispatch_records.push(SubDispatchRecord::new(
                                         &name,
                                         DurationMs::ZERO,
                                         false,
@@ -825,7 +825,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         turns_used,
                                         DurationMs::from(start.elapsed()),
                                     );
-                                    skip_ctx.skipped_tools = Some(skipped_names);
+                                    skip_ctx.skipped_operators = Some(skipped_names);
                                     self.hooks.dispatch(&skip_ctx).await;
                                 }
                                 _steered = true;
@@ -858,12 +858,12 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     for (rid, rname, _rinput) in
                                         call_group.iter().skip(idx).cloned()
                                     {
-                                        tool_results.push(ContentPart::ToolResult {
+                                        dispatch_results.push(ContentPart::ToolResult {
                                             tool_use_id: rid,
                                             content: "Skipped due to steering".into(),
                                             is_error: false,
                                         });
-                                        tool_records.push(ToolCallRecord::new(
+                                        dispatch_records.push(SubDispatchRecord::new(
                                             &rname,
                                             DurationMs::ZERO,
                                             false,
@@ -878,24 +878,24 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                             turns_used,
                                             DurationMs::from(start.elapsed()),
                                         );
-                                        skip_ctx.skipped_tools = Some(skipped_names);
+                                        skip_ctx.skipped_operators = Some(skipped_names);
                                         self.hooks.dispatch(&skip_ctx).await;
                                     }
                                     _steered = true;
                                 }
                             }
-                            let (id, name, tool_input) = call_group[idx].clone();
+                            let (id, name, dispatch_input) = call_group[idx].clone();
                             // Effects handled immediately
                             if EFFECT_TOOL_NAMES.contains(&name.as_str()) {
-                                if let Some(effect) = self.try_as_effect(&name, &tool_input) {
+                                if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
                                     effects.push(effect);
                                 }
-                                tool_results.push(ContentPart::ToolResult {
+                                dispatch_results.push(ContentPart::ToolResult {
                                     tool_use_id: id,
                                     content: format!("{name} effect recorded."),
                                     is_error: false,
                                 });
-                                tool_records.push(ToolCallRecord::new(
+                                dispatch_records.push(SubDispatchRecord::new(
                                     &name,
                                     DurationMs::ZERO,
                                     true,
@@ -906,7 +906,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     use std::hash::{Hash, Hasher};
                                     let mut hasher =
                                         std::collections::hash_map::DefaultHasher::new();
-                                    tool_input.to_string().hash(&mut hasher);
+                                    dispatch_input.to_string().hash(&mut hasher);
                                     let cap = self
                                         .config
                                         .max_repeat_calls
@@ -919,11 +919,11 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     }
                                 }
                             } else {
-                                // Hook: PreToolUse
-                                let mut actual_input = tool_input.clone();
-                                let mut hook_ctx = HookContext::new(HookPoint::PreToolUse);
-                                hook_ctx.tool_name = Some(name.clone());
-                                hook_ctx.tool_input = Some(tool_input.clone());
+                                // Hook: PreSubDispatch
+                                let mut actual_input = dispatch_input.clone();
+                                let mut hook_ctx = HookContext::new(HookPoint::PreSubDispatch);
+                                hook_ctx.operator_name = Some(name.clone());
+                                hook_ctx.operator_input = Some(dispatch_input.clone());
                                 hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
                                 hook_ctx.cost = total_cost;
                                 hook_ctx.turns_completed = turns_used;
@@ -938,26 +938,26 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                                 total_tokens_out,
                                                 total_cost,
                                                 turns_used,
-                                                tool_records,
+                                                dispatch_records,
                                                 DurationMs::from(start.elapsed()),
                                             ),
                                             effects,
                                         ));
                                     }
-                                    HookAction::SkipTool { reason } => {
-                                        tool_results.push(ContentPart::ToolResult {
+                                    HookAction::SkipDispatch { reason } => {
+                                        dispatch_results.push(ContentPart::ToolResult {
                                             tool_use_id: id,
                                             content: format!("Skipped: {reason}"),
                                             is_error: false,
                                         });
-                                        tool_records.push(ToolCallRecord::new(
+                                        dispatch_records.push(SubDispatchRecord::new(
                                             &name,
                                             DurationMs::ZERO,
                                             false,
                                         ));
                                         continue;
                                     }
-                                    HookAction::ModifyToolInput { new_input } => {
+                                    HookAction::ModifyDispatchInput { new_input } => {
                                         actual_input = new_input;
                                     }
                                     HookAction::Continue => {}
@@ -998,10 +998,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                             {
                                                 for ch in &chunks {
                                                     let mut uctx = HookContext::new(
-                                                        HookPoint::ToolExecutionUpdate,
+                                                        HookPoint::SubDispatchUpdate,
                                                     );
-                                                    uctx.tool_name = Some(name.clone());
-                                                    uctx.tool_chunk = Some(ch.clone());
+                                                    uctx.operator_name = Some(name.clone());
+                                                    uctx.operator_chunk = Some(ch.clone());
                                                     uctx.tokens_used =
                                                         total_tokens_in + total_tokens_out;
                                                     uctx.cost = total_cost;
@@ -1058,10 +1058,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         DurationMs::from(tool_start.elapsed()),
                                     ),
                                 };
-                                // PostToolUse hook
-                                let mut hook_ctx = HookContext::new(HookPoint::PostToolUse);
-                                hook_ctx.tool_name = Some(name.clone());
-                                hook_ctx.tool_result = Some(result_content.clone());
+                                // PostSubDispatch hook
+                                let mut hook_ctx = HookContext::new(HookPoint::PostSubDispatch);
+                                hook_ctx.operator_name = Some(name.clone());
+                                hook_ctx.operator_result = Some(result_content.clone());
                                 hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
                                 hook_ctx.cost = total_cost;
                                 hook_ctx.turns_completed = turns_used;
@@ -1076,18 +1076,18 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                                 total_tokens_out,
                                                 total_cost,
                                                 turns_used,
-                                                tool_records,
+                                                dispatch_records,
                                                 DurationMs::from(start.elapsed()),
                                             ),
                                             effects,
                                         ));
                                     }
-                                    HookAction::ModifyToolOutput { new_output } => {
+                                    HookAction::ModifyDispatchOutput { new_output } => {
                                         result_content = new_output.to_string();
                                     }
                                     _ => {}
                                 }
-                                tool_results.push(ContentPart::ToolResult {
+                                dispatch_results.push(ContentPart::ToolResult {
                                     tool_use_id: id,
                                     content: result_content,
                                     is_error,
@@ -1110,7 +1110,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         recent_calls.pop_front();
                                     }
                                 }
-                                tool_records.push(ToolCallRecord::new(name, duration, success));
+                                dispatch_records.push(SubDispatchRecord::new(name, duration, success));
                             }
                             // Mid-batch steering poll — skip remaining tools in this batch
                             {
@@ -1136,12 +1136,12 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         for (rid, rname, _rinput) in
                                             call_group.iter().skip(idx + 1).cloned()
                                         {
-                                            tool_results.push(ContentPart::ToolResult {
+                                            dispatch_results.push(ContentPart::ToolResult {
                                                 tool_use_id: rid,
                                                 content: "Skipped due to steering".into(),
                                                 is_error: false,
                                             });
-                                            tool_records.push(ToolCallRecord::new(
+                                            dispatch_records.push(SubDispatchRecord::new(
                                                 &rname,
                                                 DurationMs::ZERO,
                                                 false,
@@ -1156,7 +1156,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                                 turns_used,
                                                 DurationMs::from(start.elapsed()),
                                             );
-                                            skip_ctx.skipped_tools = Some(skipped_names);
+                                            skip_ctx.skipped_operators = Some(skipped_names);
                                             self.hooks.dispatch(&skip_ctx).await;
                                         }
                                         break 'batches;
@@ -1183,7 +1183,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             }
                         }
                     }
-                    BatchItem::Exclusive((id, name, tool_input)) => {
+                    BatchItem::Exclusive((id, name, dispatch_input)) => {
                         // Pre-exclusive steering poll
                         {
                             let (injected, ctx_cmds) = self
@@ -1199,12 +1199,12 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             if !injected.is_empty() {
                                 messages.extend(injected.into_iter().map(AnnotatedMessage::from));
                                 let skipped_names = vec![name.clone()];
-                                tool_results.push(ContentPart::ToolResult {
+                                dispatch_results.push(ContentPart::ToolResult {
                                     tool_use_id: id,
                                     content: "Skipped due to steering".into(),
                                     is_error: false,
                                 });
-                                tool_records.push(ToolCallRecord::new(
+                                dispatch_records.push(SubDispatchRecord::new(
                                     &name,
                                     DurationMs::ZERO,
                                     false,
@@ -1217,28 +1217,28 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     turns_used,
                                     DurationMs::from(start.elapsed()),
                                 );
-                                skip_ctx.skipped_tools = Some(skipped_names);
+                                skip_ctx.skipped_operators = Some(skipped_names);
                                 self.hooks.dispatch(&skip_ctx).await;
                                 _steered = true;
                                 break 'batches;
                             }
                         }
                         if EFFECT_TOOL_NAMES.contains(&name.as_str()) {
-                            if let Some(effect) = self.try_as_effect(&name, &tool_input) {
+                            if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
                                 effects.push(effect);
                             }
-                            tool_results.push(ContentPart::ToolResult {
+                            dispatch_results.push(ContentPart::ToolResult {
                                 tool_use_id: id,
                                 content: format!("{name} effect recorded."),
                                 is_error: false,
                             });
-                            tool_records.push(ToolCallRecord::new(&name, DurationMs::ZERO, true));
+                            dispatch_records.push(SubDispatchRecord::new(&name, DurationMs::ZERO, true));
                             // track effect tool call
                             total_tool_calls += 1;
                             {
                                 use std::hash::{Hash, Hasher};
                                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                                tool_input.to_string().hash(&mut hasher);
+                                dispatch_input.to_string().hash(&mut hasher);
                                 let cap = self
                                     .config
                                     .max_repeat_calls
@@ -1252,10 +1252,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             }
                             continue;
                         }
-                        let mut actual_input = tool_input.clone();
-                        let mut hook_ctx = HookContext::new(HookPoint::PreToolUse);
-                        hook_ctx.tool_name = Some(name.clone());
-                        hook_ctx.tool_input = Some(tool_input.clone());
+                        let mut actual_input = dispatch_input.clone();
+                        let mut hook_ctx = HookContext::new(HookPoint::PreSubDispatch);
+                        hook_ctx.operator_name = Some(name.clone());
+                        hook_ctx.operator_input = Some(dispatch_input.clone());
                         hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
                         hook_ctx.cost = total_cost;
                         hook_ctx.turns_completed = turns_used;
@@ -1270,26 +1270,26 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         total_tokens_out,
                                         total_cost,
                                         turns_used,
-                                        tool_records,
+                                        dispatch_records,
                                         DurationMs::from(start.elapsed()),
                                     ),
                                     effects,
                                 ));
                             }
-                            HookAction::SkipTool { reason } => {
-                                tool_results.push(ContentPart::ToolResult {
+                            HookAction::SkipDispatch { reason } => {
+                                dispatch_results.push(ContentPart::ToolResult {
                                     tool_use_id: id,
                                     content: format!("Skipped: {reason}"),
                                     is_error: false,
                                 });
-                                tool_records.push(ToolCallRecord::new(
+                                dispatch_records.push(SubDispatchRecord::new(
                                     &name,
                                     DurationMs::ZERO,
                                     false,
                                 ));
                                 continue;
                             }
-                            HookAction::ModifyToolInput { new_input } => {
+                            HookAction::ModifyDispatchInput { new_input } => {
                                 actual_input = new_input;
                             }
                             HookAction::Continue => {}
@@ -1323,9 +1323,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     {
                                         for ch in &chunks {
                                             let mut uctx =
-                                                HookContext::new(HookPoint::ToolExecutionUpdate);
-                                            uctx.tool_name = Some(name.clone());
-                                            uctx.tool_chunk = Some(ch.clone());
+                                                HookContext::new(HookPoint::SubDispatchUpdate);
+                                            uctx.operator_name = Some(name.clone());
+                                            uctx.operator_chunk = Some(ch.clone());
                                             uctx.tokens_used = total_tokens_in + total_tokens_out;
                                             uctx.cost = total_cost;
                                             uctx.turns_completed = turns_used;
@@ -1366,9 +1366,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 DurationMs::from(tool_start.elapsed()),
                             ),
                         };
-                        let mut hook_ctx = HookContext::new(HookPoint::PostToolUse);
-                        hook_ctx.tool_name = Some(name.clone());
-                        hook_ctx.tool_result = Some(result_content.clone());
+                        let mut hook_ctx = HookContext::new(HookPoint::PostSubDispatch);
+                        hook_ctx.operator_name = Some(name.clone());
+                        hook_ctx.operator_result = Some(result_content.clone());
                         hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
                         hook_ctx.cost = total_cost;
                         hook_ctx.turns_completed = turns_used;
@@ -1383,18 +1383,18 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         total_tokens_out,
                                         total_cost,
                                         turns_used,
-                                        tool_records,
+                                        dispatch_records,
                                         DurationMs::from(start.elapsed()),
                                     ),
                                     effects,
                                 ));
                             }
-                            HookAction::ModifyToolOutput { new_output } => {
+                            HookAction::ModifyDispatchOutput { new_output } => {
                                 result_content = new_output.to_string();
                             }
                             _ => {}
                         }
-                        tool_results.push(ContentPart::ToolResult {
+                        dispatch_results.push(ContentPart::ToolResult {
                             tool_use_id: id,
                             content: result_content,
                             is_error,
@@ -1416,7 +1416,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 recent_calls.pop_front();
                             }
                         }
-                        tool_records.push(ToolCallRecord::new(name, tool_duration, success));
+                        dispatch_records.push(SubDispatchRecord::new(name, tool_duration, success));
                         // Post-exclusive steering poll
                         {
                             let (injected, ctx_cmds) = self
@@ -1442,7 +1442,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             // Add tool results as user message
             messages.push(AnnotatedMessage::from(ProviderMessage {
                 role: Role::User,
-                content: tool_results,
+                content: dispatch_results,
             }));
             *self
                 .current_context
@@ -1467,7 +1467,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         total_tokens_out,
                         total_cost,
                         turns_used,
-                        tool_records,
+                        dispatch_records,
                         DurationMs::from(start.elapsed()),
                     ),
                     effects,
@@ -1508,7 +1508,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         total_tokens_out,
                         total_cost,
                         turns_used,
-                        tool_records,
+                        dispatch_records,
                         DurationMs::from(start.elapsed()),
                     ),
                     effects,
@@ -1537,7 +1537,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             total_tokens_out,
                             total_cost,
                             turns_used,
-                            tool_records,
+                            dispatch_records,
                             DurationMs::from(start.elapsed()),
                         ),
                         effects,
@@ -1554,7 +1554,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         total_tokens_out,
                         total_cost,
                         turns_used,
-                        tool_records,
+                        dispatch_records,
                         DurationMs::from(start.elapsed()),
                     ),
                     effects,
@@ -1572,7 +1572,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         total_tokens_out,
                         total_cost,
                         turns_used,
-                        tool_records,
+                        dispatch_records,
                         DurationMs::from(start.elapsed()),
                     ),
                     effects,
@@ -1611,7 +1611,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         total_tokens_out,
                         total_cost,
                         turns_used,
-                        tool_records,
+                        dispatch_records,
                         DurationMs::from(start.elapsed()),
                     ),
                     effects,
@@ -1876,13 +1876,13 @@ mod tests {
 
     fn tool_use_response(
         tool_id: &str,
-        tool_name: &str,
+        operator_name: &str,
         input: serde_json::Value,
     ) -> ProviderResponse {
         ProviderResponse {
             content: vec![ContentPart::ToolUse {
                 id: tool_id.to_string(),
-                name: tool_name.to_string(),
+                name: operator_name.to_string(),
                 input,
             }],
             stop_reason: StopReason::ToolUse,
@@ -1954,8 +1954,8 @@ mod tests {
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.metadata.turns_used, 2);
-        assert_eq!(output.metadata.tools_called.len(), 1);
-        assert_eq!(output.metadata.tools_called[0].name, "echo");
+        assert_eq!(output.metadata.sub_dispatches.len(), 1);
+        assert_eq!(output.metadata.sub_dispatches[0].name, "echo");
     }
 
     #[tokio::test]
@@ -1970,7 +1970,7 @@ mod tests {
         let output = op.execute(simple_input("Use nonexistent")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
         // The tool call was recorded
-        assert_eq!(output.metadata.tools_called.len(), 1);
+        assert_eq!(output.metadata.sub_dispatches.len(), 1);
     }
 
     #[tokio::test]
@@ -2465,8 +2465,8 @@ mod tests {
 
     struct SharedOnlyDecider;
     impl ConcurrencyDecider for SharedOnlyDecider {
-        fn concurrency(&self, tool_name: &str) -> Concurrency {
-            if tool_name == "echo" {
+        fn concurrency(&self, operator_name: &str) -> Concurrency {
+            if operator_name == "echo" {
                 Concurrency::Shared
             } else {
                 Concurrency::Exclusive
@@ -2527,9 +2527,9 @@ mod tests {
         // Only first tool executed
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         assert_eq!(output.metadata.turns_used, 2);
-        assert_eq!(output.metadata.tools_called.len(), 2);
-        assert_eq!(output.metadata.tools_called[0].name, "echo");
-        assert_eq!(output.metadata.tools_called[1].name, "echo");
+        assert_eq!(output.metadata.sub_dispatches.len(), 2);
+        assert_eq!(output.metadata.sub_dispatches[0].name, "echo");
+        assert_eq!(output.metadata.sub_dispatches[1].name, "echo");
     }
     #[tokio::test]
     async fn steering_skips_before_exclusive() {
@@ -2633,7 +2633,7 @@ mod tests {
         let output = output.await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(hits.load(Ordering::SeqCst), 2);
-        assert_eq!(output.metadata.tools_called.len(), 2);
+        assert_eq!(output.metadata.sub_dispatches.len(), 2);
         assert_eq!(output.metadata.turns_used, 2);
     }
 
@@ -2696,13 +2696,13 @@ mod tests {
             &self,
             ctx: &HookContext,
         ) -> Result<HookAction, layer0::error::HookError> {
-            if ctx.point == HookPoint::ToolExecutionUpdate {
-                if let Some(c) = &ctx.tool_chunk {
+            if ctx.point == HookPoint::SubDispatchUpdate {
+                if let Some(c) = &ctx.operator_chunk {
                     self.chunks.lock().unwrap().push(c.clone());
                 }
                 Ok(HookAction::Continue)
-            } else if ctx.point == HookPoint::PostToolUse {
-                if let Some(r) = &ctx.tool_result {
+            } else if ctx.point == HookPoint::PostSubDispatch {
+                if let Some(r) = &ctx.operator_result {
                     self.finals.lock().unwrap().push(r.clone());
                 }
                 Ok(HookAction::Continue)
@@ -2726,7 +2726,7 @@ mod tests {
         let finals = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let mut hooks = HookRegistry::new();
         hooks.add_observer(Arc::new(CollectHook {
-            points: vec![HookPoint::ToolExecutionUpdate, HookPoint::PostToolUse],
+            points: vec![HookPoint::SubDispatchUpdate, HookPoint::PostSubDispatch],
             chunks: chunks.clone(),
             finals: finals.clone(),
         }));
@@ -2821,7 +2821,7 @@ mod tests {
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(hits.load(Ordering::SeqCst), 2);
-        assert_eq!(output.metadata.tools_called.len(), 2);
+        assert_eq!(output.metadata.sub_dispatches.len(), 2);
         assert_eq!(output.metadata.turns_used, 2);
     }
     // ── mock structures ──────────────────────────────────────────────
@@ -2859,7 +2859,7 @@ mod tests {
             &self,
             ctx: &HookContext,
         ) -> Result<HookAction, layer0::error::HookError> {
-            if let Some(tools) = &ctx.skipped_tools {
+            if let Some(tools) = &ctx.skipped_operators {
                 let mut v = self.recorded.lock().unwrap();
                 v.extend_from_slice(tools);
             }
@@ -2996,7 +2996,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn steering_observer_sees_skipped_tools() {
+    async fn steering_observer_sees_skipped_operators() {
         // Observer at PostSteeringSkip receives the skipped tool names.
         let first = ProviderResponse {
             content: vec![ContentPart::ToolUse {
@@ -3150,7 +3150,7 @@ mod tests {
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::BudgetExhausted);
         // 3 tool calls were made
-        assert_eq!(output.metadata.tools_called.len(), 3);
+        assert_eq!(output.metadata.sub_dispatches.len(), 3);
     }
 
     #[tokio::test]
@@ -3235,7 +3235,7 @@ mod tests {
         );
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
-        assert_eq!(output.metadata.tools_called.len(), 2);
+        assert_eq!(output.metadata.sub_dispatches.len(), 2);
     }
 
     // ── tests ─────────────────────────────────────────────────────────

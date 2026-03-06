@@ -57,7 +57,7 @@ use layer0::content::{Content, ContentBlock};
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::error::OperatorError;
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, ToolCallRecord};
+use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, SubDispatchRecord};
 use neuron_tool::ToolRegistry;
 
 /// A minimal operator that batches tool calls between barriers.
@@ -101,7 +101,7 @@ impl Operator for BarrierOperator {
                                 content,
                                 is_error: false,
                             });
-                            metadata.tools_called.push(ToolCallRecord::new(
+                            metadata.sub_dispatches.push(SubDispatchRecord::new(
                                 name,
                                 DurationMs::from_millis(start.elapsed().as_millis() as u64),
                                 true,
@@ -113,7 +113,7 @@ impl Operator for BarrierOperator {
                                 content: e.to_string(),
                                 is_error: true,
                             });
-                            metadata.tools_called.push(ToolCallRecord::new(
+                            metadata.sub_dispatches.push(SubDispatchRecord::new(
                                 name,
                                 DurationMs::from_millis(start.elapsed().as_millis() as u64),
                                 false,
@@ -128,8 +128,8 @@ impl Operator for BarrierOperator {
                         is_error: true,
                     });
                     metadata
-                        .tools_called
-                        .push(ToolCallRecord::new(name, DurationMs::ZERO, false));
+                        .sub_dispatches
+                        .push(SubDispatchRecord::new(name, DurationMs::ZERO, false));
                 }
             }
             // Inject a steering message after each batch flush
