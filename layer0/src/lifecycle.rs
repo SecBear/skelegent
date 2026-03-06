@@ -52,28 +52,30 @@ pub enum BudgetEvent {
         /// The budget decision.
         action: BudgetDecision,
     },
-    /// Emitted by operator when tool call count approaches the configured limit.
+    /// Emitted by operator when sub-dispatch count approaches the configured limit.
     StepLimitApproaching {
         /// The agent approaching its step limit.
         agent: AgentId,
-        /// Current tool call count.
+        /// Current sub-dispatch count.
         current: u32,
-        /// Configured maximum tool calls.
+        /// Configured maximum sub-dispatches.
         max: u32,
     },
     /// Emitted by operator when the step limit is reached.
     StepLimitReached {
         /// The agent that hit its step limit.
         agent: AgentId,
-        /// Total tool calls executed.
-        total_tool_calls: u32,
+        /// Total sub-dispatches executed.
+        #[serde(alias = "total_tool_calls")]
+        total_sub_dispatches: u32,
     },
-    /// Emitted by operator when identical consecutive tool calls exceed the loop limit.
+    /// Emitted by operator when identical consecutive sub-dispatches exceed the loop limit.
     LoopDetected {
         /// The agent stuck in a loop.
         agent: AgentId,
-        /// Name of the tool being repeated.
-        tool_name: String,
+        /// Name of the operator being repeated.
+        #[serde(alias = "tool_name")]
+        operator_name: String,
         /// Number of consecutive identical calls detected.
         consecutive_count: u32,
         /// Configured maximum consecutive calls.

@@ -1371,7 +1371,7 @@ fn budget_event_step_limit_approaching_round_trip() {
 fn budget_event_step_limit_reached_round_trip() {
     let e = BudgetEvent::StepLimitReached {
         agent: AgentId::new("a1"),
-        total_tool_calls: 10,
+        total_sub_dispatches: 10,
     };
     let json = serde_json::to_string(&e).unwrap();
     let back: BudgetEvent = serde_json::from_str(&json).unwrap();
@@ -1383,7 +1383,7 @@ fn budget_event_step_limit_reached_round_trip() {
 fn budget_event_loop_detected_round_trip() {
     let e = BudgetEvent::LoopDetected {
         agent: AgentId::new("a1"),
-        tool_name: "search".to_string(),
+        operator_name: "search".to_string(),
         consecutive_count: 3,
         max: 3,
     };

@@ -619,7 +619,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
         let mut dispatch_records: Vec<SubDispatchRecord> = vec![];
         let mut effects: Vec<Effect> = vec![];
         let mut last_content: Vec<ContentPart> = vec![];
-        let mut total_tool_calls: u32 = 0;
+        let mut total_sub_dispatches: u32 = 0;
         let mut recent_calls: std::collections::VecDeque<(String, u64)> =
             std::collections::VecDeque::new();
 
@@ -901,7 +901,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     true,
                                 ));
                                 // track effect tool call
-                                total_tool_calls += 1;
+                                total_sub_dispatches += 1;
                                 {
                                     use std::hash::{Hash, Hasher};
                                     let mut hasher =
@@ -1093,7 +1093,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     is_error,
                                 });
                                 // track regular tool call
-                                total_tool_calls += 1;
+                                total_sub_dispatches += 1;
                                 {
                                     use std::hash::{Hash, Hasher};
                                     let mut hasher =
@@ -1234,7 +1234,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             });
                             dispatch_records.push(SubDispatchRecord::new(&name, DurationMs::ZERO, true));
                             // track effect tool call
-                            total_tool_calls += 1;
+                            total_sub_dispatches += 1;
                             {
                                 use std::hash::{Hash, Hasher};
                                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1400,7 +1400,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             is_error,
                         });
                         // track tool call
-                        total_tool_calls += 1;
+                        total_sub_dispatches += 1;
                         {
                             use std::hash::{Hash, Hasher};
                             let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1478,25 +1478,25 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             // 9a. Step/loop limits
             if let Some(max_tc) = self.config.max_tool_calls {
                 let threshold = (max_tc as f32 * 0.80) as u32;
-                if total_tool_calls >= threshold
-                    && total_tool_calls < max_tc
+                if total_sub_dispatches >= threshold
+                    && total_sub_dispatches < max_tc
                     && let Some(ref sink) = self.budget_sink
                 {
                     sink.on_budget_event(BudgetEvent::StepLimitApproaching {
                         agent: AgentId::new("react"),
-                        current: total_tool_calls,
+                        current: total_sub_dispatches,
                         max: max_tc,
                     });
                 }
             }
 
             if let Some(max_tc) = self.config.max_tool_calls
-                && total_tool_calls >= max_tc
+                && total_sub_dispatches >= max_tc
             {
                 if let Some(ref sink) = self.budget_sink {
                     sink.on_budget_event(BudgetEvent::StepLimitReached {
                         agent: AgentId::new("react"),
-                        total_tool_calls,
+                        total_sub_dispatches,
                     });
                 }
 
@@ -1523,7 +1523,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                     if let Some(ref sink) = self.budget_sink {
                         sink.on_budget_event(BudgetEvent::LoopDetected {
                             agent: AgentId::new("react"),
-                            tool_name: first.as_ref().map(|(n, _)| n.clone()).unwrap_or_default(),
+                            operator_name: first.as_ref().map(|(n, _)| n.clone()).unwrap_or_default(),
                             consecutive_count: recent_calls.len() as u32,
                             max: max_rep,
                         });
