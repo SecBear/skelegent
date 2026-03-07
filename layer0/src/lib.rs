@@ -79,8 +79,8 @@ pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, HookError, OperatorError, OrchError, StateError};
 pub use hook::{Hook, HookAction, HookContext, HookPoint};
 pub use middleware::{
-    DispatchMiddleware, DispatchNext, ExecMiddleware, ExecNext, StoreMiddleware, StoreReadNext,
-    StoreWriteNext,
+    DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
+    StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,
 };
 pub use id::{AgentId, ScopeId, SessionId, WorkflowId};
 pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy, ObservableEvent};
