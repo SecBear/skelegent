@@ -570,6 +570,199 @@ impl<M: Clone + fmt::Debug> AgentContext<M> {
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Context — concrete replacement for AgentContext<M>
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// A concrete, watcher-guarded container for an agent's message history.
+///
+/// `Context` replaces the generic `AgentContext<M>` with a concrete type
+/// using [`Message`] directly. Every structural mutation routes through
+/// registered [`ContextWatcher`]s before taking effect.
+///
+/// # Compaction
+///
+/// Three compaction strategies are available as methods:
+/// - [`compact_truncate`](Context::compact_truncate) — keep the last N messages
+/// - [`compact_by_policy`](Context::compact_by_policy) — remove Normal, keep Pinned
+/// - [`compact_with`](Context::compact_with) — caller-supplied closure
+pub struct Context {
+    agent_id: AgentId,
+    messages: Vec<Message>,
+    watchers: Vec<Arc<dyn ContextWatcher>>,
+}
+
+impl Context {
+    /// Create an empty context for the given agent.
+    pub fn new(agent_id: AgentId) -> Self {
+        Self {
+            agent_id,
+            messages: Vec::new(),
+            watchers: Vec::new(),
+        }
+    }
+
+    /// Register a watcher. Watchers are invoked in registration order.
+    pub fn add_watcher(&mut self, watcher: Arc<dyn ContextWatcher>) {
+        self.watchers.push(watcher);
+    }
+
+    /// Read-only slice of all messages, in order.
+    pub fn messages(&self) -> &[Message] {
+        &self.messages
+    }
+
+    /// Number of messages currently in the context.
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Returns `true` if there are no messages.
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
+    /// The agent this context belongs to.
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
+    }
+
+    /// Rough token estimate for the entire context.
+    pub fn estimated_tokens(&self) -> usize {
+        self.messages.iter().map(|m| m.estimated_tokens()).sum()
+    }
+
+    /// Push a message to the end of the context.
+    ///
+    /// Calls `on_inject` on all registered watchers. Returns
+    /// [`ContextError::Rejected`] if any watcher rejects.
+    pub fn push(&mut self, msg: Message) -> Result<(), ContextError> {
+        for watcher in &self.watchers {
+            match watcher.on_inject(&msg, Position::Back) {
+                WatcherVerdict::Allow => {}
+                WatcherVerdict::Reject { reason } => {
+                    return Err(ContextError::Rejected { reason });
+                }
+            }
+        }
+        self.messages.push(msg);
+        Ok(())
+    }
+
+    /// Insert a message at the given position.
+    ///
+    /// Calls `on_inject` on all registered watchers. Returns
+    /// [`ContextError::Rejected`] if any watcher rejects, or
+    /// [`ContextError::OutOfBounds`] if the index exceeds the current length.
+    pub fn insert(&mut self, msg: Message, pos: Position) -> Result<(), ContextError> {
+        for watcher in &self.watchers {
+            match watcher.on_inject(&msg, pos) {
+                WatcherVerdict::Allow => {}
+                WatcherVerdict::Reject { reason } => {
+                    return Err(ContextError::Rejected { reason });
+                }
+            }
+        }
+        match pos {
+            Position::Back => self.messages.push(msg),
+            Position::Front => self.messages.insert(0, msg),
+            Position::At(idx) => {
+                if idx > self.messages.len() {
+                    return Err(ContextError::OutOfBounds {
+                        index: idx,
+                        len: self.messages.len(),
+                    });
+                }
+                self.messages.insert(idx, msg);
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep the last `keep` messages, returning the removed ones.
+    ///
+    /// Fires compact watchers. Does not respect compaction policy —
+    /// use [`compact_by_policy`](Context::compact_by_policy) for that.
+    pub fn compact_truncate(&mut self, keep: usize) -> Vec<Message> {
+        if keep >= self.messages.len() {
+            return Vec::new();
+        }
+        let old_count = self.messages.len();
+        for watcher in &self.watchers {
+            watcher.on_pre_compact(old_count);
+        }
+        let split = self.messages.len() - keep;
+        let removed: Vec<Message> = self.messages.drain(..split).collect();
+        for watcher in &self.watchers {
+            watcher.on_post_compact(removed.len(), self.messages.len());
+        }
+        removed
+    }
+
+    /// Remove all messages with `CompactionPolicy::Normal`, keep `Pinned`.
+    ///
+    /// Returns the removed messages. Fires compact watchers.
+    pub fn compact_by_policy(&mut self) -> Vec<Message> {
+        let old_count = self.messages.len();
+        for watcher in &self.watchers {
+            watcher.on_pre_compact(old_count);
+        }
+        let mut kept = Vec::new();
+        let mut removed = Vec::new();
+        for msg in self.messages.drain(..) {
+            if matches!(msg.meta.policy, CompactionPolicy::Pinned) {
+                kept.push(msg);
+            } else {
+                removed.push(msg);
+            }
+        }
+        self.messages = kept;
+        for watcher in &self.watchers {
+            watcher.on_post_compact(removed.len(), self.messages.len());
+        }
+        removed
+    }
+
+    /// Compact using a caller-supplied closure.
+    ///
+    /// The closure receives `&[Message]` and returns the messages to keep.
+    /// Returns the removed messages. Fires compact watchers.
+    pub fn compact_with(&mut self, f: impl FnOnce(&[Message]) -> Vec<Message>) -> Vec<Message> {
+        let old_count = self.messages.len();
+        for watcher in &self.watchers {
+            watcher.on_pre_compact(old_count);
+        }
+        let new_messages = f(&self.messages);
+        let old = std::mem::replace(&mut self.messages, new_messages);
+        // Determine removed: old messages not in new set
+        let removed_count = old.len().saturating_sub(self.messages.len());
+        let removed = old;
+        for watcher in &self.watchers {
+            watcher.on_post_compact(removed_count, self.messages.len());
+        }
+        removed
+    }
+
+    /// Direct mutable access to the underlying message vector.
+    ///
+    /// **Bypasses all watcher checks.**
+    pub fn messages_mut(&mut self) -> &mut Vec<Message> {
+        &mut self.messages
+    }
+
+    /// Build a read-only snapshot for introspection or logging.
+    pub fn snapshot(&self) -> ContextSnapshot {
+        let estimated_tokens = self.estimated_tokens();
+        ContextSnapshot {
+            message_count: self.messages.len(),
+            message_metas: self.messages.iter().map(|m| m.meta.clone()).collect(),
+            has_system: self.messages.iter().any(|m| matches!(m.role, Role::System)),
+            agent_id: self.agent_id.clone(),
+            estimated_tokens,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -873,5 +1066,92 @@ mod tests {
 
         let msg = Message::new(Role::User, Content::text("hello world"));
         assert_eq!(msg.text_content(), "hello world");
+    }
+
+    // --- Context tests (Phase 2) ---
+
+    #[test]
+    fn context_push_and_read() {
+        use crate::content::Content;
+
+        let mut ctx = Context::new(AgentId::from("agent-1"));
+        ctx.push(Message::new(Role::User, Content::text("hello"))).unwrap();
+        ctx.push(Message::new(Role::Assistant, Content::text("hi"))).unwrap();
+        assert_eq!(ctx.len(), 2);
+        assert!(matches!(ctx.messages()[0].role, Role::User));
+        assert!(matches!(ctx.messages()[1].role, Role::Assistant));
+    }
+
+    #[test]
+    fn context_compact_truncate() {
+        use crate::content::Content;
+
+        let mut ctx = Context::new(AgentId::from("a"));
+        for i in 0..10 {
+            ctx.push(Message::new(Role::User, Content::text(format!("msg {}", i)))).unwrap();
+        }
+        let removed = ctx.compact_truncate(3);
+        assert_eq!(removed.len(), 7);
+        assert_eq!(ctx.len(), 3);
+    }
+
+    #[test]
+    fn context_compact_by_policy_preserves_pinned() {
+        use crate::content::Content;
+
+        let mut ctx = Context::new(AgentId::from("a"));
+        ctx.push(Message::pinned(Role::System, Content::text("you are helpful"))).unwrap();
+        for i in 0..5 {
+            ctx.push(Message::new(Role::User, Content::text(format!("msg {}", i)))).unwrap();
+        }
+        let removed = ctx.compact_by_policy();
+        assert_eq!(ctx.len(), 1);
+        assert!(matches!(ctx.messages()[0].role, Role::System));
+        assert_eq!(removed.len(), 5);
+    }
+
+    #[test]
+    fn context_compact_with_closure() {
+        use crate::content::Content;
+
+        let mut ctx = Context::new(AgentId::from("a"));
+        for i in 0..6 {
+            ctx.push(Message::new(Role::User, Content::text(format!("msg {}", i)))).unwrap();
+        }
+        let removed = ctx.compact_with(|msgs| {
+            msgs.iter().enumerate()
+                .filter(|(i, _)| i % 2 == 0)
+                .map(|(_, m)| m.clone())
+                .collect()
+        });
+        assert_eq!(ctx.len(), 3);
+        // compact_with returns the old messages, not the removed ones
+        assert_eq!(removed.len(), 6);
+    }
+
+    #[test]
+    fn context_snapshot() {
+        use crate::content::Content;
+
+        let mut ctx = Context::new(AgentId::from("my-agent"));
+        ctx.push(Message::pinned(Role::System, Content::text("system"))).unwrap();
+        ctx.push(Message::new(Role::User, Content::text("hello"))).unwrap();
+
+        let snap = ctx.snapshot();
+        assert_eq!(snap.message_count, 2);
+        assert!(snap.has_system);
+        assert_eq!(snap.agent_id.as_str(), "my-agent");
+        assert_eq!(snap.message_metas.len(), 2);
+    }
+
+    #[test]
+    fn context_estimated_tokens() {
+        use crate::content::Content;
+
+        let mut ctx = Context::new(AgentId::from("a"));
+        // 20 chars / 4 = 5, + 4 overhead = 9 per message
+        ctx.push(Message::new(Role::User, Content::text("12345678901234567890"))).unwrap();
+        ctx.push(Message::new(Role::User, Content::text("12345678901234567890"))).unwrap();
+        assert_eq!(ctx.estimated_tokens(), 18);
     }
 }

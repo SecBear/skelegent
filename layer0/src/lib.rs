@@ -70,7 +70,7 @@ pub mod test_utils;
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
 pub use context::{
-    AgentContext, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message,
+    AgentContext, Context, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message,
     MessageMeta, Position, Role, WatcherVerdict,
 };
 pub use duration::DurationMs;
