@@ -24,8 +24,8 @@ The ReAct operator implements the Reason-Act-Observe cycle:
 
 1. **Assemble context** -- Build the prompt from the system prompt, conversation history, tool definitions, and the new input message.
 2. **Call the model** -- Send the assembled context to the provider.
-3. **Check for tool use** -- If the model requested tool calls, execute them.
-4. **Backfill results** -- Add tool results to the conversation context.
+3. **Check for tool use** -- If the model requested sub-dispatches, execute them.
+4. **Backfill results** -- Add sub-dispatch results to the conversation context.
 5. **Repeat** -- Loop back to step 2 until the model produces a final response or a limit is reached.
 
 ### Construction

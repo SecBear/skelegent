@@ -91,7 +91,7 @@ pub trait Hook: Send + Sync {
 }
 ```
 
-A hook can observe (logging, telemetry), intervene (halt execution, skip a tool call), or modify (sanitize tool input, redact tool output). Hook errors are logged but do not halt execution -- use `HookAction::Halt` to halt.
+A hook can observe (logging, telemetry), intervene (halt execution, skip a sub-dispatch), or modify (sanitize dispatch input, redact dispatch output). Hook errors are logged but do not halt execution -- use `HookAction::Halt` to halt.
 
 ### Lifecycle -- Cross-layer coordination
 

@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 4. **Execution.** `operator.execute(input)` runs the ReAct loop: assemble context, call the model, check for tool use, execute tools, repeat until the model produces a final response or a limit is reached.
 
-5. **Output.** `OperatorOutput` contains the response message, exit reason (why the loop stopped), and metadata (tokens, cost, duration, tool call records).
+5. **Output.** `OperatorOutput` contains the response message, exit reason (why the loop stopped), and metadata (tokens, cost, duration, sub-dispatch records).
 
 ## Next steps
 

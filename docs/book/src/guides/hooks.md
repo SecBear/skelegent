@@ -169,6 +169,6 @@ impl Hook for SkipAuditHook {
 - **Guardrails** -- Validate sub-dispatches at `PreSubDispatch`, skip dangerous operations.
 - **Telemetry** -- Emit OpenTelemetry spans at each hook point.
 - **Heartbeat** -- Signal liveness to an orchestrator (e.g., Temporal heartbeat) at `PreInference`.
-- **Secret redaction** -- Redact sensitive data from tool output at `PostSubDispatch`.
+- **Secret redaction** -- Redact sensitive data from dispatch output at `PostSubDispatch`.
 
 For security-focused hooks, see the `neuron-hook-security` crate.

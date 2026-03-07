@@ -6,7 +6,7 @@
 
 Each primitive is opt-in and composes independently:
 
-- **`with_planner`** — execution strategy: how tool calls are batched and sequenced.
+- **`with_planner`** — execution strategy: how sub-dispatches are batched and sequenced.
 - **`with_steering`** — external control flow: inject messages mid-loop at batch boundaries.
 - **`with_budget_sink`** — lifecycle events: receive step-limit, loop-detection, and timeout notifications.
 
@@ -94,7 +94,7 @@ impl Hook for DenyToolHook {
 
 Use `HookAction::SkipDispatch` instead of `Halt` if you want the agent to continue after skipping — `SkipDispatch` replaces the tool result with a synthetic "skipped by policy" message and lets the loop proceed.
 
-### Transformer: sanitize tool input
+### Transformer: sanitize dispatch input
 
 A transformer sees the context mutated by the previous transformer in the chain. Register one when you need to rewrite data before it reaches the tool:
 
