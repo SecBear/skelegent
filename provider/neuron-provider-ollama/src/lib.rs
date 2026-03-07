@@ -9,6 +9,7 @@ mod types;
 use neuron_turn::provider::{Provider, ProviderError};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
+use tracing::Instrument;
 use types::*;
 use uuid::Uuid;
 
@@ -256,6 +257,9 @@ impl Provider for OllamaProvider {
             .header("content-type", "application/json")
             .json(&api_request);
 
+        let model = request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.complete", provider = "ollama", model);
+
         async move {
             let http_response =
                 http_request
@@ -286,8 +290,15 @@ impl Provider for OllamaProvider {
                 .await
                 .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
 
-            Ok(self.parse_response(api_response))
+            let response = self.parse_response(api_response);
+            tracing::info!(
+                input_tokens = response.usage.input_tokens,
+                output_tokens = response.usage.output_tokens,
+                "completion finished"
+            );
+            Ok(response)
         }
+        .instrument(span)
     }
 }
 

@@ -49,6 +49,7 @@ impl Hook for RedactionHook {
         &[HookPoint::PostSubDispatch]
     }
 
+    #[tracing::instrument(skip_all, fields(point = ?ctx.point))]
     async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
         if ctx.point != HookPoint::PostSubDispatch {
             return Ok(HookAction::Continue);
@@ -135,6 +136,7 @@ impl Hook for ExfilGuardHook {
         &[HookPoint::PreSubDispatch]
     }
 
+    #[tracing::instrument(skip_all, fields(point = ?ctx.point))]
     async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
         if ctx.point != HookPoint::PreSubDispatch {
             return Ok(HookAction::Continue);

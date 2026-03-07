@@ -14,6 +14,7 @@ keywords = ["neuron", "ai", "agent", "operator", "llm"]
 layer0 = { path = "../../layer0", version = "0.4.0" }
 neuron-turn = { path = "../../turn/neuron-turn", version = "0.4.0" }
 async-trait = "0.1"
+tracing = "0.1"
 rust_decimal = { version = "1", features = ["serde-str"] }
 serde_json = "1"
 

@@ -8,6 +8,7 @@ mod types;
 use neuron_turn::provider::{Provider, ProviderError};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
+use tracing::Instrument;
 use types::*;
 
 /// API key source — static string or environment variable resolved per request.
@@ -344,6 +345,9 @@ impl Provider for OpenAIProvider {
             builder.json(&api_request)
         });
 
+        let model = request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.complete", provider = "openai", model);
+
         async move {
             let http_request = match http_opt {
                 Err(e) => return Err(e),
@@ -378,8 +382,15 @@ impl Provider for OpenAIProvider {
                 .await
                 .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
 
-            self.parse_response(api_response)
+            let response = self.parse_response(api_response)?;
+            tracing::info!(
+                input_tokens = response.usage.input_tokens,
+                output_tokens = response.usage.output_tokens,
+                "completion finished"
+            );
+            Ok(response)
         }
+        .instrument(span)
     }
 }
 

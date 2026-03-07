@@ -32,6 +32,65 @@ pub enum HookPoint {
     PostSteeringSkip,
     /// Before a WriteMemory effect executes. Guardrails can Halt to prevent the write.
     PreMemoryWrite,
+    /// Before a provider API call.
+    PreProviderCall,
+    /// After a provider API call returns.
+    PostProviderCall,
+    /// Before an operator is dispatched via orchestrator.
+    PreDispatch,
+    /// After an operator dispatch completes.
+    PostDispatch,
+    /// Before a state store write.
+    PreStateWrite,
+    /// After a state store read.
+    PostStateRead,
+    /// Before compaction destroys messages.
+    PreCompaction,
+    /// After compaction completes.
+    PostCompaction,
+    /// Before Temporal continue-as-new resets event history.
+    PreContinueAsNew,
+}
+
+/// Typed data available at a hook point.
+///
+/// Each variant carries the actual data flowing through the boundary.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HookPayload {
+    /// At PreDispatch/PostDispatch — operator invocation.
+    Dispatch {
+        /// Agent performing the dispatch.
+        agent_id: String,
+        /// Operator input (serialized).
+        input: Option<serde_json::Value>,
+        /// Operator output (serialized, only at PostDispatch).
+        output: Option<serde_json::Value>,
+    },
+    /// At PreStateWrite/PostStateRead — state I/O.
+    State {
+        /// State scope.
+        scope: String,
+        /// State key.
+        key: String,
+        /// State value.
+        value: Option<serde_json::Value>,
+    },
+    /// At PreCompaction/PostCompaction — context compaction.
+    Compaction {
+        /// Messages before compaction.
+        message_count_before: usize,
+        /// Messages after compaction (only at PostCompaction).
+        message_count_after: Option<usize>,
+    },
+    /// At PreProviderCall/PostProviderCall — provider API call.
+    Provider {
+        /// Model being called.
+        model: String,
+        /// Token count (only at PostProviderCall).
+        tokens: Option<u64>,
+    },
 }
 
 /// What context is available to a hook at its firing point.
@@ -82,6 +141,21 @@ pub struct HookContext {
     /// Contains tier, lifetime, content_kind, salience, and ttl hints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_options: Option<StoreOptions>,
+    /// Typed payload specific to this hook point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<HookPayload>,
+
+    /// Agent identity in scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<crate::id::AgentId>,
+
+    /// Workflow identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<crate::id::WorkflowId>,
+
+    /// Whether this event is a replay (durable execution).
+    #[serde(default)]
+    pub replaying: bool,
 }
 
 impl HookContext {
@@ -103,6 +177,10 @@ impl HookContext {
             memory_key: None,
             memory_value: None,
             memory_options: None,
+            payload: None,
+            agent_id: None,
+            workflow_id: None,
+            replaying: false,
         }
     }
 }
@@ -143,6 +221,12 @@ pub enum HookAction {
         /// The replacement output.
         new_output: serde_json::Value,
     },
+    /// Replace the hook payload with modified data.
+    /// Only valid from Transformer hooks at Pre* points.
+    ModifyPayload {
+        /// The replacement payload.
+        payload: HookPayload,
+    },
 }
 
 /// A hook that can observe and intervene in the turn's inner loop.
@@ -182,6 +266,15 @@ mod tests {
             HookPoint::PreSteeringInject,
             HookPoint::PostSteeringSkip,
             HookPoint::PreMemoryWrite,
+            HookPoint::PreProviderCall,
+            HookPoint::PostProviderCall,
+            HookPoint::PreDispatch,
+            HookPoint::PostDispatch,
+            HookPoint::PreStateWrite,
+            HookPoint::PostStateRead,
+            HookPoint::PreCompaction,
+            HookPoint::PostCompaction,
+            HookPoint::PreContinueAsNew,
         ];
         for variant in variants {
             let json = serde_json::to_string(&variant).expect("serialize");
@@ -212,5 +305,64 @@ mod tests {
         let msgs = ctx.steering_messages.as_ref().expect("should be Some");
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0], "msg");
+    }
+
+    #[test]
+    fn hookcontext_new_extended_fields_default() {
+        let ctx = HookContext::new(HookPoint::PreDispatch);
+        assert!(ctx.payload.is_none());
+        assert!(ctx.agent_id.is_none());
+        assert!(ctx.workflow_id.is_none());
+        assert!(!ctx.replaying);
+    }
+
+    #[test]
+    fn hookpayload_dispatch_roundtrip() {
+        let payload = HookPayload::Dispatch {
+            agent_id: "agent-1".to_string(),
+            input: Some(serde_json::json!({"x": 1})),
+            output: None,
+        };
+        let json = serde_json::to_string(&payload).expect("serialize");
+        let roundtripped: HookPayload = serde_json::from_str(&json).expect("deserialize");
+        let json2 = serde_json::to_string(&roundtripped).expect("re-serialize");
+        assert_eq!(json, json2);
+    }
+
+    #[test]
+    fn hookpayload_compaction_roundtrip() {
+        let payload = HookPayload::Compaction {
+            message_count_before: 42,
+            message_count_after: Some(10),
+        };
+        let json = serde_json::to_string(&payload).expect("serialize");
+        let roundtripped: HookPayload = serde_json::from_str(&json).expect("deserialize");
+        let json2 = serde_json::to_string(&roundtripped).expect("re-serialize");
+        assert_eq!(json, json2);
+    }
+
+    #[test]
+    fn hookpayload_provider_roundtrip() {
+        let payload = HookPayload::Provider {
+            model: "claude-3-5-sonnet".to_string(),
+            tokens: Some(1024),
+        };
+        let json = serde_json::to_string(&payload).expect("serialize");
+        let roundtripped: HookPayload = serde_json::from_str(&json).expect("deserialize");
+        let json2 = serde_json::to_string(&roundtripped).expect("re-serialize");
+        assert_eq!(json, json2);
+    }
+
+    #[test]
+    fn hookpayload_state_roundtrip() {
+        let payload = HookPayload::State {
+            scope: "session".to_string(),
+            key: "foo".to_string(),
+            value: Some(serde_json::json!("bar")),
+        };
+        let json = serde_json::to_string(&payload).expect("serialize");
+        let roundtripped: HookPayload = serde_json::from_str(&json).expect("deserialize");
+        let json2 = serde_json::to_string(&roundtripped).expect("re-serialize");
+        assert_eq!(json, json2);
     }
 }

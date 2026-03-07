@@ -9,7 +9,7 @@ use layer0::content::Content;
 use layer0::duration::DurationMs;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError};
-use layer0::hook::{HookAction, HookContext, HookPoint};
+use layer0::hook::{HookAction, HookContext, HookPayload, HookPoint};
 use layer0::id::{AgentId, WorkflowId};
 use layer0::lifecycle::{BudgetEvent, CompactionEvent};
 use layer0::operator::{
@@ -614,8 +614,10 @@ pub(crate) fn apply_context_commands(
 
 #[async_trait]
 impl<P: Provider + 'static> Operator for ReactOperator<P> {
+    #[tracing::instrument(skip_all, fields(trigger = ?input.trigger))]
     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
         let start = Instant::now();
+        tracing::info!("react loop starting");
         let config = self.resolve_config(&input);
         let mut messages = self.assemble_context(&input).await?;
         *self
@@ -1547,41 +1549,71 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 .context_strategy
                 .should_compact(&messages, effective_limit)
             {
-                let before_count = messages.len() as u32;
-                let before_tokens = self.context_strategy.token_estimate(&messages) as u64;
-                match self.context_strategy.compact(messages.clone()) {
-                    Ok(compacted) => {
-                        let after_count = compacted.len() as u32;
-                        let after_tokens = self.context_strategy.token_estimate(&compacted) as u64;
-                        if let Some(ref sink) = self.compaction_sink {
-                            sink.on_compaction_event(CompactionEvent::CompactionQuality {
-                                agent: AgentId::new("react"),
-                                tokens_before: before_tokens,
-                                tokens_after: after_tokens,
-                                items_preserved: after_count,
-                                items_lost: before_count.saturating_sub(after_count),
-                            });
-                        }
-                        messages = compacted;
-                        *self
-                            .last_compaction_removed
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner()) =
-                            before_count.saturating_sub(after_count) as usize;
-                        *self
-                            .current_context
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner()) = messages.clone();
+                // Fire PreCompaction hook
+                let pre_compact_ctx = {
+                    let mut ctx = HookContext::new(HookPoint::PreCompaction);
+                    ctx.payload = Some(HookPayload::Compaction {
+                        message_count_before: messages.len(),
+                        message_count_after: None,
+                    });
+                    ctx
+                };
+                if let HookAction::Halt { reason } = self.hooks.dispatch(&pre_compact_ctx).await {
+                    // Hook blocked compaction — skip it
+                    if let Some(ref sink) = self.compaction_sink {
+                        sink.on_compaction_event(CompactionEvent::CompactionSkipped {
+                            agent: AgentId::new("react"),
+                            reason: format!("blocked by hook: {reason}"),
+                        });
                     }
-                    Err(e) => {
-                        if let Some(ref sink) = self.compaction_sink {
-                            sink.on_compaction_event(CompactionEvent::CompactionFailed {
-                                agent: AgentId::new("react"),
-                                error: e.to_string(),
-                                strategy: "context_strategy".into(),
-                            });
+                } else {
+                    let before_count = messages.len() as u32;
+                    let before_tokens = self.context_strategy.token_estimate(&messages) as u64;
+                    match self.context_strategy.compact(messages.clone()) {
+                        Ok(compacted) => {
+                            let after_count = compacted.len() as u32;
+                            let after_tokens =
+                                self.context_strategy.token_estimate(&compacted) as u64;
+                            if let Some(ref sink) = self.compaction_sink {
+                                sink.on_compaction_event(CompactionEvent::CompactionQuality {
+                                    agent: AgentId::new("react"),
+                                    tokens_before: before_tokens,
+                                    tokens_after: after_tokens,
+                                    items_preserved: after_count,
+                                    items_lost: before_count.saturating_sub(after_count),
+                                });
+                            }
+                            messages = compacted;
+                            *self
+                                .last_compaction_removed
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) =
+                                before_count.saturating_sub(after_count) as usize;
+                            *self
+                                .current_context
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) = messages.clone();
+                            // Fire PostCompaction hook
+                            let post_compact_ctx = {
+                                let mut ctx = HookContext::new(HookPoint::PostCompaction);
+                                ctx.payload = Some(HookPayload::Compaction {
+                                    message_count_before: before_count as usize,
+                                    message_count_after: Some(after_count as usize),
+                                });
+                                ctx
+                            };
+                            self.hooks.dispatch(&post_compact_ctx).await;
                         }
-                        // messages unchanged — continue the loop, don't exit
+                        Err(e) => {
+                            if let Some(ref sink) = self.compaction_sink {
+                                sink.on_compaction_event(CompactionEvent::CompactionFailed {
+                                    agent: AgentId::new("react"),
+                                    error: e.to_string(),
+                                    strategy: "context_strategy".into(),
+                                });
+                            }
+                            // messages unchanged — continue the loop, don't exit
+                        }
                     }
                 }
             }

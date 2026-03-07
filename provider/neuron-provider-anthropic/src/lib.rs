@@ -10,6 +10,7 @@ use neuron_turn::provider::{Provider, ProviderError};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
 use std::sync::Arc;
+use tracing::Instrument;
 use types::*;
 
 /// Credential source — resolved per request.
@@ -222,6 +223,9 @@ impl Provider for AnthropicProvider {
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
 
+        let model = request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.complete", provider = "anthropic", model);
+
         async move {
             let key = resolve_key(&source).await?;
 
@@ -269,8 +273,15 @@ impl Provider for AnthropicProvider {
                 .await
                 .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
 
-            parse_anthropic_response(api_response)
+            let response = parse_anthropic_response(api_response)?;
+            tracing::info!(
+                input_tokens = response.usage.input_tokens,
+                output_tokens = response.usage.output_tokens,
+                "completion finished"
+            );
+            Ok(response)
         }
+        .instrument(span)
     }
 }
 

@@ -198,3 +198,50 @@ async fn usable_as_arc_dyn_orchestrator() {
         .unwrap();
     assert_eq!(output.message, Content::text("arc"));
 }
+
+// --- Hooks ---
+
+#[tokio::test]
+async fn predispatch_hook_fires_on_dispatch() {
+    use async_trait::async_trait;
+    use layer0::error::HookError;
+    use layer0::hook::{Hook, HookAction, HookContext, HookPoint};
+    use neuron_hooks::HookRegistry;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountHook {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Hook for CountHook {
+        fn points(&self) -> &[HookPoint] {
+            &[HookPoint::PreDispatch]
+        }
+        async fn on_event(&self, _ctx: &HookContext) -> Result<HookAction, HookError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HookAction::Continue)
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hook = Arc::new(CountHook {
+        calls: Arc::clone(&calls),
+    });
+
+    let mut registry = HookRegistry::new();
+    registry.add_observer(hook);
+
+    let mut orch = LocalOrch::new().with_hooks(Arc::new(registry));
+    orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
+
+    orch.dispatch(&AgentId::new("echo"), simple_input("ping"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "PreDispatch hook must fire exactly once"
+    );
+}

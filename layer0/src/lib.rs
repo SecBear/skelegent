@@ -50,6 +50,7 @@
 #![deny(missing_docs)]
 
 pub mod content;
+pub mod context;
 pub mod duration;
 pub mod effect;
 pub mod environment;
@@ -67,6 +68,10 @@ pub mod test_utils;
 
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
+pub use context::{
+    AgentContext, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, MessageMeta,
+    Position, WatcherVerdict,
+};
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};

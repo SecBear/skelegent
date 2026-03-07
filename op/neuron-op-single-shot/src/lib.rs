@@ -83,8 +83,10 @@ impl<P: Provider> SingleShotOperator<P> {
 
 #[async_trait]
 impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
+    #[tracing::instrument(skip_all, fields(trigger = ?input.trigger))]
     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
         let start = Instant::now();
+        tracing::info!("single-shot executing");
 
         let model = self.resolve_model(&input);
         let system = self.resolve_system(&input);
