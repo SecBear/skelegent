@@ -109,6 +109,43 @@ impl Message {
             },
         }
     }
+
+    /// Rough token estimate: chars/4 for text, 1000 for images, +4 overhead per message.
+    pub fn estimated_tokens(&self) -> usize {
+        use crate::content::ContentBlock;
+        let content_tokens = match &self.content {
+            Content::Text(s) => s.len() / 4,
+            Content::Blocks(blocks) => blocks
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => text.len() / 4,
+                    ContentBlock::ToolUse { input, .. } => input.to_string().len() / 4,
+                    ContentBlock::ToolResult { content, .. } => content.len() / 4,
+                    ContentBlock::Image { .. } => 1000,
+                    ContentBlock::Custom { data, .. } => data.to_string().len() / 4,
+                    _ => 0,
+                })
+                .sum(),
+        };
+        content_tokens + 4 // per-message overhead
+    }
+
+    /// Extract all text content for similarity computation.
+    pub fn text_content(&self) -> String {
+        use crate::content::ContentBlock;
+        match &self.content {
+            Content::Text(s) => s.clone(),
+            Content::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    ContentBlock::ToolResult { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
 }
 
 /// A message paired with its metadata.
@@ -820,5 +857,22 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let rt: Message = serde_json::from_str(&json).unwrap();
         assert!(matches!(rt.role, Role::Assistant));
+    }
+
+    #[test]
+    fn message_estimated_tokens() {
+        use crate::content::Content;
+
+        // 20 chars / 4 = 5, + 4 overhead = 9
+        let msg = Message::new(Role::User, Content::text("12345678901234567890"));
+        assert_eq!(msg.estimated_tokens(), 9);
+    }
+
+    #[test]
+    fn message_text_content_extraction() {
+        use crate::content::Content;
+
+        let msg = Message::new(Role::User, Content::text("hello world"));
+        assert_eq!(msg.text_content(), "hello world");
     }
 }
