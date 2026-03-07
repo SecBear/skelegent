@@ -123,7 +123,6 @@ impl Message {
                     ContentBlock::ToolResult { content, .. } => content.len() / 4,
                     ContentBlock::Image { .. } => 1000,
                     ContentBlock::Custom { data, .. } => data.to_string().len() / 4,
-                    _ => 0,
                 })
                 .sum(),
         };

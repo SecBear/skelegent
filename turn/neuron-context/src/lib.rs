@@ -128,6 +128,59 @@ impl ContextStrategy for SlidingWindow {
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// New middleware-era compactor (Phase R)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+use layer0::context::Message;
+
+/// Sliding window compactor: drops oldest messages, keeps first + recent by token budget.
+///
+/// The returned closure is passed to `Context::compact_with()`.
+/// Pinned messages always survive. The first non-pinned message is preserved
+/// (typically the initial user message). Remaining budget is filled from the end.
+pub fn sliding_window_compactor() -> impl FnMut(&[Message]) -> Vec<Message> {
+    move |msgs: &[Message]| {
+        let (pinned, normal): (Vec<_>, Vec<_>) = msgs
+            .iter()
+            .partition(|m| matches!(m.meta.policy, CompactionPolicy::Pinned));
+
+        let compacted_normal = if normal.len() <= 2 {
+            normal.into_iter().cloned().collect()
+        } else {
+            let first = normal[0].clone();
+            let rest = &normal[1..];
+
+            let total_tokens: usize = std::iter::once(&first)
+                .chain(rest.iter().copied())
+                .map(|m| m.estimated_tokens())
+                .sum();
+            let target = total_tokens / 2;
+
+            let mut kept = Vec::new();
+            let mut current_tokens = first.estimated_tokens();
+
+            for msg in rest.iter().rev() {
+                let msg_tokens = msg.estimated_tokens();
+                if current_tokens + msg_tokens > target && !kept.is_empty() {
+                    break;
+                }
+                kept.push((*msg).clone());
+                current_tokens += msg_tokens;
+            }
+
+            kept.reverse();
+            let mut result = vec![first];
+            result.extend(kept);
+            result
+        };
+
+        let mut result: Vec<Message> = pinned.into_iter().cloned().collect();
+        result.extend(compacted_normal);
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +282,76 @@ mod tests {
             compacted
                 .iter()
                 .any(|m| m.message.content == pinned.message.content),
+            "pinned message must survive compaction"
+        );
+    }
+
+    // --- New compactor tests (Phase R) ---
+
+    use layer0::content::Content;
+    use layer0::context::{Message, Role as L0Role};
+
+    fn l0_text_msg(role: L0Role, text: &str) -> Message {
+        Message::new(role, Content::text(text))
+    }
+
+    #[test]
+    fn sliding_compactor_preserves_first_and_recent() {
+        let mut compactor = sliding_window_compactor();
+        let messages = vec![
+            l0_text_msg(L0Role::User, &"first ".repeat(100)),
+            l0_text_msg(L0Role::Assistant, &"old ".repeat(100)),
+            l0_text_msg(L0Role::User, &"middle ".repeat(100)),
+            l0_text_msg(L0Role::Assistant, &"recent ".repeat(100)),
+            l0_text_msg(L0Role::User, &"latest ".repeat(100)),
+        ];
+
+        let compacted = compactor(&messages);
+
+        // Should keep first message
+        assert!(matches!(compacted[0].role, L0Role::User));
+        // Should compact
+        assert!(compacted.len() < messages.len());
+        assert!(compacted.len() >= 2);
+        // Last should be latest
+        assert_eq!(
+            compacted.last().unwrap().text_content(),
+            messages.last().unwrap().text_content()
+        );
+    }
+
+    #[test]
+    fn sliding_compactor_short_messages_unchanged() {
+        let mut compactor = sliding_window_compactor();
+        let messages = vec![
+            l0_text_msg(L0Role::User, "hi"),
+            l0_text_msg(L0Role::Assistant, "hello"),
+        ];
+        let compacted = compactor(&messages);
+        assert_eq!(compacted.len(), 2);
+    }
+
+    #[test]
+    fn sliding_compactor_single_message_unchanged() {
+        let mut compactor = sliding_window_compactor();
+        let messages = vec![l0_text_msg(L0Role::User, "hi")];
+        let compacted = compactor(&messages);
+        assert_eq!(compacted.len(), 1);
+    }
+
+    #[test]
+    fn sliding_compactor_pinned_survive() {
+        let mut compactor = sliding_window_compactor();
+        let pinned = Message::pinned(L0Role::User, Content::text("pinned constraint"));
+        let mut messages = vec![pinned.clone()];
+        for i in 0..10 {
+            messages.push(l0_text_msg(L0Role::User, &"x".repeat(400 + i * 10)));
+        }
+
+        let compacted = compactor(&messages);
+
+        assert!(
+            compacted.iter().any(|m| m.text_content() == "pinned constraint"),
             "pinned message must survive compaction"
         );
     }
