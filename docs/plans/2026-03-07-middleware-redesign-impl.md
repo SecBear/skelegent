@@ -1057,6 +1057,14 @@ git commit -m "cleanup: remove ObservableEvent and EventSource (replaced by trac
 
 If `neuron-hook-security` was migrated to middleware in Task 3.3, it may also be removable or renamed.
 
+Also update `neuron/neuron/Cargo.toml` facade crate:
+- Remove `hooks` feature gate from `default`
+- Remove `hooks = ["core", "dep:neuron-hooks"]` feature
+- Change `op-react` and `op-single-shot` features to no longer depend on `hooks`
+  (`neuron-op-single-shot` has zero hook usage — the dependency was a false gate)
+- Remove `Hook`, `HookAction`, `HookContext`, `HookPoint` from the prelude re-exports
+- Add `DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`, `DispatchStack` to prelude
+
 **Commit:**
 
 ```bash
