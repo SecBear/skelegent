@@ -14,6 +14,7 @@
 //! - [`ContextError`] — mutation errors (rejected or out-of-bounds)
 
 use crate::id::AgentId;
+use crate::content::Content;
 use crate::lifecycle::CompactionPolicy;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -48,6 +49,64 @@ impl Default for MessageMeta {
             source: None,
             salience: None,
             version: 0,
+        }
+    }
+}
+
+/// Role of a message in the context window.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    /// System instruction.
+    System,
+    /// Human message.
+    User,
+    /// Model response.
+    Assistant,
+    /// Tool/sub-operator result.
+    Tool {
+        /// Name of the tool/operator.
+        name: String,
+        /// Provider-specific call ID for correlation.
+        call_id: String,
+    },
+}
+
+/// A message in an agent's context window.
+///
+/// Concrete type — not generic. Every message has a role, content,
+/// and per-message metadata (compaction policy, salience, source).
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    /// Who produced this message.
+    pub role: Role,
+    /// The message payload.
+    pub content: Content,
+    /// Per-message annotation (compaction policy, salience, source, version).
+    pub meta: MessageMeta,
+}
+
+impl Message {
+    /// Create a new message with default metadata.
+    pub fn new(role: Role, content: Content) -> Self {
+        Self {
+            role,
+            content,
+            meta: MessageMeta::default(),
+        }
+    }
+
+    /// Create a message with `CompactionPolicy::Pinned`.
+    pub fn pinned(role: Role, content: Content) -> Self {
+        Self {
+            role,
+            content,
+            meta: MessageMeta {
+                policy: CompactionPolicy::Pinned,
+                ..Default::default()
+            },
         }
     }
 }
@@ -724,5 +783,42 @@ mod tests {
 
         ctx.clear_system();
         assert!(ctx.system().is_none());
+    }
+
+    #[test]
+    fn message_construction_and_role_variants() {
+        use crate::content::Content;
+        use crate::lifecycle::CompactionPolicy;
+
+        let msg = Message {
+            role: Role::User,
+            content: Content::text("hello"),
+            meta: MessageMeta::default(),
+        };
+        assert!(matches!(msg.role, Role::User));
+
+        let tool_msg = Message {
+            role: Role::Tool { name: "shell".into(), call_id: "tc_1".into() },
+            content: Content::text("output"),
+            meta: MessageMeta::default(),
+        };
+        assert!(matches!(tool_msg.role, Role::Tool { .. }));
+
+        let pinned = Message::pinned(Role::System, Content::text("system"));
+        assert!(matches!(pinned.meta.policy, CompactionPolicy::Pinned));
+    }
+
+    #[test]
+    fn message_serde_roundtrip() {
+        use crate::content::Content;
+
+        let msg = Message {
+            role: Role::Assistant,
+            content: Content::text("hi"),
+            meta: MessageMeta::default(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let rt: Message = serde_json::from_str(&json).unwrap();
+        assert!(matches!(rt.role, Role::Assistant));
     }
 }

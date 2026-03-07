@@ -56,6 +56,7 @@ pub mod effect;
 pub mod environment;
 pub mod error;
 pub mod hook;
+pub mod middleware;
 pub mod id;
 pub mod lifecycle;
 pub mod operator;
@@ -69,14 +70,18 @@ pub mod test_utils;
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
 pub use context::{
-    AgentContext, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, MessageMeta,
-    Position, WatcherVerdict,
+    AgentContext, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message,
+    MessageMeta, Position, Role, WatcherVerdict,
 };
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, HookError, OperatorError, OrchError, StateError};
 pub use hook::{Hook, HookAction, HookContext, HookPoint};
+pub use middleware::{
+    DispatchMiddleware, DispatchNext, ExecMiddleware, ExecNext, StoreMiddleware, StoreReadNext,
+    StoreWriteNext,
+};
 pub use id::{AgentId, ScopeId, SessionId, WorkflowId};
 pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy, ObservableEvent};
 pub use operator::{
