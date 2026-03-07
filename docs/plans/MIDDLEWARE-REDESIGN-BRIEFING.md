@@ -169,3 +169,22 @@ layer0/src/
   lifecycle.rs    — BudgetEvent, CompactionEvent (ObservableEvent/EventSource DELETED)
   (all other files unchanged)
 ```
+
+## Execution Order
+
+| Phase | Tasks | Scope | Parallelizable? |
+|-------|-------|-------|----------------|
+| 1 | 1.1–1.5 | Add new types (additive, nothing deleted) | 1.1+1.2 parallel, 1.3+1.4 parallel |
+| R | R.1–R.6 | Reshape reusable code onto new types | R.1+R.2+R.3+R.4 parallel, R.5 then R.6 serial |
+| 2 | 2.1–2.5 | Replace old context types with Context | Mostly serial (cascading) |
+| 3 | 3.1–3.5 | Migrate hook consumers to middleware | 3.1+3.2+3.3 parallel, 3.4 solo |
+| 4 | 4.1–4.3 | Delete old hook system | Serial (verify between) |
+| 5 | 5.1–5.3 | Docs + final verification | 5.1+5.2 parallel |
+
+Phase R tasks produce NEW code alongside old code. Old code stays alive
+until Phases 2–4 delete it. This avoids compile breakage during reshaping.
+
+## Full task specs
+
+See `2026-03-07-middleware-redesign-impl.md` for exact code-level specifications
+per task, including current source, target code, test rewrites, and dependencies.

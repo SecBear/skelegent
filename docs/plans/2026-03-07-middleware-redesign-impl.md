@@ -1136,9 +1136,571 @@ git commit --allow-empty -m "chore: final verification — middleware redesign c
 | Phase | Tasks | What Changes |
 |-------|-------|-------------|
 | 1 | 1.1–1.5 | Add Message, Role, middleware traits, stack builders (additive) |
+| R | R.1–R.6 | Reshape reusable code onto new types (depends on Phase 1) |
 | 2 | 2.1–2.5 | Replace AgentContext/AnnotatedMessage/ContextStrategy with Context |
 | 3 | 3.1–3.5 | Migrate Hook consumers to middleware |
 | 4 | 4.1–4.3 | Delete Hook, HookPoint, HookRegistry, ObservableEvent |
 | 5 | 5.1–5.3 | Update docs, final verification |
 
-Total: ~18 tasks across 5 phases. Each phase ends with full workspace verification.
+Total: ~24 tasks across 6 phases. Each phase ends with full workspace verification.
+
+---
+
+## Phase R: Reshape Reusable Code (depends on Phase 1)
+
+After Phase 1 lands `Message`, `Role`, `Content`, and the middleware traits, reshape
+all reusable algorithms onto the new types. Each task is one agent, one crate. The old
+code stays alive until Phase 2–4 deletes it — these tasks produce NEW code that will
+replace the old code when consumers are migrated.
+
+### Conversion bridge (created in Task 1.1, used by all R tasks)
+
+Phase 1 adds these conversions to `layer0/src/context.rs`:
+
+```rust
+// ProviderMessage (turn-layer) → Message (layer0)
+// This lives in neuron-turn because it knows both types.
+// layer0::Message does NOT depend on ProviderMessage.
+
+impl From<ProviderMessage> for Message {
+    fn from(pm: ProviderMessage) -> Self {
+        let role = match pm.role {
+            turn::Role::System => Role::System,
+            turn::Role::User => Role::User,
+            turn::Role::Assistant => Role::Assistant,
+        };
+        let content = Content::Blocks(
+            pm.content.into_iter().map(|cp| match cp {
+                ContentPart::Text { text } => ContentBlock::Text { text },
+                ContentPart::ToolUse { id, name, input } => ContentBlock::ToolUse { id, name, input },
+                ContentPart::ToolResult { tool_use_id, content, is_error } => ContentBlock::ToolResult { tool_use_id, content, is_error },
+                ContentPart::Image { source, media_type } => {
+                    let src = match source {
+                        turn::ImageSource::Base64 { data } => layer0::ImageSource::Base64 { data },
+                        turn::ImageSource::Url { url } => layer0::ImageSource::Url { url },
+                    };
+                    ContentBlock::Image { source: src, media_type }
+                }
+            }).collect()
+        );
+        Message::new(role, content)
+    }
+}
+
+// AnnotatedMessage → Message with metadata
+impl From<AnnotatedMessage> for Message {
+    fn from(am: AnnotatedMessage) -> Self {
+        let mut msg = Message::from(am.message);
+        if let Some(policy) = am.policy {
+            msg.meta.policy = policy;
+        }
+        msg.meta.source = am.source;
+        msg.meta.salience = am.salience;
+        msg
+    }
+}
+```
+
+Note: This `From` impl lives in `neuron-turn/src/convert.rs` (or `context.rs`),
+NOT in layer0 — because layer0 must not depend on neuron-turn. The turn crate
+sees both types and provides the bridge.
+
+### Token estimation helper (shared by all compaction tasks)
+
+Every compaction algorithm needs token estimation. Extract the shared logic:
+
+```rust
+// In layer0/src/context.rs (on Message)
+impl Message {
+    /// Rough token estimate: chars/4 for text, 1000 for images, +4 overhead per message.
+    pub fn estimated_tokens(&self) -> usize {
+        let content_tokens = match &self.content {
+            Content::Text(s) => s.len() / 4,
+            Content::Blocks(blocks) => blocks.iter().map(|b| match b {
+                ContentBlock::Text { text } => text.len() / 4,
+                ContentBlock::ToolUse { input, .. } => input.to_string().len() / 4,
+                ContentBlock::ToolResult { content, .. } => content.len() / 4,
+                ContentBlock::Image { .. } => 1000,
+                ContentBlock::Custom { data, .. } => data.to_string().len() / 4,
+            }).sum(),
+        };
+        content_tokens + 4 // per-message overhead
+    }
+
+    /// Extract all text content for similarity computation.
+    pub fn text_content(&self) -> String {
+        match &self.content {
+            Content::Text(s) => s.clone(),
+            Content::Blocks(blocks) => blocks.iter().filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                ContentBlock::ToolResult { content, .. } => Some(content.as_str()),
+                _ => None,
+            }).collect::<Vec<_>>().join(" "),
+        }
+    }
+}
+```
+
+---
+
+### Task R.1: SlidingWindow → `sliding_window_compactor()` closure
+
+**Crate:** `neuron-context`
+**Files:** Modify `neuron/turn/neuron-context/src/lib.rs`
+**Depends on:** Task 1.1 (Message type exists)
+**One agent. One file.**
+
+**Current code** (in `neuron-context/src/lib.rs`, lines 25–129):
+
+```rust
+// SlidingWindow implements ContextStrategy for AnnotatedMessage.
+// Algorithm: partition pinned/normal → keep first message + recent by token budget.
+// Token estimation: sum(content_chars / chars_per_token + 4_overhead).
+```
+
+**Target code:**
+
+```rust
+/// Sliding window compactor: drops oldest messages, keeps first + recent by token budget.
+///
+/// The returned closure is passed to `Context::compact_with()`.
+/// Pinned messages always survive. The first non-pinned message is preserved
+/// (typically the initial user message). Remaining budget is filled from the end.
+pub fn sliding_window_compactor() -> impl FnMut(&[Message]) -> Vec<Message> {
+    move |msgs: &[Message]| {
+        let (pinned, normal): (Vec<_>, Vec<_>) = msgs
+            .iter()
+            .partition(|m| matches!(m.meta.policy, CompactionPolicy::Pinned));
+
+        let compacted_normal = if normal.len() <= 2 {
+            normal.into_iter().cloned().collect()
+        } else {
+            let first = normal[0].clone();
+            let rest = &normal[1..];
+
+            let total_tokens: usize = std::iter::once(&first)
+                .chain(rest.iter().copied())
+                .map(|m| m.estimated_tokens())
+                .sum();
+            let target = total_tokens / 2;
+
+            let mut kept = Vec::new();
+            let mut current_tokens = first.estimated_tokens();
+
+            for msg in rest.iter().rev() {
+                let msg_tokens = msg.estimated_tokens();
+                if current_tokens + msg_tokens > target && !kept.is_empty() {
+                    break;
+                }
+                kept.push((*msg).clone());
+                current_tokens += msg_tokens;
+            }
+
+            kept.reverse();
+            let mut result = vec![first];
+            result.extend(kept);
+            result
+        };
+
+        let mut result: Vec<Message> = pinned.into_iter().cloned().collect();
+        result.extend(compacted_normal);
+        result
+    }
+}
+```
+
+**Tests to rewrite:**
+- `sliding_window_estimates_tokens` → `Message::estimated_tokens()` unit test (moves to layer0)
+- `sliding_window_should_compact` → removed (trigger logic moves to Context/ReactOperator)
+- `sliding_window_compact_*` → rewritten using `Message` constructors
+- `sliding_window_pinned_messages_survive_compaction` → same logic, new types
+
+**Keep the old `impl ContextStrategy` alive** — it will be deleted in Phase 2 Task 2.4.
+The new function is additive.
+
+---
+
+### Task R.2: SaliencePackingStrategy → `salience_packing_compactor()` closure
+
+**Crate:** `neuron-context`
+**Files:** Modify `neuron/turn/neuron-context/src/salience_packing.rs`
+**Depends on:** Task 1.1 (Message type exists)
+**One agent. One file.**
+
+**Current code** (salience_packing.rs, 610 lines):
+
+The algorithm is the most complex compaction strategy. It MUST be preserved exactly:
+1. Partition pinned vs candidates
+2. Budget calculation (remaining = token_budget - pinned_tokens)
+3. Iterative MMR selection: `λ * salience - (1-λ) * max_similarity(candidate, selected)`
+4. Optional "lost in the middle" reordering
+5. Emit `[pinned] ++ [selected]`
+
+The `term_jaccard()` helper is a pure function — reuse as-is.
+
+**Target code:**
+
+```rust
+/// Salience-aware context packing via iterative MMR selection.
+///
+/// The returned closure is passed to `Context::compact_with()`.
+/// See module docs for algorithm details.
+pub fn salience_packing_compactor(config: SaliencePackingConfig) -> impl FnMut(&[Message]) -> Vec<Message> {
+    move |msgs: &[Message]| {
+        // Phase 1: Partition
+        let (pinned, mut candidates): (Vec<_>, Vec<_>) = msgs
+            .iter()
+            .partition(|m| matches!(m.meta.policy, CompactionPolicy::Pinned));
+
+        // Phase 2: Budget
+        let pinned_tokens: usize = pinned.iter().map(|m| m.estimated_tokens()).sum();
+        if pinned_tokens >= config.token_budget {
+            return pinned.into_iter().cloned().collect();
+        }
+        let mut remaining = config.token_budget - pinned_tokens;
+
+        // Phase 3: Iterative MMR selection
+        let mut selected: Vec<Message> = Vec::new();
+        let mut selected_texts: Vec<String> = Vec::new();
+
+        while !candidates.is_empty() && remaining > 0 {
+            let mut best_idx: Option<usize> = None;
+            let mut best_mmr = f64::NEG_INFINITY;
+
+            for (i, candidate) in candidates.iter().enumerate() {
+                let sim1 = candidate.meta.salience.unwrap_or(config.default_salience);
+                let sim2 = if selected_texts.is_empty() {
+                    0.0
+                } else {
+                    let cand_text = candidate.text_content();
+                    selected_texts.iter()
+                        .map(|s| term_jaccard(&cand_text, s))
+                        .fold(0.0_f64, f64::max)
+                };
+                let mmr = config.lambda * sim1 - (1.0 - config.lambda) * sim2;
+                if mmr > best_mmr {
+                    best_mmr = mmr;
+                    best_idx = Some(i);
+                }
+            }
+
+            let idx = best_idx.expect("candidates non-empty");
+            let best = candidates.remove(idx);
+            let tokens = best.estimated_tokens();
+            if tokens <= remaining {
+                remaining -= tokens;
+                selected_texts.push(best.text_content());
+                selected.push(best.clone());
+            }
+        }
+
+        // Phase 4: Optional reordering (same algorithm)
+        if config.reorder_for_recall && selected.len() > 2 {
+            // ... identical reorder logic ...
+        }
+
+        // Phase 5: Emit
+        let mut result: Vec<Message> = pinned.into_iter().cloned().collect();
+        result.extend(selected);
+        result
+    }
+}
+
+// term_jaccard() is unchanged — pure function, no type dependencies.
+```
+
+**Key change:** `AnnotatedMessage.salience` → `Message.meta.salience`.
+`Self::text_of(msg)` → `msg.text_content()` (method on Message from Task 1.1).
+`self.estimate_single(msg)` → `msg.estimated_tokens()`.
+
+**Tests:** All 15 salience packing tests rewritten with `Message` constructors.
+The `term_jaccard` tests are pure and unchanged.
+
+**Keep old `impl ContextStrategy` alive** — deleted in Phase 2 Task 2.4.
+
+---
+
+### Task R.3: TieredStrategy → `tiered_compactor()` closure
+
+**Crate:** `neuron-turn` (the `tiered.rs` module)
+**Files:** Modify `neuron/turn/neuron-turn/src/tiered.rs`
+**Depends on:** Task 1.1 (Message type exists)
+**One agent. One file.**
+
+**Current code** (tiered.rs, 308 lines):
+
+Algorithm: partition into 4 zones (Pinned, Active, Summary, Noise).
+- Pinned: `CompactionPolicy::Pinned` → always kept
+- Active: last `active_zone_size` Normal messages → always kept
+- Summary: older Normal messages → summarised (or discarded if no summariser)
+- Noise: `DiscardWhenDone` / `CompressFirst` → discarded
+
+The `Summariser` trait takes `&[ProviderMessage]`. It needs to change to `&[Message]`.
+
+**Target code:**
+
+```rust
+/// Summariser trait — takes &[Message] instead of &[ProviderMessage].
+pub trait Summariser: Send + Sync {
+    fn summarise(&self, messages: &[Message]) -> Result<Message, CompactionError>;
+}
+
+/// Tiered compactor: zone-partitioned compaction preventing recursive degradation.
+pub fn tiered_compactor(
+    config: TieredConfig,
+    summariser: Option<Box<dyn Summariser>>,
+) -> impl FnMut(&[Message]) -> Vec<Message> {
+    move |msgs: &[Message]| {
+        let mut pinned = Vec::new();
+        let mut noise = Vec::new();
+        let mut normal = Vec::new();
+
+        for msg in msgs {
+            match msg.meta.policy {
+                CompactionPolicy::Pinned => pinned.push(msg.clone()),
+                CompactionPolicy::DiscardWhenDone | CompactionPolicy::CompressFirst => {
+                    noise.push(msg.clone())
+                }
+                CompactionPolicy::Normal => normal.push(msg.clone()),
+            }
+        }
+        let _ = noise; // discarded
+
+        let active_size = config.active_zone_size.min(normal.len());
+        let split_point = normal.len().saturating_sub(active_size);
+        let summary_candidates: Vec<Message> = normal.drain(..split_point).collect();
+
+        let mut result = pinned;
+        if !summary_candidates.is_empty() {
+            if let Some(ref summariser) = summariser {
+                if let Ok(summary_msg) = summariser.summarise(&summary_candidates) {
+                    let mut s = summary_msg;
+                    s.meta.policy = CompactionPolicy::Normal;
+                    s.meta.source = Some("compaction:summary".into());
+                    result.push(s);
+                }
+            }
+        }
+        result.extend(normal); // active zone
+        result
+    }
+}
+```
+
+**Tests:** 5 tests rewritten with `Message` constructors. `TestSummariser` updated
+to return `Message` instead of `ProviderMessage`.
+
+---
+
+### Task R.4: ContextAssembler → produce `Vec<Message>`
+
+**Crate:** `neuron-context`
+**Files:** Modify `neuron/turn/neuron-context/src/context_assembly.rs`
+**Depends on:** Task 1.1 (Message type exists), conversion bridge in neuron-turn
+**One agent. One file.**
+
+**Current code** (context_assembly.rs, 380 lines):
+
+Reads state store data (decision cards, deltas, FTS hits) and assembles
+`Vec<AnnotatedMessage>` with salience/source metadata.
+
+Pure helpers (`recency_score`, `normalize_bm25_scores`, `text_msg`, `value_to_text`,
+`parse_delta_timestamp`, `now_micros`) are algorithmically unchanged.
+
+**Target change:**
+
+```rust
+// Before:
+pub async fn assemble(...) -> Result<Vec<AnnotatedMessage>, StateError>
+
+// After:
+pub async fn assemble(...) -> Result<Vec<Message>, StateError>
+```
+
+Every `AnnotatedMessage { message, policy, source, salience }` construction becomes:
+
+```rust
+// Before:
+AnnotatedMessage {
+    message: text_msg(Role::User, &text),
+    policy: Some(CompactionPolicy::Normal),
+    source: Some("sweep:delta".into()),
+    salience: Some(salience),
+}
+
+// After:
+Message {
+    role: layer0::Role::User,
+    content: Content::text(&text),
+    meta: MessageMeta {
+        policy: CompactionPolicy::Normal,
+        source: Some("sweep:delta".into()),
+        salience: Some(salience),
+        version: 0,
+    },
+}
+```
+
+The `text_msg()` helper is deleted — replaced by `Message::new(role, Content::text(s))`.
+`AnnotatedMessage::pinned(...)` → `Message::pinned(role, Content::text(s))`.
+
+**Pure helpers unchanged:** `recency_score`, `normalize_bm25_scores`, `parse_delta_timestamp`,
+`now_micros`, `value_to_text`.
+
+**Tests:** 8 tests updated to assert on `Message` fields instead of `AnnotatedMessage` fields.
+
+---
+
+### Task R.5: RedactionHook → `RedactionMiddleware`
+
+**Crate:** `neuron-hook-security`
+**Files:** Modify `neuron/hooks/neuron-hook-security/src/lib.rs`
+**Depends on:** Task 1.2 (DispatchMiddleware trait exists)
+**One agent. One file.**
+
+**Current code** (lib.rs lines 17–80):
+
+Pure logic: `patterns: Vec<Regex>`, `new()` builds 3 default patterns (AWS/Vault/GitHub),
+`with_pattern()` adds custom. `on_event()` scans `ctx.operator_result` string and replaces
+matches with `[REDACTED]`. Returns `ModifyDispatchOutput` if any match, else `Continue`.
+
+**Target code:**
+
+```rust
+pub struct RedactionMiddleware {
+    patterns: Vec<Regex>,
+}
+
+impl RedactionMiddleware {
+    pub fn new() -> Self { /* identical to RedactionHook::new() */ }
+    pub fn with_pattern(mut self, pattern: Regex) -> Self { /* identical */ }
+
+    fn redact(&self, text: &str) -> Option<String> {
+        let mut redacted = text.to_owned();
+        let mut found = false;
+        for pattern in &self.patterns {
+            if pattern.is_match(&redacted) {
+                found = true;
+                redacted = pattern.replace_all(&redacted, "[REDACTED]").into_owned();
+            }
+        }
+        found.then_some(redacted)
+    }
+}
+
+#[async_trait]
+impl DispatchMiddleware for RedactionMiddleware {
+    async fn dispatch(
+        &self,
+        agent: &AgentId,
+        input: OperatorInput,
+        next: &dyn DispatchNext,
+    ) -> Result<OperatorOutput, OrchError> {
+        let mut output = next.dispatch(agent, input).await?;
+        // Scan output message content for secrets
+        if let Some(text) = output.message.as_text() {
+            if let Some(redacted) = self.redact(text) {
+                output.message = Content::text(redacted);
+            }
+        }
+        Ok(output)
+    }
+}
+```
+
+**Key difference from Hook version:** Middleware wraps the call (post-processing),
+so it calls `next.dispatch()` first, then scans the output. The Hook version matched
+on `HookPoint::PostSubDispatch` — same semantic, different mechanics.
+
+**Tests:** All 8 redaction tests rewritten against `DispatchMiddleware`. The test creates
+a mock `DispatchNext` that returns a fixed output, then asserts the middleware redacts it.
+No more `HookContext` construction.
+
+---
+
+### Task R.6: ExfilGuardHook → `ExfilGuardMiddleware`
+
+**Crate:** `neuron-hook-security`
+**Files:** Modify `neuron/hooks/neuron-hook-security/src/lib.rs` (same file as R.5)
+**Depends on:** Task 1.2 (DispatchMiddleware trait exists)
+**One agent. Same file as R.5 — schedule AFTER R.5.**
+
+**Current code** (lib.rs lines 91–234):
+
+Pure logic: `detect_generic_exfil()`, `detect_shell_exfil()`, `detect_base64_exfil()`
+— three detection methods checking URL+secret, curl/wget+env, base64+URL patterns.
+These methods are pure `&self, &str -> bool`. They don't change at all.
+
+**Target code:**
+
+```rust
+pub struct ExfilGuardMiddleware {
+    /* identical fields to ExfilGuardHook */
+}
+
+impl ExfilGuardMiddleware {
+    pub fn new() -> Self { /* identical to ExfilGuardHook::new() */ }
+    pub fn with_url_pattern(mut self, pattern: Regex) -> Self { /* identical */ }
+
+    // These three methods are UNCHANGED — pure logic, no type dependencies:
+    fn detect_generic_exfil(&self, input: &str) -> bool { /* identical */ }
+    fn detect_shell_exfil(&self, input: &str) -> bool { /* identical */ }
+    fn detect_base64_exfil(&self, input: &str) -> bool { /* identical */ }
+}
+
+#[async_trait]
+impl DispatchMiddleware for ExfilGuardMiddleware {
+    async fn dispatch(
+        &self,
+        agent: &AgentId,
+        input: OperatorInput,
+        next: &dyn DispatchNext,
+    ) -> Result<OperatorOutput, OrchError> {
+        // Pre-processing: check input BEFORE calling next
+        let input_str = serde_json::to_string(&input.message).unwrap_or_default();
+
+        if self.detect_generic_exfil(&input_str) {
+            return Err(OrchError::DispatchFailed {
+                agent: agent.to_string(),
+                message: "Potential exfiltration: tool input contains URL and sensitive data".into(),
+            });
+        }
+        if self.detect_shell_exfil(&input_str) {
+            return Err(OrchError::DispatchFailed {
+                agent: agent.to_string(),
+                message: "Potential exfiltration: shell command pipes secret/env data to network tool".into(),
+            });
+        }
+        if self.detect_base64_exfil(&input_str) {
+            return Err(OrchError::DispatchFailed {
+                agent: agent.to_string(),
+                message: "Potential exfiltration: large base64 blob sent alongside URL".into(),
+            });
+        }
+
+        // Input is clean — proceed
+        next.dispatch(agent, input).await
+    }
+}
+```
+
+**Key difference from Hook version:** Middleware short-circuits by returning `Err`
+instead of `HookAction::Halt`. This is the guard pattern — don't call `next` to halt.
+
+**Tests:** All 10 exfil guard tests rewritten. Test creates a mock `DispatchNext`,
+asserts the middleware returns `Err(OrchError::DispatchFailed { .. })` for exfil
+and `Ok(...)` for clean input.
+
+---
+
+### Phase R verification
+
+After all R tasks complete:
+
+```bash
+cd neuron/ && nix develop --command cargo test --workspace --all-targets
+cd neuron/ && nix develop --command cargo clippy --workspace -- -D warnings
+```
+
+Expected: All old tests still pass (old code untouched). All new tests pass.
+Both old and new code coexist — the old code is deleted in Phases 2–4.
