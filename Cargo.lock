@@ -985,7 +985,6 @@ version = "0.4.0"
 dependencies = [
  "async-trait",
  "layer0",
- "neuron-hooks",
  "serde_json",
  "tokio",
  "tracing",

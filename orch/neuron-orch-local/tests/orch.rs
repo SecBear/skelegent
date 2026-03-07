@@ -199,40 +199,40 @@ async fn usable_as_arc_dyn_orchestrator() {
     assert_eq!(output.message, Content::text("arc"));
 }
 
-// --- Hooks ---
+// --- Middleware ---
 
 #[tokio::test]
-async fn predispatch_hook_fires_on_dispatch() {
+async fn middleware_observer_fires_on_dispatch() {
     use async_trait::async_trait;
-    use layer0::error::HookError;
-    use layer0::hook::{Hook, HookAction, HookContext, HookPoint};
-    use neuron_hooks::HookRegistry;
+    use layer0::error::OrchError;
+    use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct CountHook {
+    struct CountMiddleware {
         calls: Arc<AtomicUsize>,
     }
 
     #[async_trait]
-    impl Hook for CountHook {
-        fn points(&self) -> &[HookPoint] {
-            &[HookPoint::PreDispatch]
-        }
-        async fn on_event(&self, _ctx: &HookContext) -> Result<HookAction, HookError> {
+    impl DispatchMiddleware for CountMiddleware {
+        async fn dispatch(
+            &self,
+            agent: &AgentId,
+            input: OperatorInput,
+            next: &dyn DispatchNext,
+        ) -> Result<OperatorOutput, OrchError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(HookAction::Continue)
+            next.dispatch(agent, input).await
         }
     }
 
     let calls = Arc::new(AtomicUsize::new(0));
-    let hook = Arc::new(CountHook {
+    let mw = Arc::new(CountMiddleware {
         calls: Arc::clone(&calls),
     });
 
-    let mut registry = HookRegistry::new();
-    registry.add_observer(hook);
+    let stack = DispatchStack::builder().observe(mw).build();
 
-    let mut orch = LocalOrch::new().with_hooks(Arc::new(registry));
+    let mut orch = LocalOrch::new().with_middleware(stack);
     orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
 
     orch.dispatch(&AgentId::new("echo"), simple_input("ping"))
@@ -242,6 +242,43 @@ async fn predispatch_hook_fires_on_dispatch() {
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,
-        "PreDispatch hook must fire exactly once"
+        "middleware observer must fire exactly once"
+    );
+}
+
+#[tokio::test]
+async fn middleware_guard_can_halt_dispatch() {
+    use async_trait::async_trait;
+    use layer0::error::OrchError;
+    use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
+
+    struct DenyAll;
+
+    #[async_trait]
+    impl DispatchMiddleware for DenyAll {
+        async fn dispatch(
+            &self,
+            _agent: &AgentId,
+            _input: OperatorInput,
+            _next: &dyn DispatchNext,
+        ) -> Result<OperatorOutput, OrchError> {
+            Err(OrchError::DispatchFailed("denied by guard".into()))
+        }
+    }
+
+    let stack = DispatchStack::builder()
+        .guard(Arc::new(DenyAll))
+        .build();
+
+    let mut orch = LocalOrch::new().with_middleware(stack);
+    orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
+
+    let result = orch
+        .dispatch(&AgentId::new("echo"), simple_input("blocked"))
+        .await;
+    assert!(result.is_err());
+    assert!(
+        result.unwrap_err().to_string().contains("denied by guard"),
+        "guard middleware must halt dispatch"
     );
 }
