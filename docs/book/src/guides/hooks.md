@@ -1,3 +1,7 @@
+> **SUPERSEDED:** The Hook system described here is being replaced by per-boundary
+> continuation-based middleware. See `docs/plans/MIDDLEWARE-REDESIGN-BRIEFING.md`.
+> This guide remains for reference until migration is complete.
+
 # Hooks
 
 > **Note:** The hook system's patterns are still evolving. This page provides a summary of the current design. For the full specification, see `specs/09-hooks-lifecycle-and-governance.md` in the repository.

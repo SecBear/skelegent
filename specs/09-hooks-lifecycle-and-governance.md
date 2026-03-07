@@ -1,3 +1,8 @@
+> **SUPERSEDED:** The Hook system described here is being replaced by per-boundary
+> continuation-based middleware (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`).
+> See `docs/plans/MIDDLEWARE-REDESIGN-BRIEFING.md` for the new design.
+> This spec remains for reference until migration is complete.
+
 # Hooks, Lifecycle, and Governance
 
 ## Purpose

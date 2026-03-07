@@ -249,6 +249,10 @@ debugging.
 
 ---
 
+> **MIGRATION IN PROGRESS:** The hook-based composition described below is being
+> replaced by per-boundary middleware (`DispatchStack`, `StoreStack`, `ExecStack`).
+> See `docs/plans/MIDDLEWARE-REDESIGN-BRIEFING.md` for the new design.
+
 ## Three-Primitive Operator Composition
 
 Operators compose three independent primitives: **hooks** (observation +
