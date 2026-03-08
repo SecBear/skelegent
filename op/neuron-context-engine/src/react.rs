@@ -76,6 +76,9 @@ pub async fn react_loop<P: Provider>(
         ctx.run(AppendResponse::new(result.response.clone()))
             .await?;
 
+        // Count this inference as a completed turn
+        ctx.metrics.turns_completed += 1;
+
         // Phase 3: Check if model is done
         if !result.has_tool_calls() {
             let exit = match result.response.stop_reason {
@@ -108,8 +111,7 @@ pub async fn react_loop<P: Provider>(
             ctx.inject_message(result_msg).await?;
         }
 
-        // Phase 5: Increment turn counter
-        ctx.metrics.turns_completed += 1;
+
     }
 }
 

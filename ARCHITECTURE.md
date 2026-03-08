@@ -275,3 +275,90 @@ see `specs/04-operator-turn-runtime.md §Exit Priority Ordering`.
 The planner primitive is `DispatchPlanner` (renamed from `ToolExecutionPlanner`).
 It plans sub-operator dispatches — not just tool calls — and is the canonical
 extension point for custom execution strategies.
+
+---
+
+## Behavior Lives in Code, Configuration Lives in Messages
+
+A recurring question in agent frameworks: how does a parent inject behavior
+into a child agent at dispatch time? Rule injection, middleware descriptors,
+policy schemas — every framework eventually faces this.
+
+Neuron's answer: **don't serialize behavior. Share it through construction.**
+
+This is not novel. It is the pattern behind every composition model that
+scaled:
+
+- Express/Koa: `app.use(cors())` at startup. The middleware is a function, not
+  a descriptor.
+- Tower: `ServiceBuilder::new().layer(TimeoutLayer)`. Layers compose at
+  construction. Nothing is serialized.
+- Linux: file operations are a vtable set at module load, not an enum of known
+  operations.
+- React: context providers wrap children at render time, not via schema.
+
+The principle: **the composition point is the constructor, not the message.**
+
+### What this means for neuron
+
+Rules, middleware, and operators are live objects — closures, trait objects,
+function pointers. They compose at construction time via `Context::add_rule()`,
+middleware stacks, and operator factories. They do not serialize.
+
+`OperatorConfig` carries **data**: cost limits, turn limits, model overrides,
+duration caps. The child operator reads this data and decides what behavior to
+construct. The parent controls the parameters. The child owns the behavior.
+
+```rust
+// Parent controls the budget (data):
+let config = OperatorConfig { max_cost: Some(dec!(5.0)), ..Default::default() };
+orchestrator.dispatch(&agent_id, OperatorInput { config: Some(config), .. }).await;
+
+// Child constructs the rule (behavior):
+let mut ctx = Context::new();
+if let Some(max_cost) = input.config.as_ref().and_then(|c| c.max_cost) {
+    ctx.add_rule(BudgetGuard::rule(BudgetGuardConfig {
+        max_cost: Some(max_cost),
+        ..Default::default()
+    }));
+}
+```
+
+### Why not a RuleSpec enum?
+
+A serializable enum of known rule types (`BudgetGuard`, `Telemetry`,
+`AutoCompact`, `Custom(Value)`) is a closed vocabulary disguised as
+extensible. Every new rule type requires editing the enum or falling back
+to untyped JSON. This is a central registry — it violates composability
+(§1) and forces the framework to know about every rule that will ever exist.
+
+The `Custom { name, config: Value }` escape hatch is worse: it recreates
+dynamic dispatch without type safety, requiring a name-to-constructor
+registry that must be synchronized across processes.
+
+### The dispatch boundary
+
+Same-process dispatch (`LocalOrchestrator`): the agent registry — the thing
+that maps `AgentId` to a constructed `Operator` — is where behavior is wired.
+Rules are attached at operator construction, not per-dispatch. If a system
+architect wants agent B to always run with a budget guard, they configure that
+when registering agent B.
+
+Cross-process dispatch (durable orchestrators): only data crosses the wire.
+`OperatorConfig` serializes. The remote process constructs behavior from that
+data using its own operator factories. Behavior stays local to the process
+that executes it.
+
+Per-dispatch variation (parent wants a tighter budget this time): use
+`OperatorConfig` fields. The child reads the data and adjusts its rules.
+The data travels. The behavior doesn't.
+
+### Antipattern — behavior descriptors
+
+Do not create serializable representations of behavior (rule specs, middleware
+descriptors, policy schemas) and ship them across dispatch boundaries. This
+pattern creates a shadow type system that duplicates the real one, requires
+synchronized registries, and collapses when the descriptor language can't
+express what the actual code can. If you need richer per-dispatch
+customization than `OperatorConfig` provides, add a field to `OperatorConfig`
+(it is `#[non_exhaustive]`), not a descriptor language.
