@@ -154,6 +154,165 @@ pub struct ProviderResponse {
     pub truncated: Option<bool>,
 }
 
+// ── Conversions between internal types and layer0 types ─────────────
+
+use layer0::content::{Content, ContentBlock};
+use layer0::context::{Message, Role as L0Role};
+
+/// Convert an internal `Role` to a layer0 `Role`.
+///
+/// Note: `turn::Role` has no `Tool` variant — tool results are content-level
+/// in the provider wire format, not role-level.
+pub fn role_to_layer0(role: &Role) -> L0Role {
+    match role {
+        Role::System => L0Role::System,
+        Role::User => L0Role::User,
+        Role::Assistant => L0Role::Assistant,
+    }
+}
+
+/// Convert a layer0 `Role` to an internal `Role`.
+///
+/// The `Tool` variant maps to `User` because provider wire format
+/// encodes tool results as user-role messages with `ToolResult` content.
+pub fn role_from_layer0(role: &L0Role) -> Role {
+    match role {
+        L0Role::System => Role::System,
+        L0Role::User => Role::User,
+        L0Role::Assistant => Role::Assistant,
+        L0Role::Tool { .. } => Role::User,
+        // Handle non_exhaustive
+        _ => Role::User,
+    }
+}
+
+/// Convert a layer0 `ContentBlock` to an internal `ContentPart`.
+pub fn content_block_to_part(block: &ContentBlock) -> ContentPart {
+    match block {
+        ContentBlock::Text { text } => ContentPart::Text { text: text.clone() },
+        ContentBlock::Image { source, media_type } => ContentPart::Image {
+            source: image_source_to_internal(source),
+            media_type: media_type.clone(),
+        },
+        ContentBlock::ToolUse { id, name, input } => ContentPart::ToolUse {
+            id: id.clone(),
+            name: name.clone(),
+            input: input.clone(),
+        },
+        ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => ContentPart::ToolResult {
+            tool_use_id: tool_use_id.clone(),
+            content: content.clone(),
+            is_error: *is_error,
+        },
+        ContentBlock::Custom { content_type, data } => ContentPart::Text {
+            text: format!(
+                "[custom:{}] {}",
+                content_type,
+                serde_json::to_string(data).unwrap_or_default()
+            ),
+        },
+        // Handle non_exhaustive future variants
+        _ => ContentPart::Text {
+            text: "[unknown content block]".into(),
+        },
+    }
+}
+
+/// Convert an internal `ContentPart` to a layer0 `ContentBlock`.
+pub fn content_part_to_block(part: &ContentPart) -> ContentBlock {
+    match part {
+        ContentPart::Text { text } => ContentBlock::Text { text: text.clone() },
+        ContentPart::Image { source, media_type } => ContentBlock::Image {
+            source: image_source_to_layer0(source),
+            media_type: media_type.clone(),
+        },
+        ContentPart::ToolUse { id, name, input } => ContentBlock::ToolUse {
+            id: id.clone(),
+            name: name.clone(),
+            input: input.clone(),
+        },
+        ContentPart::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => ContentBlock::ToolResult {
+            tool_use_id: tool_use_id.clone(),
+            content: content.clone(),
+            is_error: *is_error,
+        },
+    }
+}
+
+/// Convert layer0 `Content` to a list of internal `ContentPart`s.
+pub fn content_to_parts(content: &Content) -> Vec<ContentPart> {
+    match content {
+        Content::Text(text) => vec![ContentPart::Text { text: text.clone() }],
+        Content::Blocks(blocks) => blocks.iter().map(content_block_to_part).collect(),
+        // Handle non_exhaustive
+        _ => vec![ContentPart::Text {
+            text: "[unknown content]".into(),
+        }],
+    }
+}
+
+/// Convert internal `ContentPart`s to a layer0 `Content`.
+pub fn parts_to_content(parts: &[ContentPart]) -> Content {
+    if parts.len() == 1
+        && let ContentPart::Text { text } = &parts[0]
+    {
+        return Content::Text(text.clone());
+    }
+    Content::Blocks(parts.iter().map(content_part_to_block).collect())
+}
+
+fn image_source_to_internal(source: &layer0::content::ImageSource) -> ImageSource {
+    match source {
+        layer0::content::ImageSource::Base64 { data } => ImageSource::Base64 { data: data.clone() },
+        layer0::content::ImageSource::Url { url } => ImageSource::Url { url: url.clone() },
+        // Handle non_exhaustive
+        _ => ImageSource::Url { url: String::new() },
+    }
+}
+
+fn image_source_to_layer0(source: &ImageSource) -> layer0::content::ImageSource {
+    match source {
+        ImageSource::Base64 { data } => layer0::content::ImageSource::Base64 { data: data.clone() },
+        ImageSource::Url { url } => layer0::content::ImageSource::Url { url: url.clone() },
+    }
+}
+
+/// Convert a `ProviderMessage` to a layer0 `Message` with default metadata.
+impl From<ProviderMessage> for Message {
+    fn from(pm: ProviderMessage) -> Self {
+        Message::new(role_to_layer0(&pm.role), parts_to_content(&pm.content))
+    }
+}
+
+/// Convert a layer0 `Message` to a `ProviderMessage`.
+///
+/// Metadata (policy, salience, source) is discarded — the provider wire
+/// format does not carry it.
+impl From<Message> for ProviderMessage {
+    fn from(msg: Message) -> Self {
+        ProviderMessage {
+            role: role_from_layer0(&msg.role),
+            content: content_to_parts(&msg.content),
+        }
+    }
+}
+
+/// Convert a `&Message` to a `ProviderMessage` (cloning).
+pub fn message_to_provider(msg: &Message) -> ProviderMessage {
+    ProviderMessage {
+        role: role_from_layer0(&msg.role),
+        content: content_to_parts(&msg.content),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
