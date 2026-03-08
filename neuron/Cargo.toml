@@ -64,3 +64,6 @@ provider-openai = ["core", "dep:neuron-provider-openai"]
 provider-anthropic = ["core", "dep:neuron-provider-anthropic"]
 provider-ollama = ["core", "dep:neuron-provider-ollama"]
 providers-all = ["provider-openai", "provider-anthropic", "provider-ollama"]
+
+# High-level agent API
+agent = ["op-react", "state-memory"]

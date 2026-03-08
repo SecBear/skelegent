@@ -36,6 +36,11 @@ pub use neuron_tool;
 #[cfg(feature = "core")]
 pub use neuron_turn;
 
+#[cfg(feature = "agent")]
+mod agent;
+#[cfg(feature = "agent")]
+pub use agent::{agent, AgentBuildError, AgentBuilder, BuiltAgent};
+
 /// Happy-path imports for composing Neuron systems.
 pub mod prelude {
     #[cfg(feature = "core")]
@@ -70,4 +75,7 @@ pub mod prelude {
 
     #[cfg(feature = "state-fs")]
     pub use neuron_state_fs::FsStore;
+
+    #[cfg(feature = "agent")]
+    pub use crate::{agent, AgentBuildError, AgentBuilder, BuiltAgent};
 }
