@@ -17,7 +17,7 @@
   - [Custom Operator](guides/custom-operator.md)
   - [State](guides/state.md)
   - [Orchestration](guides/orchestration.md)
-  - [Middleware & Interception](guides/hooks.md)
+  - [Middleware & Interception](guides/middleware.md)
   - [MCP](guides/mcp.md)
   - [Testing](guides/testing.md)
 - [Reference](reference/README.md)

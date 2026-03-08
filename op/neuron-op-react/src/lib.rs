@@ -662,7 +662,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 if let ReactAction::Halt { reason } = interceptor.pre_inference(&state).await {
                     return Ok(Self::make_output(
                         parts_to_content(&last_content),
-                        ExitReason::ObserverHalt { reason },
+                        ExitReason::InterceptorHalt { reason },
                         self.build_metadata(
                             total_tokens_in,
                             total_tokens_out,
@@ -722,7 +722,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 {
                     return Ok(Self::make_output(
                         parts_to_content(&response.content),
-                        ExitReason::ObserverHalt { reason },
+                        ExitReason::InterceptorHalt { reason },
                         self.build_metadata(
                             total_tokens_in + response.usage.input_tokens,
                             total_tokens_out + response.usage.output_tokens,
@@ -962,7 +962,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         SubDispatchAction::Halt { reason } => {
                                             return Ok(Self::make_output(
                                                 parts_to_content(&last_content),
-                                                ExitReason::ObserverHalt { reason },
+                                                ExitReason::InterceptorHalt { reason },
                                                 self.build_metadata(
                                                     total_tokens_in,
                                                     total_tokens_out,
@@ -1048,7 +1048,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         SubDispatchResult::Halt { reason } => {
                                             return Ok(Self::make_output(
                                                 parts_to_content(&last_content),
-                                                ExitReason::ObserverHalt { reason },
+                                                ExitReason::InterceptorHalt { reason },
                                                 self.build_metadata(
                                                     total_tokens_in,
                                                     total_tokens_out,
@@ -1252,7 +1252,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 SubDispatchAction::Halt { reason } => {
                                     return Ok(Self::make_output(
                                         parts_to_content(&last_content),
-                                        ExitReason::ObserverHalt { reason },
+                                        ExitReason::InterceptorHalt { reason },
                                         self.build_metadata(
                                             total_tokens_in,
                                             total_tokens_out,
@@ -1329,7 +1329,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 SubDispatchResult::Halt { reason } => {
                                     return Ok(Self::make_output(
                                         parts_to_content(&last_content),
-                                        ExitReason::ObserverHalt { reason },
+                                        ExitReason::InterceptorHalt { reason },
                                         self.build_metadata(
                                             total_tokens_in,
                                             total_tokens_out,
@@ -1414,7 +1414,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 if let ReactAction::Halt { reason } = interceptor.exit_check(&state).await {
                     return Ok(Self::make_output(
                         parts_to_content(&last_content),
-                        ExitReason::ObserverHalt { reason },
+                        ExitReason::InterceptorHalt { reason },
                         self.build_metadata(
                             total_tokens_in,
                             total_tokens_out,
@@ -2893,7 +2893,7 @@ mod tests {
 
     #[tokio::test]
     async fn exit_priority_hook_before_limits() {
-        // ExitCheck guardrail fires → ObserverHalt, even though MaxTurns would also fire.
+        // ExitCheck guardrail fires → InterceptorHalt, even though MaxTurns would also fire.
         // max_turns=1, provider always returns ToolUse so the turn count reaches limit.
         let provider = MockProvider::new(vec![
             tool_use_response("tu_1", "echo", json!({})),
@@ -2917,12 +2917,12 @@ mod tests {
         )
         .with_interceptor(interceptor);
         let output = op.execute(simple_input("run")).await.unwrap();
-        // Must be ObserverHalt, not MaxTurns
+        // Must be InterceptorHalt, not MaxTurns
         match &output.exit_reason {
-            ExitReason::ObserverHalt { reason } => {
+            ExitReason::InterceptorHalt { reason } => {
                 assert_eq!(reason, "observer_halt_test");
             }
-            other => panic!("expected ObserverHalt, got {:?}", other),
+            other => panic!("expected InterceptorHalt, got {:?}", other),
         }
     }
 

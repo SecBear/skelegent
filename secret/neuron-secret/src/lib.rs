@@ -11,7 +11,7 @@
 //!   The name->source mapping lives in `CredentialRef`.
 //! - [`SecretValue`] uses scoped exposure (`with_bytes`) to prevent accidental leaks.
 //! - [`SecretRegistry`] dispatches by [`SecretSource`] variant, following the same
-//!   composition pattern as `ToolRegistry` and `HookRegistry`.
+//!   composition pattern as `ToolRegistry`.
 
 use async_trait::async_trait;
 use layer0::secret::SecretSource;

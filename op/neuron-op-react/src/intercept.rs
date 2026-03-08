@@ -81,20 +81,6 @@ pub enum SubDispatchResult {
 /// Every method has a default no-op implementation that returns `Continue`.
 /// Implement only the methods you need.
 ///
-/// # Hook point mapping (from old HookRegistry)
-///
-/// | Old HookPoint         | New method              |
-/// |-----------------------|-------------------------|
-/// | PreSteeringInject     | `pre_steering_inject`   |
-/// | PreInference          | `pre_inference`         |
-/// | PostInference         | `post_inference`        |
-/// | PostSteeringSkip      | `post_steering_skip`    |
-/// | PreSubDispatch        | `pre_sub_dispatch`      |
-/// | PostSubDispatch       | `post_sub_dispatch`     |
-/// | SubDispatchUpdate     | (removed — use tracing) |
-/// | ExitCheck             | `exit_check`            |
-/// | PreCompaction         | `pre_compaction`        |
-/// | PostCompaction        | `post_compaction`       |
 #[async_trait]
 pub trait ReactInterceptor: Send + Sync {
     /// Called before steering messages are injected into the context.

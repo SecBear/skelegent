@@ -285,9 +285,7 @@ fn exit_reason_custom_round_trip() {
 
 #[test]
 fn exit_reason_observer_halt_round_trip() {
-    let e = ExitReason::ObserverHalt {
-        reason: "budget exceeded".into(),
-    };
+    let e = ExitReason::InterceptorHalt { reason: "budget exceeded".into(), };
     let json = serde_json::to_string(&e).unwrap();
     let back: ExitReason = serde_json::from_str(&json).unwrap();
     assert_eq!(e, back);
@@ -1141,7 +1139,7 @@ fn event_source_round_trip() {
         layer0::lifecycle::EventSource::Orchestration,
         layer0::lifecycle::EventSource::State,
         layer0::lifecycle::EventSource::Environment,
-        layer0::lifecycle::EventSource::Hook,
+        layer0::lifecycle::EventSource::Middleware,
     ];
     for s in sources {
         let json = serde_json::to_string(&s).unwrap();
@@ -1359,7 +1357,7 @@ fn exit_reason_all_variants_round_trip() {
         ExitReason::BudgetExhausted,
         ExitReason::CircuitBreaker,
         ExitReason::Timeout,
-        ExitReason::ObserverHalt {
+        ExitReason::InterceptorHalt {
             reason: "safety".into(),
         },
         ExitReason::Error,

@@ -106,9 +106,9 @@ pub enum ExitReason {
     CircuitBreaker,
     /// Wall-clock timeout.
     Timeout,
-    /// Observer/guardrail halted execution.
-    ObserverHalt {
-        /// The reason the observer halted execution.
+    /// Interceptor/middleware halted execution.
+    InterceptorHalt {
+        /// The reason the interceptor halted execution.
         reason: String,
     },
     /// Unrecoverable error during execution.

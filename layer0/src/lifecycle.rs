@@ -262,8 +262,8 @@ pub enum EventSource {
     State,
     /// From the Environment protocol.
     Environment,
-    /// From a Hook.
-    Hook,
+    /// From middleware.
+    Middleware,
 }
 
 impl ObservableEvent {
