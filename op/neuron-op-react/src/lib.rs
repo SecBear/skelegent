@@ -1710,44 +1710,13 @@ fn parse_scope(s: &str) -> Scope {
 mod tests {
     use super::*;
     use neuron_tool::ToolRegistry;
+    use neuron_turn::infer::{InferRequest, InferResponse, ToolCall};
     use neuron_turn::provider::ProviderError;
+    use neuron_turn::test_utils::{ErrorProvider, TestProvider};
     use serde_json::json;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    // -- Mock Provider --
-
-    struct MockProvider {
-        responses: Mutex<VecDeque<ProviderResponse>>,
-        call_count: AtomicUsize,
-    }
-
-    impl MockProvider {
-        fn new(responses: Vec<ProviderResponse>) -> Self {
-            Self {
-                responses: Mutex::new(responses.into()),
-                call_count: AtomicUsize::new(0),
-            }
-        }
-    }
-
-    impl Provider for MockProvider {
-        fn complete(
-            &self,
-            _request: ProviderRequest,
-        ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send
-        {
-            self.call_count.fetch_add(1, Ordering::SeqCst);
-            let response = self
-                .responses
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("MockProvider: no more responses queued");
-            async move { Ok(response) }
-        }
-    }
 
     // -- Mock StateReader --
 
@@ -1809,11 +1778,10 @@ mod tests {
 
     // -- Helpers --
 
-    fn simple_text_response(text: &str) -> ProviderResponse {
-        ProviderResponse {
-            content: vec![ContentPart::Text {
-                text: text.to_string(),
-            }],
+    fn simple_text_response(text: &str) -> InferResponse {
+        InferResponse {
+            content: Content::text(text),
+            tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
             usage: TokenUsage {
                 input_tokens: 10,
@@ -1830,9 +1798,10 @@ mod tests {
         tool_id: &str,
         operator_name: &str,
         input: serde_json::Value,
-    ) -> ProviderResponse {
-        ProviderResponse {
-            content: vec![ContentPart::ToolUse {
+    ) -> InferResponse {
+        InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![ToolCall {
                 id: tool_id.to_string(),
                 name: operator_name.to_string(),
                 input,
@@ -1875,7 +1844,7 @@ mod tests {
 
     #[tokio::test]
     async fn simple_completion() {
-        let provider = MockProvider::new(vec![simple_text_response("Hello!")]);
+        let provider = TestProvider::with_responses(vec![simple_text_response("Hello!")]);
         let op = make_op(provider);
 
         let output = op.execute(simple_input("Hi")).await.unwrap();
@@ -1890,7 +1859,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_use_and_followup() {
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("tu_1", "echo", json!({"msg": "test"})),
             simple_text_response("Done."),
         ]);
@@ -1908,7 +1877,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_tool_returns_error_result() {
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("tu_1", "nonexistent_tool", json!({})),
             simple_text_response("Got an error."),
         ]);
@@ -1924,7 +1893,7 @@ mod tests {
     #[tokio::test]
     async fn max_turns_enforced() {
         // Provider always returns ToolUse — loop should hit max_turns limit
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("tu_1", "echo", json!({})),
             tool_use_response("tu_2", "echo", json!({})),
             tool_use_response("tu_3", "echo", json!({})),
@@ -1946,7 +1915,7 @@ mod tests {
         let _ = &mut op;
 
         let op = ReactOperator::new(
-            MockProvider::new(vec![
+            TestProvider::with_responses(vec![
                 tool_use_response("tu_1", "echo", json!({})),
                 tool_use_response("tu_2", "echo", json!({})),
                 simple_text_response("never reached"),
@@ -1971,7 +1940,7 @@ mod tests {
     #[tokio::test]
     async fn budget_exhausted() {
         // Two calls, each costing $0.0001, with max_cost = $0.00015
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("tu_1", "echo", json!({})),
             simple_text_response("Done"),
         ]);
@@ -1996,8 +1965,9 @@ mod tests {
 
     #[tokio::test]
     async fn max_tokens_returns_model_error() {
-        let provider = MockProvider::new(vec![ProviderResponse {
-            content: vec![],
+        let provider = TestProvider::with_responses(vec![InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![],
             stop_reason: StopReason::MaxTokens,
             usage: TokenUsage::default(),
             model: "mock".into(),
@@ -2016,8 +1986,9 @@ mod tests {
 
     #[tokio::test]
     async fn content_filter_returns_safety_stop() {
-        let provider = MockProvider::new(vec![ProviderResponse {
-            content: vec![],
+        let provider = TestProvider::with_responses(vec![InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![],
             stop_reason: StopReason::ContentFilter,
             usage: TokenUsage::default(),
             model: "mock".into(),
@@ -2035,7 +2006,7 @@ mod tests {
 
     #[tokio::test]
     async fn cost_aggregated_across_turns() {
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("tu_1", "echo", json!({})),
             simple_text_response("Done"),
         ]);
@@ -2053,7 +2024,7 @@ mod tests {
 
     #[tokio::test]
     async fn operator_config_overrides_defaults() {
-        let provider = MockProvider::new(vec![simple_text_response("Hi")]);
+        let provider = TestProvider::with_responses(vec![simple_text_response("Hi")]);
         let op = make_op(provider);
 
         let mut input = simple_input("test");
@@ -2069,10 +2040,11 @@ mod tests {
 
     #[tokio::test]
     async fn effect_tool_write_memory() {
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             // Model calls write_memory
-            ProviderResponse {
-                content: vec![ContentPart::ToolUse {
+            InferResponse {
+                content: Content::text(""),
+                tool_calls: vec![ToolCall {
                     id: "tu_1".into(),
                     name: "write_memory".into(),
                     input: json!({"scope": "global", "key": "test", "value": "hello"}),
@@ -2119,9 +2091,10 @@ mod tests {
 
     #[tokio::test]
     async fn effect_tool_delete_memory() {
-        let provider = MockProvider::new(vec![
-            ProviderResponse {
-                content: vec![ContentPart::ToolUse {
+        let provider = TestProvider::with_responses(vec![
+            InferResponse {
+                content: Content::text(""),
+                tool_calls: vec![ToolCall {
                     id: "tu_1".into(),
                     name: "delete_memory".into(),
                     input: json!({"scope": "global", "key": "old_key"}),
@@ -2146,9 +2119,10 @@ mod tests {
 
     #[tokio::test]
     async fn effect_tool_delegate() {
-        let provider = MockProvider::new(vec![
-            ProviderResponse {
-                content: vec![ContentPart::ToolUse {
+        let provider = TestProvider::with_responses(vec![
+            InferResponse {
+                content: Content::text(""),
+                tool_calls: vec![ToolCall {
                     id: "tu_1".into(),
                     name: "delegate".into(),
                     input: json!({"agent": "helper", "message": "do this task"}),
@@ -2176,9 +2150,10 @@ mod tests {
 
     #[tokio::test]
     async fn effect_tool_handoff() {
-        let provider = MockProvider::new(vec![
-            ProviderResponse {
-                content: vec![ContentPart::ToolUse {
+        let provider = TestProvider::with_responses(vec![
+            InferResponse {
+                content: Content::text(""),
+                tool_calls: vec![ToolCall {
                     id: "tu_1".into(),
                     name: "handoff".into(),
                     input: json!({"agent": "specialist", "state": {"context": "data"}}),
@@ -2206,9 +2181,10 @@ mod tests {
 
     #[tokio::test]
     async fn effect_tool_signal() {
-        let provider = MockProvider::new(vec![
-            ProviderResponse {
-                content: vec![ContentPart::ToolUse {
+        let provider = TestProvider::with_responses(vec![
+            InferResponse {
+                content: Content::text(""),
+                tool_calls: vec![ToolCall {
                     id: "tu_1".into(),
                     name: "signal".into(),
                     input: json!({"target": "workflow_1", "signal_type": "completed", "data": {"result": "ok"}}),
@@ -2248,15 +2224,15 @@ mod tests {
 
     #[test]
     fn react_operator_implements_operator_trait() {
-        // Compile-time check: ReactOperator<MockProvider> implements Operator
+        // Compile-time check: ReactOperator<TestProvider> implements Operator
         fn _assert_operator<T: Operator>() {}
-        _assert_operator::<ReactOperator<MockProvider>>();
+        _assert_operator::<ReactOperator<TestProvider>>();
     }
 
     #[tokio::test]
     async fn react_operator_as_arc_dyn_operator() {
         // ReactOperator<P> can be used as Arc<dyn Operator>
-        let provider = MockProvider::new(vec![simple_text_response("Hello!")]);
+        let provider = TestProvider::with_responses(vec![simple_text_response("Hello!")]);
         let op: Arc<dyn Operator> = Arc::new(ReactOperator::new(
             provider,
             ToolRegistry::new(),
@@ -2270,20 +2246,8 @@ mod tests {
 
     #[tokio::test]
     async fn provider_retryable_error_maps_to_retryable() {
-        struct ErrorProvider;
-        impl Provider for ErrorProvider {
-            #[allow(clippy::manual_async_fn)]
-            fn complete(
-                &self,
-                _request: ProviderRequest,
-            ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send
-            {
-                async { Err(ProviderError::RateLimited) }
-            }
-        }
-
         let op = ReactOperator::new(
-            ErrorProvider,
+            ErrorProvider::rate_limited(),
             ToolRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig::default(),
@@ -2295,47 +2259,27 @@ mod tests {
 
     #[tokio::test]
     async fn provider_call_count() {
-        let provider = MockProvider::new(vec![
+        let call_count = std::sync::Arc::new(AtomicUsize::new(0));
+        let cc = call_count.clone();
+        let responses = std::collections::VecDeque::from(vec![
             tool_use_response("tu_1", "echo", json!({})),
             tool_use_response("tu_2", "echo", json!({})),
             simple_text_response("Done"),
         ]);
-        let call_count = std::sync::Arc::new(AtomicUsize::new(0));
-
-        struct CountingProvider {
-            inner: MockProvider,
-            count: std::sync::Arc<AtomicUsize>,
-        }
-        impl Provider for CountingProvider {
-            #[allow(clippy::manual_async_fn)]
-            fn complete(
-                &self,
-                request: ProviderRequest,
-            ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send
-            {
-                self.count.fetch_add(1, Ordering::SeqCst);
-                self.inner.complete(request)
-            }
-        }
-
-        let counting_provider = CountingProvider {
-            inner: MockProvider::new(vec![
-                tool_use_response("tu_1", "echo", json!({})),
-                tool_use_response("tu_2", "echo", json!({})),
-                simple_text_response("Done"),
-            ]),
-            count: call_count.clone(),
-        };
+        let responses = std::sync::Arc::new(Mutex::new(responses));
+        let provider = neuron_turn::test_utils::FunctionProvider::new(move |_req| {
+            cc.fetch_add(1, Ordering::SeqCst);
+            let resp = responses.lock().unwrap().pop_front()
+                .expect("no more responses");
+            Ok(resp)
+        });
 
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        let op = make_op_with_tools(counting_provider, tools);
+        let op = make_op_with_tools(provider, tools);
 
         op.execute(simple_input("Multi-turn")).await.unwrap();
-        // Only counting_provider was called — provider was called 3 times
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
-        // The unused `provider` variable should not cause issues
-        drop(provider);
     }
 
     // -- Steering Mocks --
@@ -2422,14 +2366,15 @@ mod tests {
     #[tokio::test]
     async fn steering_skips_remaining_shared_batch() {
         // Provider returns two shared tool uses in one response
-        let first = ProviderResponse {
-            content: vec![
-                ContentPart::ToolUse {
+        let first = InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![
+                ToolCall {
                     id: "t1".into(),
                     name: "echo".into(),
                     input: json!({"n":1}),
                 },
-                ContentPart::ToolUse {
+                ToolCall {
                     id: "t2".into(),
                     name: "echo".into(),
                     input: json!({"n":2}),
@@ -2445,7 +2390,7 @@ mod tests {
             cost: None,
             truncated: None,
         };
-        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let provider = TestProvider::with_responses(vec![first, simple_text_response("Done")]);
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
@@ -2472,8 +2417,9 @@ mod tests {
     #[tokio::test]
     async fn steering_skips_before_exclusive() {
         // Single exclusive tool use, steering triggers before execution
-        let first = ProviderResponse {
-            content: vec![ContentPart::ToolUse {
+        let first = InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![ToolCall {
                 id: "t1".into(),
                 name: "echo".into(),
                 input: json!({}),
@@ -2490,25 +2436,15 @@ mod tests {
         };
         // Provider should be called again after steering injection
         let call_count = std::sync::Arc::new(AtomicUsize::new(0));
-        struct CountingProvider {
-            inner: MockProvider,
-            count: std::sync::Arc<AtomicUsize>,
-        }
-        impl Provider for CountingProvider {
-            #[allow(clippy::manual_async_fn)]
-            fn complete(
-                &self,
-                request: ProviderRequest,
-            ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send
-            {
-                self.count.fetch_add(1, Ordering::SeqCst);
-                self.inner.complete(request)
-            }
-        }
-        let counting = CountingProvider {
-            inner: MockProvider::new(vec![first, simple_text_response("Done")]),
-            count: call_count.clone(),
-        };
+        let cc = call_count.clone();
+        let responses = std::collections::VecDeque::from(vec![first, simple_text_response("Done")]);
+        let responses = std::sync::Arc::new(Mutex::new(responses));
+        let counting = neuron_turn::test_utils::FunctionProvider::new(move |_req| {
+            cc.fetch_add(1, Ordering::SeqCst);
+            let resp = responses.lock().unwrap().pop_front()
+                .expect("no more responses");
+            Ok(resp)
+        });
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
@@ -2535,14 +2471,15 @@ mod tests {
     #[tokio::test]
     async fn no_steering_default() {
         // Two shared tools; without steering both execute
-        let first = ProviderResponse {
-            content: vec![
-                ContentPart::ToolUse {
+        let first = InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![
+                ToolCall {
                     id: "t1".into(),
                     name: "echo".into(),
                     input: json!({}),
                 },
-                ContentPart::ToolUse {
+                ToolCall {
                     id: "t2".into(),
                     name: "echo".into(),
                     input: json!({}),
@@ -2558,7 +2495,7 @@ mod tests {
             cost: None,
             truncated: None,
         };
-        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let provider = TestProvider::with_responses(vec![first, simple_text_response("Done")]);
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
@@ -2648,7 +2585,7 @@ mod tests {
             finals: finals.clone(),
         });
         let op = ReactOperator::new(
-            MockProvider::new(vec![
+            TestProvider::with_responses(vec![
                 tool_use_response("tu_s", "stream_echo", json!({})),
                 simple_text_response("OK"),
             ]),
@@ -2714,14 +2651,15 @@ mod tests {
     #[tokio::test]
     async fn metadata_concurrency_batches_shared() {
         // Two uses of the same tool should batch as Shared when metadata decider is used
-        let first = ProviderResponse {
-            content: vec![
-                ContentPart::ToolUse {
+        let first = InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![
+                ToolCall {
                     id: "t1".into(),
                     name: "meta_echo".into(),
                     input: json!({}),
                 },
-                ContentPart::ToolUse {
+                ToolCall {
                     id: "t2".into(),
                     name: "meta_echo".into(),
                     input: json!({}),
@@ -2737,7 +2675,7 @@ mod tests {
             cost: None,
             truncated: None,
         };
-        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let provider = TestProvider::with_responses(vec![first, simple_text_response("Done")]);
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CountingSharedEchoTool::new(hits.clone())));
@@ -2792,22 +2730,18 @@ mod tests {
         }
     }
 
-    /// A provider that records the model field it receives.
-    struct RecordingProvider {
-        inner: MockProvider,
+    /// Build a provider that records model field and returns queued responses.
+    fn recording_provider(
+        responses: Vec<InferResponse>,
         models_seen: std::sync::Arc<Mutex<Vec<Option<String>>>>,
-    }
-    impl Provider for RecordingProvider {
-        #[allow(clippy::manual_async_fn)]
-        fn complete(
-            &self,
-            request: ProviderRequest,
-        ) -> impl std::future::Future<
-            Output = Result<ProviderResponse, neuron_turn::provider::ProviderError>,
-        > + Send {
-            self.models_seen.lock().unwrap().push(request.model.clone());
-            self.inner.complete(request)
-        }
+    ) -> neuron_turn::test_utils::FunctionProvider<impl Fn(InferRequest) -> Result<InferResponse, ProviderError> + Send + Sync> {
+        let responses = std::sync::Arc::new(Mutex::new(std::collections::VecDeque::from(responses)));
+        neuron_turn::test_utils::FunctionProvider::new(move |req: InferRequest| {
+            models_seen.lock().unwrap().push(req.model.clone());
+            let resp = responses.lock().unwrap().pop_front()
+                .expect("no more responses");
+            Ok(resp)
+        })
     }
 
     // ── tests ─────────────────────────────────────────────────────────
@@ -2816,7 +2750,7 @@ mod tests {
     async fn exit_priority_hook_before_limits() {
         // ExitCheck guardrail fires → InterceptorHalt, even though MaxTurns would also fire.
         // max_turns=1, provider always returns ToolUse so the turn count reaches limit.
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("tu_1", "echo", json!({})),
             // Second response never reached
             simple_text_response("never"),
@@ -2852,8 +2786,9 @@ mod tests {
     async fn steering_guardrail_blocks_injection() {
         // A Halt guardrail at PreSteeringInject must prevent injection.
         // The tool should still execute normally.
-        let first = ProviderResponse {
-            content: vec![ContentPart::ToolUse {
+        let first = InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![ToolCall {
                 id: "t1".into(),
                 name: "echo".into(),
                 input: json!({"n": 1}),
@@ -2868,7 +2803,7 @@ mod tests {
             cost: None,
             truncated: None,
         };
-        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let provider = TestProvider::with_responses(vec![first, simple_text_response("Done")]);
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
@@ -2894,8 +2829,9 @@ mod tests {
     #[tokio::test]
     async fn steering_observer_sees_skipped_operators() {
         // Observer at PostSteeringSkip receives the skipped tool names.
-        let first = ProviderResponse {
-            content: vec![ContentPart::ToolUse {
+        let first = InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![ToolCall {
                 id: "t1".into(),
                 name: "echo".into(),
                 input: json!({}),
@@ -2910,7 +2846,7 @@ mod tests {
             cost: None,
             truncated: None,
         };
-        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let provider = TestProvider::with_responses(vec![first, simple_text_response("Done")]);
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
@@ -2944,8 +2880,9 @@ mod tests {
     #[tokio::test]
     async fn steering_with_no_hooks_unchanged() {
         // Regression: steering with no hooks registered behaves the same as before.
-        let first = ProviderResponse {
-            content: vec![ContentPart::ToolUse {
+        let first = InferResponse {
+            content: Content::text(""),
+            tool_calls: vec![ToolCall {
                 id: "t1".into(),
                 name: "echo".into(),
                 input: json!({}),
@@ -2960,7 +2897,7 @@ mod tests {
             cost: None,
             truncated: None,
         };
-        let provider = MockProvider::new(vec![first, simple_text_response("Done")]);
+        let provider = TestProvider::with_responses(vec![first, simple_text_response("Done")]);
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
@@ -2979,7 +2916,7 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_reserve_enforced() {
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("t1", "echo", json!({})),
             simple_text_response("Done"),
         ]);
@@ -3014,7 +2951,7 @@ mod tests {
     async fn max_tool_calls_exits_with_budget_exhausted() {
         // max_tool_calls = 3; model always requests tool calls.
         // After the 3rd tool call, exit with BudgetExhausted.
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("t1", "echo", json!({})),
             tool_use_response("t2", "echo", json!({})),
             tool_use_response("t3", "echo", json!({})),
@@ -3042,7 +2979,7 @@ mod tests {
     async fn max_repeat_calls_detects_stuck() {
         // max_repeat_calls = 2; model always calls same tool with same args.
         // After 2 consecutive identical calls, exit with Custom("stuck_detected").
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("t1", "echo", json!({"x": 1})),
             tool_use_response("t2", "echo", json!({"x": 1})),
             simple_text_response("never reached"),
@@ -3069,7 +3006,7 @@ mod tests {
     #[tokio::test]
     async fn max_repeat_calls_different_args_no_trigger() {
         // max_repeat_calls = 2; model alternates args → no stuck detection.
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("t1", "echo", json!({"x": 1})),
             tool_use_response("t2", "echo", json!({"x": 2})),
             simple_text_response("Done"),
@@ -3095,7 +3032,7 @@ mod tests {
     async fn both_limits_none_current_behavior() {
         // Regression: both max_tool_calls=None and max_repeat_calls=None.
         // Behavior unchanged — completes normally.
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("t1", "echo", json!({})),
             tool_use_response("t2", "echo", json!({})),
             simple_text_response("Done"),
@@ -3124,13 +3061,13 @@ mod tests {
         // Selector returns Some("big-model") when messages.len() > 1 (after first turn),
         // None otherwise. Verify the provider sees the correct model each call.
         let models_seen = std::sync::Arc::new(Mutex::new(Vec::<Option<String>>::new()));
-        let provider = RecordingProvider {
-            inner: MockProvider::new(vec![
+        let provider = recording_provider(
+            vec![
                 tool_use_response("t1", "echo", json!({})),
                 simple_text_response("Done"),
-            ]),
-            models_seen: models_seen.clone(),
-        };
+            ],
+            models_seen.clone(),
+        );
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
@@ -3162,10 +3099,10 @@ mod tests {
     async fn no_model_selector_model_unchanged() {
         // Regression: without model_selector, model stays as configured.
         let models_seen = std::sync::Arc::new(Mutex::new(Vec::<Option<String>>::new()));
-        let provider = RecordingProvider {
-            inner: MockProvider::new(vec![simple_text_response("Hi")]),
-            models_seen: models_seen.clone(),
-        };
+        let provider = recording_provider(
+            vec![simple_text_response("Hi")],
+            models_seen.clone(),
+        );
         let op = ReactOperator::new(
             provider,
             ToolRegistry::new(),
@@ -3193,7 +3130,7 @@ mod tests {
     #[tokio::test]
     async fn budget_sink_receives_step_limit_reached() {
         // max_tool_calls = 2; model returns 2 tool calls then the limit fires.
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("t1", "echo", json!({})),
             tool_use_response("t2", "echo", json!({})),
             simple_text_response("never reached"),
@@ -3239,7 +3176,7 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_sink_receives_quality_event_on_success() {
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("t1", "echo", json!({})),
             simple_text_response("Done"),
         ]);
@@ -3394,7 +3331,7 @@ mod tests {
 
     #[test]
     fn context_snapshot_empty_before_execute() {
-        let provider = MockProvider::new(vec![]);
+        let provider = TestProvider::with_responses(vec![]);
         let op = make_op(provider);
         let snap = op.context_snapshot();
         assert!(snap.messages.is_empty());
@@ -3405,7 +3342,7 @@ mod tests {
 
     #[tokio::test]
     async fn context_snapshot_reflects_messages_after_turn() {
-        let provider = MockProvider::new(vec![simple_text_response("Hello!")]);
+        let provider = TestProvider::with_responses(vec![simple_text_response("Hello!")]);
         let op = make_op(provider);
         // Before execute: empty
         assert!(op.context_snapshot().messages.is_empty());
@@ -3421,7 +3358,7 @@ mod tests {
 
     #[test]
     fn context_snapshot_pinned_count() {
-        let provider = MockProvider::new(vec![]);
+        let provider = TestProvider::with_responses(vec![]);
         let op = make_op(provider);
         {
             let mut ctx = op.current_context.lock().unwrap();
@@ -3436,14 +3373,14 @@ mod tests {
 
     #[test]
     fn context_snapshot_last_compaction_removed_zero_initially() {
-        let provider = MockProvider::new(vec![]);
+        let provider = TestProvider::with_responses(vec![]);
         let op = make_op(provider);
         assert_eq!(op.context_snapshot().last_compaction_removed, 0);
     }
 
     #[test]
     fn context_snapshot_clone_and_debug() {
-        let provider = MockProvider::new(vec![]);
+        let provider = TestProvider::with_responses(vec![]);
         let op = make_op(provider);
         let snap = op.context_snapshot();
         let cloned = snap.clone();
@@ -3454,7 +3391,7 @@ mod tests {
 
     #[test]
     fn context_snapshot_serde_round_trip() {
-        let provider = MockProvider::new(vec![]);
+        let provider = TestProvider::with_responses(vec![]);
         let op = make_op(provider);
         let snap = op.context_snapshot();
         let json = serde_json::to_string(&snap).unwrap();
@@ -3530,7 +3467,7 @@ mod tests {
     #[tokio::test]
     async fn orchestrator_dispatch_routes_through_orch() {
         let orch = Arc::new(RecordingOrchestrator::new());
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("tu_1", "echo", json!({"msg": "hello"})),
             simple_text_response("Done."),
         ]);
@@ -3554,7 +3491,7 @@ mod tests {
     async fn default_orchestrator_dispatches_via_tool_registry() {
         // new() auto-creates a ToolRegistryOrchestrator from the tools arg.
         // Verify that tool dispatch works without explicit with_orchestrator().
-        let provider = MockProvider::new(vec![
+        let provider = TestProvider::with_responses(vec![
             tool_use_response("tu_1", "echo", json!({"msg": "hello"})),
             simple_text_response("Done via orch."),
         ]);

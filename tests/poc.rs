@@ -23,51 +23,31 @@ use neuron_orch_local::LocalOrch;
 use neuron_state_fs::FsStore;
 use neuron_state_memory::MemoryStore;
 use neuron_tool::ToolRegistry;
-use neuron_turn::provider::{Provider, ProviderError};
+use neuron_turn::infer::InferResponse;
+use neuron_turn::test_utils::{make_text_response, TestProvider};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// MockProvider — canned responses, no network
+// Helpers for building InferResponse with specific fields
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-struct MockProvider {
-    response: ProviderResponse,
-}
-
-impl MockProvider {
-    fn new(response: ProviderResponse) -> Self {
-        Self { response }
-    }
-
-    /// Create a MockProvider that returns a simple text response.
-    fn text(text: &str) -> Self {
-        Self::new(ProviderResponse {
-            content: vec![ContentPart::Text {
-                text: text.to_string(),
-            }],
-            stop_reason: StopReason::EndTurn,
-            usage: TokenUsage {
-                input_tokens: 25,
-                output_tokens: 10,
-                cache_read_tokens: None,
-                cache_creation_tokens: None,
-            },
-            model: "mock-model".into(),
-            cost: Some(Decimal::new(1, 4)), // $0.0001
-            truncated: None,
-        })
-    }
-}
-
-impl Provider for MockProvider {
-    fn complete(
-        &self,
-        _request: ProviderRequest,
-    ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send {
-        let response = self.response.clone();
-        async move { Ok(response) }
+/// Build an InferResponse with custom token counts, model, and cost.
+fn make_response(text: &str, input_tokens: u64, output_tokens: u64, model: &str, cost: Decimal) -> InferResponse {
+    InferResponse {
+        content: Content::text(text),
+        tool_calls: vec![],
+        stop_reason: StopReason::EndTurn,
+        usage: TokenUsage {
+            input_tokens,
+            output_tokens,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        },
+        model: model.into(),
+        cost: Some(cost),
+        truncated: None,
     }
 }
 
@@ -117,7 +97,7 @@ fn react_config() -> ReactConfig {
     }
 }
 
-fn make_react_operator(provider: MockProvider) -> ReactOperator<MockProvider> {
+fn make_react_operator(provider: TestProvider) -> ReactOperator<TestProvider> {
     ReactOperator::new(
         provider,
         ToolRegistry::new(),
@@ -130,54 +110,20 @@ fn make_react_operator(provider: MockProvider) -> ReactOperator<MockProvider> {
 // Pattern 1: Provider Swap
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// A second mock provider with different response characteristics,
-/// simulating a different LLM backend.
-struct MockProviderB {
-    response: ProviderResponse,
-}
-
-impl MockProviderB {
-    fn text(text: &str) -> Self {
-        Self {
-            response: ProviderResponse {
-                content: vec![ContentPart::Text {
-                    text: text.to_string(),
-                }],
-                stop_reason: StopReason::EndTurn,
-                usage: TokenUsage {
-                    input_tokens: 30,
-                    output_tokens: 15,
-                    cache_read_tokens: None,
-                    cache_creation_tokens: None,
-                },
-                model: "mock-model-b".into(),
-                cost: Some(Decimal::new(2, 4)), // $0.0002
-                truncated: None,
-            },
-        }
-    }
-}
-
-impl Provider for MockProviderB {
-    fn complete(
-        &self,
-        _request: ProviderRequest,
-    ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send {
-        let response = self.response.clone();
-        async move { Ok(response) }
-    }
-}
 
 #[tokio::test]
 async fn provider_swap_same_config_different_backend() {
     // The SAME ReactConfig, ToolRegistry, and context strategy.
-    // Only the generic type parameter P (the provider) changes.
+    // Only the provider instance differs.
     let config = react_config();
     let tools = ToolRegistry::new();
 
-    // Provider A: returns "Hello from A"
-    let op_a: ReactOperator<MockProvider> = ReactOperator::new(
-        MockProvider::text("Hello from provider A"),
+    // Provider A: returns "Hello from A" with 25 input tokens
+    let provider_a = TestProvider::with_responses(vec![
+        make_response("Hello from provider A", 25, 10, "mock-model", Decimal::new(1, 4)),
+    ]);
+    let op_a: ReactOperator<TestProvider> = ReactOperator::new(
+        provider_a,
         tools,
         Arc::new(NullStateReader),
         config,
@@ -186,9 +132,12 @@ async fn provider_swap_same_config_different_backend() {
     let config_b = react_config();
     let tools_b = ToolRegistry::new();
 
-    // Provider B: returns "Hello from B" with different token counts
-    let op_b: ReactOperator<MockProviderB> = ReactOperator::new(
-        MockProviderB::text("Hello from provider B"),
+    // Provider B: returns "Hello from B" with 30 input tokens
+    let provider_b = TestProvider::with_responses(vec![
+        make_response("Hello from provider B", 30, 15, "mock-model-b", Decimal::new(2, 4)),
+    ]);
+    let op_b: ReactOperator<TestProvider> = ReactOperator::new(
+        provider_b,
         tools_b,
         Arc::new(NullStateReader),
         config_b,
@@ -214,9 +163,11 @@ async fn provider_swap_same_config_different_backend() {
     assert_eq!(output_b.metadata.tokens_in, 30);
 
     // Both implement the Operator trait and can be used as dyn Operator
-    let dyn_a: Arc<dyn Operator> = Arc::new(make_react_operator(MockProvider::text("dyn A")));
+    let dyn_a: Arc<dyn Operator> = Arc::new(make_react_operator(
+        TestProvider::with_responses(vec![make_text_response("dyn A")]),
+    ));
     let dyn_b: Arc<dyn Operator> = Arc::new(ReactOperator::new(
-        MockProviderB::text("dyn B"),
+        TestProvider::with_responses(vec![make_text_response("dyn B")]),
         ToolRegistry::new(),
         Arc::new(NullStateReader),
         react_config(),
@@ -343,28 +294,14 @@ async fn state_swap_scope_isolation() {
 
 #[tokio::test]
 async fn operator_swap_react_vs_single_shot() {
-    let provider_response = ProviderResponse {
-        content: vec![ContentPart::Text {
-            text: "Hello, world!".to_string(),
-        }],
-        stop_reason: StopReason::EndTurn,
-        usage: TokenUsage {
-            input_tokens: 20,
-            output_tokens: 8,
-            cache_read_tokens: None,
-            cache_creation_tokens: None,
-        },
-        model: "mock-model".into(),
-        cost: Some(Decimal::new(5, 5)), // $0.00005
-        truncated: None,
-    };
+    let provider_response = make_response("Hello, world!", 20, 8, "mock-model", Decimal::new(5, 5));
 
     // Operator A: ReactOperator (multi-turn with tools, hooks, state)
-    let react_op = make_react_operator(MockProvider::new(provider_response.clone()));
+    let react_op = make_react_operator(TestProvider::with_responses(vec![provider_response.clone()]));
 
     // Operator B: SingleShotOperator (single call, no tools)
     let single_shot_op = SingleShotOperator::new(
-        MockProvider::new(provider_response),
+        TestProvider::with_responses(vec![provider_response]),
         SingleShotConfig {
             system_prompt: "You are a helpful assistant.".into(),
             default_model: "mock-model".into(),
@@ -396,9 +333,9 @@ async fn operator_swap_react_vs_single_shot() {
 
     // Both can be used as dyn Operator (object-safe)
     let operators: Vec<Arc<dyn Operator>> = vec![
-        Arc::new(make_react_operator(MockProvider::text("from react"))),
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("from react")]))),
         Arc::new(SingleShotOperator::new(
-            MockProvider::text("from single-shot"),
+            TestProvider::with_responses(vec![make_text_response("from single-shot")]),
             SingleShotConfig::default(),
         )),
         Arc::new(EchoOperator), // layer0 test-utils echo operator
@@ -445,11 +382,9 @@ async fn multi_agent_dispatch_single() {
     let mut orch = LocalOrch::new();
 
     // Register agents with different capabilities
-    let summarizer: Arc<dyn Operator> = Arc::new(make_react_operator(MockProvider::text(
-        "Summary: the user greeted us.",
-    )));
+    let summarizer: Arc<dyn Operator> = Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Summary: the user greeted us.")])));
     let classifier: Arc<dyn Operator> = Arc::new(SingleShotOperator::new(
-        MockProvider::text("category: greeting"),
+        TestProvider::with_responses(vec![make_text_response("category: greeting")]),
         SingleShotConfig::default(),
     ));
     let echo: Arc<dyn Operator> = Arc::new(EchoOperator);
@@ -493,12 +428,12 @@ async fn multi_agent_parallel_dispatch() {
     // Register multiple agents
     orch.register(
         AgentId::new("agent_a"),
-        Arc::new(make_react_operator(MockProvider::text("Result from A"))),
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Result from A")]))),
     );
     orch.register(
         AgentId::new("agent_b"),
         Arc::new(SingleShotOperator::new(
-            MockProvider::text("Result from B"),
+            TestProvider::with_responses(vec![make_text_response("Result from B")]),
             SingleShotConfig::default(),
         )),
     );
@@ -534,15 +469,11 @@ async fn multi_agent_with_state_storage() {
 
     orch.register(
         AgentId::new("researcher"),
-        Arc::new(make_react_operator(MockProvider::text(
-            "Research findings: Rust is fast and safe.",
-        ))),
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Research findings: Rust is fast and safe.")]))),
     );
     orch.register(
         AgentId::new("writer"),
-        Arc::new(make_react_operator(MockProvider::text(
-            "Draft: Rust combines speed with memory safety.",
-        ))),
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Draft: Rust combines speed with memory safety.")]))),
     );
 
     // Step 1: Dispatch research task
@@ -652,14 +583,12 @@ async fn combined_all_patterns() {
 
     let mut orch = LocalOrch::new();
 
-    // Agent 1: ReactOperator with MockProvider (provider A)
-    let agent_react: Arc<dyn Operator> = Arc::new(make_react_operator(MockProvider::text(
-        "Analysis: topic is interesting.",
-    )));
+    // Agent 1: ReactOperator with TestProvider (provider A)
+    let agent_react: Arc<dyn Operator> = Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Analysis: topic is interesting.")])));
 
-    // Agent 2: SingleShotOperator with MockProviderB (provider B)
+    // Agent 2: SingleShotOperator with TestProvider (provider B)
     let agent_ss: Arc<dyn Operator> = Arc::new(SingleShotOperator::new(
-        MockProviderB::text("Rating: 8/10"),
+        TestProvider::with_responses(vec![make_text_response("Rating: 8/10")]),
         SingleShotConfig {
             system_prompt: "Rate the topic.".into(),
             default_model: "mock-b".into(),

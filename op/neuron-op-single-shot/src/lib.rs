@@ -142,84 +142,18 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neuron_turn::provider::ProviderError;
-    use neuron_turn::types::{ContentPart, ProviderRequest, ProviderResponse, StopReason, TokenUsage};
-    use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
-
-    // -- Mock Provider --
-
-    struct MockProvider {
-        responses: Mutex<VecDeque<Result<ProviderResponse, ProviderError>>>,
-        requests: Mutex<Vec<ProviderRequest>>,
-        call_count: AtomicUsize,
-    }
-
-    impl MockProvider {
-        fn new(responses: Vec<ProviderResponse>) -> Self {
-            Self {
-                responses: Mutex::new(responses.into_iter().map(Ok).collect()),
-                requests: Mutex::new(vec![]),
-                call_count: AtomicUsize::new(0),
-            }
-        }
-
-        fn with_error(error: ProviderError) -> Self {
-            Self {
-                responses: Mutex::new(VecDeque::from([Err(error)])),
-                requests: Mutex::new(vec![]),
-                call_count: AtomicUsize::new(0),
-            }
-        }
-
-        fn captured_requests(&self) -> Vec<ProviderRequest> {
-            self.requests.lock().unwrap().clone()
-        }
-    }
-
-    impl Provider for MockProvider {
-        fn complete(
-            &self,
-            request: ProviderRequest,
-        ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send
-        {
-            self.call_count.fetch_add(1, Ordering::SeqCst);
-            self.requests.lock().unwrap().push(request);
-            let result = self
-                .responses
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("MockProvider: no more responses queued");
-            async move { result }
-        }
-    }
+    use neuron_turn::infer::InferResponse;
+    use neuron_turn::test_utils::{error_provider_rate_limited, make_text_response, TestProvider};
+    use neuron_turn::types::{StopReason, TokenUsage};
+    use std::sync::Arc;
 
     // -- Helpers --
-
-    fn simple_text_response(text: &str) -> ProviderResponse {
-        ProviderResponse {
-            content: vec![ContentPart::Text {
-                text: text.to_string(),
-            }],
-            stop_reason: StopReason::EndTurn,
-            usage: TokenUsage {
-                input_tokens: 10,
-                output_tokens: 5,
-                ..Default::default()
-            },
-            model: "mock-model".into(),
-            cost: Some(Decimal::new(1, 4)), // $0.0001
-            truncated: None,
-        }
-    }
 
     fn simple_input(text: &str) -> OperatorInput {
         OperatorInput::new(Content::text(text), layer0::operator::TriggerType::User)
     }
 
-    fn make_op(provider: MockProvider) -> SingleShotOperator<MockProvider> {
+    fn make_op(provider: TestProvider) -> SingleShotOperator<TestProvider> {
         SingleShotOperator::new(provider, SingleShotConfig::default())
     }
 
@@ -227,7 +161,7 @@ mod tests {
 
     #[tokio::test]
     async fn single_shot_returns_completion() {
-        let provider = MockProvider::new(vec![simple_text_response("Hello!")]);
+        let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op = make_op(provider);
 
         let output = op.execute(simple_input("Hi")).await.unwrap();
@@ -238,7 +172,7 @@ mod tests {
 
     #[tokio::test]
     async fn single_shot_always_one_turn() {
-        let provider = MockProvider::new(vec![simple_text_response("Response")]);
+        let provider = TestProvider::with_responses(vec![make_text_response("Response")]);
         let op = make_op(provider);
 
         let output = op.execute(simple_input("Query")).await.unwrap();
@@ -248,12 +182,12 @@ mod tests {
 
     #[tokio::test]
     async fn single_shot_no_tools_in_request() {
-        let provider = MockProvider::new(vec![simple_text_response("Done")]);
+        let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
         let op = make_op(provider);
 
         op.execute(simple_input("Test")).await.unwrap();
 
-        let requests = op.provider.captured_requests();
+        let requests = op.provider.requests();
         assert_eq!(requests.len(), 1);
         assert!(
             requests[0].tools.is_empty(),
@@ -263,8 +197,8 @@ mod tests {
 
     #[tokio::test]
     async fn single_shot_rate_limit_maps_to_retryable() {
-        let provider = MockProvider::with_error(ProviderError::RateLimited);
-        let op = make_op(provider);
+        let provider = error_provider_rate_limited();
+        let op = SingleShotOperator::new(provider, SingleShotConfig::default());
 
         let result = op.execute(simple_input("test")).await;
         assert!(matches!(result, Err(OperatorError::Retryable(_))));
@@ -273,10 +207,9 @@ mod tests {
     #[tokio::test]
     async fn single_shot_cost_passed_through() {
         let cost = Decimal::new(42, 4); // $0.0042
-        let response = ProviderResponse {
-            content: vec![ContentPart::Text {
-                text: "result".to_string(),
-            }],
+        let response = InferResponse {
+            content: Content::text("result"),
+            tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
             usage: TokenUsage {
                 input_tokens: 100,
@@ -287,7 +220,7 @@ mod tests {
             cost: Some(cost),
             truncated: None,
         };
-        let provider = MockProvider::new(vec![response]);
+        let provider = TestProvider::with_responses(vec![response]);
         let op = make_op(provider);
 
         let output = op.execute(simple_input("test")).await.unwrap();
@@ -299,13 +232,13 @@ mod tests {
 
     #[tokio::test]
     async fn single_shot_as_arc_dyn_operator() {
-        let provider = MockProvider::new(vec![simple_text_response("Hello!")]);
+        let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op: Arc<dyn Operator> = Arc::new(SingleShotOperator::new(
             provider,
             SingleShotConfig::default(),
         ));
 
-        let output = op.execute(simple_input("Hi")).await.unwrap();
+        let output = Operator::execute(op.as_ref(), simple_input("Hi")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
     }
 }

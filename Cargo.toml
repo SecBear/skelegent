@@ -46,7 +46,7 @@ homepage = "https://github.com/secbear/neuron"
 [dev-dependencies]
 layer0 = { path = "layer0", features = ["test-utils"], version = "0.4.0" }
 neuron = { path = "neuron", version = "0.4.0" }
-neuron-turn = { path = "turn/neuron-turn", version = "0.4.0" }
+neuron-turn = { path = "turn/neuron-turn", features = ["test-utils"], version = "0.4.0" }
 neuron-op-react = { path = "op/neuron-op-react", version = "0.4.0" }
 neuron-op-single-shot = { path = "op/neuron-op-single-shot", version = "0.4.0" }
 neuron-context = { path = "turn/neuron-context", version = "0.4.0" }

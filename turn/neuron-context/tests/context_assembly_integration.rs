@@ -159,7 +159,7 @@ async fn assemble_full_pipeline() {
     }
 
     // Deltas should be ordered by recency (most recent first = highest salience)
-    let delta_saliences: Vec<f64> = messages[2..5]
+    let _delta_saliences: Vec<f64> = messages[2..5]
         .iter()
         .map(|m| m.meta.salience.unwrap())
         .collect();

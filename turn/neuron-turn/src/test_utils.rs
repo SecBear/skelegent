@@ -334,7 +334,7 @@ mod tests {
         let provider = FunctionProvider::new(|req| {
             let model = req.model.unwrap_or_else(|| "default".into());
             Ok(InferResponse {
-                content: Content::text(&format!("echoed with {model}")),
+                content: Content::text(format!("echoed with {model}")),
                 tool_calls: vec![],
                 stop_reason: StopReason::EndTurn,
                 usage: TokenUsage::default(),
