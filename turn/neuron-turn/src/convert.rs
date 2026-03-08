@@ -1,9 +1,8 @@
 //! Bidirectional conversion between layer0 types and internal types.
 
-use crate::context::AnnotatedMessage;
 use crate::types::{ContentPart, ImageSource, ProviderMessage, Role};
 use layer0::content::{Content, ContentBlock};
-use layer0::context::{Message, MessageMeta, Role as L0Role};
+use layer0::context::{Message, Role as L0Role};
 
 /// Convert a layer0 `ContentBlock` to an internal `ContentPart`.
 pub fn content_block_to_part(block: &ContentBlock) -> ContentPart {
@@ -153,22 +152,6 @@ impl From<ProviderMessage> for Message {
     }
 }
 
-/// Convert an `AnnotatedMessage` to a layer0 `Message`, preserving metadata.
-impl From<AnnotatedMessage> for Message {
-    fn from(am: AnnotatedMessage) -> Self {
-        let role = role_to_layer0(&am.message.role);
-        let content = parts_to_content(&am.message.content);
-        let mut meta = MessageMeta::default();
-        if let Some(policy) = am.policy {
-            meta.policy = policy;
-        }
-        meta.source = am.source;
-        meta.salience = am.salience;
-        let mut msg = Message::new(role, content);
-        msg.meta = meta;
-        msg
-    }
-}
 
 /// Convert a layer0 `Message` to a `ProviderMessage`.
 ///
