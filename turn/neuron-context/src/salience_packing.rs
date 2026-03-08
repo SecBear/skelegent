@@ -133,7 +133,7 @@ impl SaliencePackingStrategy {
 /// Returns 0.0 for empty inputs, 1.0 for identical term sets.
 /// This is the v1 similarity function — cosine over embeddings is planned
 /// for v2 when `sqlite-vec` is available.
-fn term_jaccard(a: &str, b: &str) -> f64 {
+pub(crate) fn term_jaccard(a: &str, b: &str) -> f64 {
     let terms_a: HashSet<&str> = a.split_whitespace().collect();
     let terms_b: HashSet<&str> = b.split_whitespace().collect();
     let intersection = terms_a.intersection(&terms_b).count();
