@@ -5,10 +5,8 @@
 //! and all the types needed by operator implementations.
 
 pub mod config;
-pub mod context;
 pub mod convert;
 pub mod provider;
-pub mod tiered;
 pub mod types;
 
 // Re-exports
