@@ -177,12 +177,15 @@ pub trait Rule: Send + Sync {
 ### Attaching a rule
 
 ```rust,no_run
-use std::sync::Arc;
-use neuron_context_engine::{ContextEngine, ReactLoopConfig};
-use neuron_context_engine::rules::Rule;
+use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
+use neuron_context_engine::rule::Rule;
 
-let op = ContextEngine::new(provider, tools, context_strategy, state_reader, config)
-    .with_rule(Arc::new(my_rule));
+// Rules are attached to Context, then passed to react_loop
+let mut ctx = Context::new();
+ctx.add_rule(my_rule);
+
+// react_loop fires rules automatically during execution
+let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config).await?;
 ```
 
 ### Example: budget enforcement rule

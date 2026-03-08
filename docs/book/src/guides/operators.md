@@ -14,61 +14,89 @@ pub trait Operator: Send + Sync {
 }
 ```
 
-neuron ships two operator implementations: a context engine (composable three-phase engine with assembly, inference, reaction) and `SingleShotOperator` (one model call, no tools).
+neuron ships a context engine (`neuron-context-engine`) — a set of composable primitives around `react_loop` — and `SingleShotOperator` (one model call, no tools). External consumers wrap `react_loop` in their own `impl Operator` struct for the object-safe boundary.
 
 ## Context Engine
 
 **Crate:** `neuron-context-engine`
 
-The context engine implements a composable three-phase loop (assembly, inference, reaction):
+The context engine is **not** a monolithic struct. It is a set of composable primitives centered on `react_loop()`, which orchestrates the assembly → inference → reaction loop:
 
 1. **Assemble context** -- Build the prompt from the system prompt, conversation history, tool definitions, and the new input message.
 2. **Call the model** -- Send the assembled context to the provider.
-3. **Check for tool use** -- If the model requested sub-dispatches, execute them.
-4. **Backfill results** -- Add sub-dispatch results to the conversation context.
+3. **Check for tool use** -- If the model requested tool calls, execute them.
+4. **Backfill results** -- Add tool results to the conversation context.
 5. **Repeat** -- Loop back to step 2 until the model produces a final response or a limit is reached.
 
 ### Construction
 
+To use the context engine as an `Operator`, create a wrapper struct that holds a `Provider`, `ToolRegistry`, and `ReactLoopConfig`, then implement `Operator` by constructing a `Context`, injecting the user message, and calling `react_loop()`:
+
 ```rust,no_run
-use std::sync::Arc;
-use neuron_context_engine::{ReactLoopConfig, ContextEngine};
-use neuron_provider_anthropic::AnthropicProvider;
-use neuron_tool::ToolRegistry;
-use neuron_turn::NoCompaction;
-use neuron_state_memory::MemoryStore;
+use async_trait::async_trait;
+use layer0::operator::{Operator, OperatorInput, OperatorOutput, OperatorError};
+use layer0::context::{Message, Role};
+use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
+use neuron_turn::provider::Provider;
+use neuron_tool::{ToolRegistry, ToolCallContext};
 
-let config = ReactLoopConfig {
-    system_prompt: "You are a coding assistant.".into(),
-    default_model: "claude-haiku-4-5-20251001".into(),
-    default_max_tokens: 4096,
-    default_max_turns: 10,
-};
+struct MyOperator<P: Provider> {
+    provider: P,
+    config: ReactLoopConfig,
+    tools: ToolRegistry,
+    tool_ctx: ToolCallContext,
+}
 
-let provider = AnthropicProvider::new("sk-ant-...");
-let tools = ToolRegistry::new();   // add tools as needed
-let state = Arc::new(MemoryStore::new());
+#[async_trait]
+impl<P: Provider> Operator for MyOperator<P> {
+    async fn execute(
+        &self,
+        input: OperatorInput,
+    ) -> Result<OperatorOutput, OperatorError> {
+        // Context is the conversation store — create one per invocation
+        let mut ctx = Context::new();
 
-let operator = ContextEngine::new(
-    provider,
-    tools,
-    Box::new(NoCompaction),
-    state,
-    config,
-);
+        // Inject domain context (shell history, file state, etc.) via assembly ops
+        // ctx.inject_system("Additional context here").await?;
+
+        // Inject the user input
+        ctx.inject_message(Message::new(Role::User, input.message))
+            .await
+            .map_err(|e| OperatorError::NonRetryable(e.to_string()))?;
+
+        // react_loop composes Context, CompileConfig, AppendResponse,
+        // and ExecuteTool internally — you just hand it the primitives
+        react_loop(&mut ctx, &self.provider, &self.tools, &self.tool_ctx, &self.config)
+            .await
+            .map_err(|e| OperatorError::NonRetryable(e.to_string()))
+    }
+}
+```
+
+The key integration pattern:
+
+```text
+Your domain context (shell history, file state, user prefs)
+    ↓ feeds into
+Context via inject_system(), inject_message(), or system_addendum in ReactLoopConfig
+    ↓ manages
+LLM conversation turns (Message with Role + Content)
+    ↓ compiles to
+CompiledContext → infer(provider) → InferResult
+    ↓ response goes through
+ContextOps (AppendResponse, ExecuteTool) → rules fire automatically
 ```
 
 ### Configuration
 
-`ReactLoopConfig` sets the static defaults for the operator instance:
+`ReactLoopConfig` sets the static defaults for the loop:
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `system_prompt` | `""` | Base system prompt prepended to every request |
-| `default_model` | `""` | Model identifier (e.g., `"claude-haiku-4-5-20251001"`) |
-| `default_max_tokens` | `4096` | Max tokens per model response |
-| `default_max_turns` | `10` | Max context engine loop iterations before stopping |
-
+| `model` | `None` | Model identifier (e.g., `Some("claude-haiku-4-5-20251001".into())`) |
+| `max_tokens` | `None` | Max tokens per model response |
+| `temperature` | `None` | Sampling temperature |
 These defaults can be overridden per-invocation via `OperatorConfig` in the `OperatorInput`:
 
 ```rust
@@ -96,7 +124,7 @@ The context engine loop stops when:
 - **`MaxTurns`** -- The `max_turns` limit was reached.
 - **`BudgetExhausted`** -- Accumulated cost exceeded `max_cost`.
 - **`Timeout`** -- Wall-clock time exceeded `max_duration`.
-- **`RuleHalt`** -- A Rule returned `RuleAction::Halt`.
+- **`InterceptorHalt`** -- An interceptor (including a Rule that returns `RuleAction::Halt`) stopped execution.
 - **`CircuitBreaker`** -- Too many consecutive failures (provider errors or tool errors).
 - **`Error`** -- An unrecoverable error occurred.
 
@@ -156,7 +184,7 @@ Both operators implement `layer0::Operator`, which is object-safe. You can use t
 use layer0::operator::Operator;
 use std::sync::Arc;
 
-let engine_op: Arc<dyn Operator> = Arc::new(context_engine);
+let engine_op: Arc<dyn Operator> = Arc::new(my_operator);
 let single_op: Arc<dyn Operator> = Arc::new(single_shot_operator);
 
 // Orchestrator doesn't know or care which operator it's dispatching to
@@ -167,27 +195,24 @@ orchestrator.register_agent("classifier", single_op);
 The provider's generic type parameter is erased at the `Operator` boundary. Callers never see the concrete provider type.
 
 
-## Custom operators: barrier scheduling and steering
+## Custom operators: Rules as extension points
 
-For detailed guidance on composing the context engine with `BarrierPlanner`, `SteeringSource`, and `BudgetEventSink`, see the dedicated guide:
+The primary extension mechanism for the context engine loop is **Rules**. Rules fire during the react loop and can inspect context, modify messages, or halt execution. For detailed guidance on building a custom operator, see:
 
 **[Building a custom operator](custom-operator.md)**
 
 That guide covers:
-- The three-primitive wiring pattern (`with_planner`, `with_steering`, `with_budget_sink`)
 - Implementing Rules for loop interception
-- Implementing `SteeringSource` and making steering observable via rules
+- Using `ContextOp` to compose assembly, inference, and reaction
+- Wiring domain-specific logic into the react loop
 
-The brief example skeleton below shows the shape of a custom operator that uses the context engine as its foundation. For a runnable version see the `custom-operator-barrier` example crate.
+The brief example skeleton below shows the shape of a custom operator that wraps `react_loop` with additional rule-based behavior:
 
 ```rust,no_run
-use std::sync::Arc;
-use layer0::operator::{Operator, OperatorInput, OperatorOutput, ExitReason};
-use neuron_context_engine::{ReactLoopConfig, ContextEngine, BarrierPlanner};
+use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
 use neuron_tool::ToolRegistry;
 
-// Build a context engine with barrier scheduling:
-// let op = ContextEngine::new(provider, tools, context_strategy, state_reader, config)
-//     .with_planner(Box::new(BarrierPlanner))
-//     .with_concurrency_decider(Box::new(my_decider));
+// Build your operator struct wrapping Provider + ToolRegistry + ReactLoopConfig
+// (see the Construction example above), then add Rules to the Context
+// before calling react_loop() to customize loop behavior.
 ```

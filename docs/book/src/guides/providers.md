@@ -106,29 +106,27 @@ pub struct ProviderResponse {
 Providers are not used directly in most application code. Instead, you pass a provider to an operator:
 
 ```rust,no_run
-use neuron_op_react::{ReactConfig, ReactOperator};
+use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
 use neuron_provider_anthropic::AnthropicProvider;
-use neuron_tool::ToolRegistry;
+use neuron_tool::{ToolRegistry, ToolCallContext};
 
 let provider = AnthropicProvider::new("sk-ant-...");
-let config = ReactConfig {
+let config = ReactLoopConfig {
     system_prompt: "You are a helpful assistant.".into(),
-    default_model: "claude-haiku-4-5-20251001".into(),
-    default_max_tokens: 4096,
-    default_max_turns: 10,
+    model: Some("claude-haiku-4-5-20251001".into()),
+    max_tokens: Some(4096),
+    temperature: None,
 };
 
-let operator = ReactOperator::new(
-    provider,
-    ToolRegistry::new(),
-    Box::new(neuron_turn_kit::FullContext),
-    Arc::new(neuron_state_memory::MemoryStore::new()),
-    config,
-);
-// `operator` implements `layer0::Operator`
+let tools = ToolRegistry::new();
+let tool_context = ToolCallContext::empty();
+let mut context = Context::new();
+
+// react_loop drives the ReAct loop, calling provider.complete() as needed
+let response = react_loop(&provider, &tools, &tool_context, &mut context, &config).await;
 ```
 
-The operator handles the ReAct loop internally, calling `provider.complete()` as many times as needed. The `Provider` type parameter is erased at the `Operator` trait boundary -- callers interact with `&dyn Operator` or `Box<dyn Operator>`.
+To make this usable behind `layer0::Operator` (which is object-safe), wrap the provider, tools, and config in a struct that implements `Operator`. The `Provider` type parameter is erased at the `Operator` trait boundary -- callers interact with `&dyn Operator` or `Box<dyn Operator>`.
 
 ## Error handling
 

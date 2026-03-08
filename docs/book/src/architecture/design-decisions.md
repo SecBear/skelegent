@@ -8,7 +8,7 @@ This page summarizes the key architectural decisions in neuron and the reasoning
 
 **Reasoning:** Rust stabilized `async fn` in traits, but `async fn` in `dyn Trait` is still not available natively. Layer 0 traits *must* be object-safe because the entire composition model depends on `Box<dyn Operator>`, `Arc<dyn StateStore>`, etc. The `async_trait` macro provides this by boxing the returned future.
 
-Internal traits like `Provider` are never used behind `dyn` -- they are used as generic type parameters (`ReactOperator<P: Provider>`). These can use RPITIT for zero-cost abstraction. The object-safe boundary is the `Operator` trait, which is the protocol boundary.
+Internal traits like `Provider` are never used behind `dyn` -- they appear as generic type parameters in operator wrappers around `react_loop` (e.g., `struct MyOperator<P: Provider>`). These can use RPITIT for zero-cost abstraction. The object-safe boundary is the `Operator` trait, which is the protocol boundary.
 
 **Future:** When Rust stabilizes `async fn in dyn Trait` with `Send` bounds, the Layer 0 traits will migrate to native async. This will be a breaking change in a minor version before v1.0.
 
@@ -67,6 +67,6 @@ The effect declaration pattern makes operators pure functions over data: input i
 
 **Decision:** The `Provider` trait (in `neuron-turn`) uses RPITIT and is not object-safe. It is never used behind `dyn Provider`.
 
-**Reasoning:** Provider implementations are performance-critical -- they make HTTP calls to LLM APIs. The zero-cost abstraction of RPITIT (no heap allocation for the future) is worth the restriction of not using `dyn Provider`. The object-safe boundary is one layer up: `ReactOperator<P: Provider>` implements `dyn Operator`. The generic type parameter is erased at the protocol boundary.
+**Reasoning:** Provider implementations are performance-critical -- they make HTTP calls to LLM APIs. The zero-cost abstraction of RPITIT (no heap allocation for the future) is worth the restriction of not using `dyn Provider`. The object-safe boundary is one layer up: a concrete operator wrapper (generic over `P: Provider`) implements `dyn Operator`. The generic type parameter is erased at the protocol boundary.
 
 This is the general pattern: internal implementation traits can be generic and non-object-safe for performance. Protocol traits must be object-safe for composition. The bridge between them is a concrete type that is generic internally but implements an object-safe trait externally.

@@ -38,6 +38,44 @@
 //! Rules are [`ContextOp`]s with [`Trigger`]s. They fire automatically during
 //! `Context::run()` and have the same `&mut Context` power as pipeline ops.
 //! Budget guards, overwatch agents, telemetry recorders — all are just rules.
+//!
+//! ## Integration: Using Context as Your Conversation Store
+//!
+//! [`Context`] is the conversation store for any system that talks to an LLM.
+//! Your application's domain data (shell history, file state, user prefs) feeds
+//! INTO context — it doesn't replace it.
+//!
+//! **How domain context gets in:**
+//! - [`ReactLoopConfig::system_prompt`] — static instructions baked into every turn
+//! - [`Context::inject_system()`] / [`Context::inject_message()`] — programmatic injection
+//! - [`Extensions`] — typed state (`HashMap<TypeId, Box<dyn Any>>`) accessible to rules
+//!
+//! **Wrapping `react_loop` as an [`Operator`](neuron_layer0::Operator):**
+//!
+//! To expose context-engine behind the object-safe `Operator` boundary, create a
+//! struct that owns the provider, tools, and config, then delegates to [`react_loop()`]:
+//!
+//! ```rust,ignore
+//! struct MyOperator<P: Provider> {
+//!     provider: P,
+//!     tools: ToolRegistry,
+//!     tool_ctx: ToolCallContext,
+//!     config: ReactLoopConfig,
+//! }
+//!
+//! #[async_trait]
+//! impl<P: Provider> Operator for MyOperator<P> {
+//!     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+//!         let mut ctx = Context::new();
+//!         ctx.inject_message(Message::new(Role::User, input.message))
+//!             .await
+//!             .map_err(|e| OperatorError::NonRetryable(e.to_string()))?;
+//!         react_loop(&mut ctx, &self.provider, &self.tools, &self.tool_ctx, &self.config)
+//!             .await
+//!             .map_err(|e| OperatorError::NonRetryable(e.to_string()))
+//!     }
+//! }
+//! ```
 
 pub mod assembly;
 pub mod compile;

@@ -118,6 +118,6 @@ ProviderError / ToolError
   OrchError / EnvError
 ```
 
-Provider and tool errors are mapped to `OperatorError` by the operator implementation (e.g., `ReactOperator` maps `ProviderError::RateLimited` to `OperatorError::Retryable`). Operator errors propagate into orchestration and environment errors automatically via `From` impls.
+Provider and tool errors are mapped to `OperatorError` by the operator implementation (e.g., the `react_loop`-based operator maps `ProviderError::RateLimited` to `OperatorError::Retryable`). Operator errors propagate into orchestration and environment errors automatically via `From` impls.
 
 This layered propagation ensures that callers at each level see errors appropriate to their abstraction. An orchestrator sees `OrchError`, never `ProviderError`.

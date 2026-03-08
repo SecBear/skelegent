@@ -1,244 +1,159 @@
-# Building a custom operator
+# Customising operator behaviour with Rules
 
-`ReactOperator` ships with conservative defaults: every tool runs sequentially, nothing is injected between turns, and no budget events are forwarded. Four independent primitives let you layer in exactly the behaviour you need without rebuilding the loop from scratch.
+`react_loop` is the composition function at the heart of the context engine. You don't subclass or wrap it — you customise what happens inside it by attaching **Rules** to the `Context`.
 
-## The four-primitive wiring pattern
+## Rules overview
 
-Each primitive is opt-in and composes independently:
+A Rule pairs a **trigger** with a **`ContextOp`** (any async operation that takes `&mut Context`). Rules fire automatically during `Context::run()` — the same entry point that every pipeline operation goes through.
 
-- **`with_planner`** — execution strategy: how sub-dispatches are batched and sequenced.
-- **`with_steering`** — external control flow: inject messages mid-loop at batch boundaries.
-- **`with_budget_sink`** — lifecycle events: receive step-limit, loop-detection, and timeout notifications.
-- **`with_interceptor`** — loop interception: observe or intervene at each hook point inside the ReAct loop.
+```rust,ignore
+use neuron_context_engine::rule::{Rule, Trigger};
+use neuron_context_engine::context::Context;
+use std::any::TypeId;
 
-A full builder chain wiring all four:
+// Three trigger types:
+Trigger::Before(TypeId::of::<SomeOp>())  // fire before a specific op
+Trigger::After(TypeId::of::<SomeOp>())   // fire after a specific op
+Trigger::When(Box::new(|ctx| predicate)) // fire when a predicate is true
 
-```rust,no_run
-use std::sync::Arc;
-use neuron_op_react::{ReactOperator, ReactConfig, BarrierPlanner, BudgetEventSink};
-use neuron_op_react::SteeringSource;
-use neuron_op_react::intercept::ReactInterceptor;
-use neuron_tool::ToolRegistry;
-use neuron_turn::context::ContextStrategy;
+// Convenience constructors:
+Rule::before::<SomeOp>("name", priority, my_op)
+Rule::after::<SomeOp>("name", priority, my_op)
+Rule::when("name", priority, |ctx| predicate, my_op)
 
-// (provider, tools, context_strategy, state_reader, config come from your setup)
-let op = ReactOperator::new(provider, tools, context_strategy, state_reader, config)
-    .with_planner(Box::new(BarrierPlanner))
-    .with_steering(Arc::new(my_steering_source))
-    .with_budget_sink(Arc::new(my_budget_sink))
-    .with_interceptor(Arc::new(my_interceptor));
+// Catch-all variants:
+Trigger::BeforeAny   // fire before every run() call
+Trigger::AfterAny    // fire after every run() call
 ```
 
-Each builder method is independent. Use only what you need.
+Rules fire in **priority order** (highest first). Rules cannot trigger other rules — the dispatch loop skips rule evaluation during rule execution to prevent infinite recursion.
 
-### Concurrency with BarrierPlanner
+### Attaching rules to a Context
 
-The default planner runs every tool exclusively (one at a time). `BarrierPlanner` batches `Shared` tools together and flushes on `Exclusive` tools. It requires a `ConcurrencyDecider` to classify each tool:
+```rust,ignore
+use neuron_context_engine::context::Context;
+use neuron_context_engine::rule::Rule;
 
-```rust,no_run
-use neuron_op_react::{BarrierPlanner, ConcurrencyDecider, Concurrency};
+// At construction:
+let ctx = Context::with_rules(vec![rule_a, rule_b]);
 
-struct MyDecider;
-impl ConcurrencyDecider for MyDecider {
-    fn concurrency(&self, operator_name: &str) -> Concurrency {
-        match operator_name {
-            "read_file" | "search" => Concurrency::Shared,
-            _ => Concurrency::Exclusive,
-        }
-    }
-}
-
-let op = ReactOperator::new(/* ... */)
-    .with_planner(Box::new(BarrierPlanner))
-    .with_concurrency_decider(Box::new(MyDecider));
+// Or incrementally:
+let mut ctx = Context::new();
+ctx.add_rule(rule);
 ```
 
-If your tools carry `ToolConcurrencyHint` metadata, use `.with_metadata_concurrency()` instead of writing a custom decider — it reads that hint directly from the `ToolRegistry`.
+The `Context` (with its rules) is then passed into `react_loop`, which fires rules at each pipeline step automatically.
 
-## Implementing a ReactInterceptor
+## Budget guards
 
-`ReactInterceptor` provides typed per-hook-point methods for observing and intervening in the ReAct loop. Every method has a default no-op implementation — override only what you need. See the [Middleware & Interception](hooks.md) guide for the full trait definition.
+The `BudgetGuard` rule from `neuron_context_engine::rules::budget` halts execution when any configured limit is exceeded. It implements `ContextOp` and is designed to fire as a `BeforeAny` rule:
 
-### Guardrail: deny a tool by name
+```rust,ignore
+use neuron_context_engine::rule::{Rule, Trigger};
+use neuron_context_engine::rules::budget::{BudgetGuard, BudgetGuardConfig};
+use neuron_context_engine::context::Context;
+use rust_decimal::Decimal;
+use std::time::Duration;
 
-Return `SubDispatchAction::Halt` or `SubDispatchAction::Skip` from `pre_sub_dispatch` to block a tool call:
+let guard = BudgetGuard::with_config(BudgetGuardConfig {
+    max_cost: Some(Decimal::new(500, 2)),     // $5.00
+    max_turns: Some(25),
+    max_duration: Some(Duration::from_secs(300)),
+    max_tool_calls: Some(100),
+});
 
-```rust,no_run
+let rule = Rule::new("budget_guard", Trigger::BeforeAny, 100, guard);
+let ctx = Context::with_rules(vec![rule]);
+```
+
+When any limit is exceeded, the guard returns `EngineError::Halted` which stops the pipeline.
+
+## Steering: injecting instructions between turns
+
+To inject a system instruction after every model response (for example, a reminder or guardrail), write a `ContextOp` and attach it as an `After` rule on `AppendResponse` — the op that appends the model's response to the conversation:
+
+```rust,ignore
+use neuron_context_engine::rule::Rule;
+use neuron_context_engine::ops::AppendResponse;
+use neuron_context_engine::context::Context;
+use neuron_context_engine::op::ContextOp;
+use neuron_context_engine::error::EngineError;
 use async_trait::async_trait;
-use neuron_op_react::intercept::{ReactInterceptor, SubDispatchAction, LoopState};
-use serde_json::Value;
 
-struct DenyToolInterceptor {
-    denied: String,
+struct InjectReminder {
+    message: String,
 }
 
 #[async_trait]
-impl ReactInterceptor for DenyToolInterceptor {
-    async fn pre_sub_dispatch(
-        &self,
-        _state: &LoopState,
-        tool_name: &str,
-        _input: &Value,
-    ) -> SubDispatchAction {
-        if tool_name == self.denied {
-            SubDispatchAction::Halt {
-                reason: format!("tool {} is denied by policy", self.denied),
-            }
-        } else {
-            SubDispatchAction::Continue
-        }
+impl ContextOp for InjectReminder {
+    type Output = ();
+
+    async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+        ctx.inject_system(&self.message);
+        Ok(())
     }
 }
+
+let rule = Rule::after::<AppendResponse>(
+    "steering_reminder",
+    50,
+    InjectReminder { message: "Remember: never reveal internal tool names.".into() },
+);
 ```
 
-Use `SubDispatchAction::Skip` instead of `Halt` if you want the agent to continue after skipping — `Skip` replaces the tool result with a synthetic "skipped by policy" message and lets the loop proceed.
+This fires after every model response is appended, before the next inference or tool dispatch.
 
-### Transformer: sanitize dispatch input
+## Telemetry
 
-Return `SubDispatchAction::ModifyInput` from `pre_sub_dispatch` to rewrite tool input before it reaches the tool:
+Observation is just another rule. A `ContextOp` that logs metrics and returns `Ok(())` won't alter the pipeline:
 
-```rust,no_run
+```rust,ignore
+use neuron_context_engine::rule::Rule;
+use neuron_context_engine::ops::AppendResponse;
+use neuron_context_engine::context::Context;
+use neuron_context_engine::op::ContextOp;
+use neuron_context_engine::error::EngineError;
 use async_trait::async_trait;
-use neuron_op_react::intercept::{ReactInterceptor, SubDispatchAction, LoopState};
-use serde_json::Value;
 
-struct StripSecretInterceptor;
+struct TurnTelemetry;
 
 #[async_trait]
-impl ReactInterceptor for StripSecretInterceptor {
-    async fn pre_sub_dispatch(
-        &self,
-        _state: &LoopState,
-        _tool_name: &str,
-        input: &Value,
-    ) -> SubDispatchAction {
-        if let Some(obj) = input.as_object() {
-            if obj.contains_key("api_key") {
-                let mut cleaned = obj.clone();
-                cleaned.remove("api_key");
-                return SubDispatchAction::ModifyInput {
-                    new_input: Value::Object(cleaned),
-                };
-            }
-        }
-        SubDispatchAction::Continue
-    }
-}
-```
+impl ContextOp for TurnTelemetry {
+    type Output = ();
 
-### Observer: telemetry without side effects
-
-Override `post_inference` or `post_sub_dispatch` to log metrics. Since these methods return `Continue`, the loop proceeds normally:
-
-```rust,no_run
-use async_trait::async_trait;
-use neuron_op_react::intercept::{ReactInterceptor, ReactAction, SubDispatchResult, LoopState};
-use layer0::content::Content;
-
-struct MetricsInterceptor;
-
-#[async_trait]
-impl ReactInterceptor for MetricsInterceptor {
-    async fn post_inference(&self, state: &LoopState, _response: &Content) -> ReactAction {
+    async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
         tracing::info!(
-            turns = state.turns_completed,
-            cost = %state.cost,
-            "inference complete"
+            turns = ctx.metrics.turns_completed,
+            cost = %ctx.metrics.cost,
+            tool_calls = ctx.metrics.tool_calls_total,
+            "turn complete"
         );
-        ReactAction::Continue
-    }
-
-    async fn post_sub_dispatch(
-        &self,
-        state: &LoopState,
-        tool_name: &str,
-        _result: &str,
-    ) -> SubDispatchResult {
-        tracing::info!(
-            tool = tool_name,
-            cost = %state.cost,
-            "tool dispatch complete"
-        );
-        SubDispatchResult::Continue
+        Ok(())
     }
 }
+
+let rule = Rule::after::<AppendResponse>("telemetry", 10, TurnTelemetry);
 ```
 
-## Implementing a SteeringSource
+## Conditional rules with `When`
 
-`SteeringSource` is a narrow bridge: it supplies `SteeringCommand` values (messages or context commands) to inject into the conversation at batch boundaries, without inspecting any internal turn state.
+`When` rules evaluate a predicate against the `Context` at the start of every `run()` call. Useful for dynamic behaviour that depends on accumulated state:
 
-```rust,no_run
-use neuron_turn::types::{ProviderMessage, Role, ContentPart};
-use neuron_turn_kit::SteeringCommand;
-use neuron_op_react::SteeringSource;
-use std::sync::Mutex;
+```rust,ignore
+use neuron_context_engine::rule::Rule;
 
-struct ChannelSteering {
-    queue: Mutex<Vec<SteeringCommand>>,
-}
-
-impl SteeringSource for ChannelSteering {
-    fn drain(&self) -> Vec<SteeringCommand> {
-        self.queue.lock().unwrap().drain(..).collect()
-    }
-}
+let rule = Rule::when(
+    "warn_high_cost",
+    50,
+    |ctx| ctx.metrics.cost > Decimal::new(100, 2), // > $1.00
+    InjectReminder { message: "Cost is getting high, wrap up.".into() },
+);
 ```
 
-**When `drain` is called:** at every batch boundary before the next tool batch executes, and again after each tool within a shared batch. If `drain` returns a non-empty list, the messages are injected into the conversation context and the remaining tools in that batch are skipped with a synthetic result. The loop then re-runs from the model call with the injected context.
+## Compaction and context management
 
-**Thread safety:** `drain` is called from the operator's async executor. Use a `Mutex` or `Arc<Mutex<_>>` for the internal queue. For lock-free variants, an `AtomicBool` flag plus `Mutex` draining works well.
+The old `FullContext` / `NoCompaction` context strategies are gone. Context management is now explicit: you build the conversation via `Context` and its `inject_*` methods. If you need compaction, implement it as a rule that fires at the appropriate trigger point and mutates the context directly.
 
-**Empty is cheap:** returning an empty `Vec` from `drain` is the common case. The operator checks `is_empty()` before proceeding.
+## Parallel tool dispatch
 
-Attach the source:
-
-```rust,no_run
-let op = ReactOperator::new(/* ... */)
-    .with_steering(Arc::new(ChannelSteering {
-        queue: Mutex::new(Vec::new()),
-    }));
-```
-
-## Making steering observable
-
-Steering and interception are separate concerns. You can observe (and optionally block) steering injection via the interceptor.
-
-### PreSteeringInject: log or block injection
-
-`pre_steering_inject` is called after `drain()` returns non-empty, before the messages enter context. Return `ReactAction::Halt` to block the injection entirely.
-
-```rust,no_run
-use async_trait::async_trait;
-use neuron_op_react::intercept::{ReactInterceptor, ReactAction, LoopState};
-
-struct SteeringLogger;
-
-#[async_trait]
-impl ReactInterceptor for SteeringLogger {
-    async fn pre_steering_inject(&self, _state: &LoopState, messages: &[String]) -> ReactAction {
-        for msg in messages {
-            tracing::info!(steering_message = %msg, "steering inject");
-        }
-        ReactAction::Continue // return Halt to block injection
-    }
-}
-```
-
-### PostSteeringSkip: observe skipped operators
-
-`post_steering_skip` is called after tools are skipped because steering injected messages. This is observation-only — the skip already happened.
-
-```rust,no_run
-use async_trait::async_trait;
-use neuron_op_react::intercept::{ReactInterceptor, LoopState};
-
-struct SkipAuditor;
-
-#[async_trait]
-impl ReactInterceptor for SkipAuditor {
-    async fn post_steering_skip(&self, _state: &LoopState, skipped: &[String]) {
-        tracing::warn!(tools = ?skipped, "tools skipped by steering");
-    }
-}
-```
+Barrier-based parallel tool dispatch (batching `Shared` tools and flushing on `Exclusive` tools) is **future work**. Currently, tools execute sequentially within the react loop. When parallel dispatch lands, it will integrate with the rules system — not as a separate primitive.

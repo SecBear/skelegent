@@ -99,24 +99,22 @@ impl Provider for MockProvider {
 }
 ```
 
-Then construct an operator with the mock provider:
+Then construct a `Context` and call `react_loop` with the mock provider:
 
 ```rust,no_run
-use neuron_context_engine::{ReactLoopConfig, ContextEngine};
-use neuron_tool::ToolRegistry;
-use neuron_turn_kit::FullContext;
-use neuron_state_memory::MemoryStore;
-use std::sync::Arc;
+use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
+use neuron_tool::{ToolRegistry, ToolCallContext};
+use neuron_layer0::context::{Message, Role};
 
-let operator = ContextEngine::new(
-    mock_provider,
-    ToolRegistry::new(),
-    Box::new(FullContext),
-    Arc::new(MemoryStore::new()),
-    ReactLoopConfig::default(),
-);
+let mut ctx = Context::new("You are a helpful assistant.");
+ctx.inject_turn(Message::new(Role::User, "Hello"));
 
-// Now test the operator without network calls
+let tools = ToolRegistry::new();
+let tool_ctx = ToolCallContext::empty();
+let config = ReactLoopConfig::default();
+
+// Now test without network calls
+react_loop(&mut ctx, &mock_provider, &tools, &tool_ctx, &config).await.unwrap();
 ```
 
 ## Mock tools

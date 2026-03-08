@@ -19,7 +19,7 @@ Every mutation goes through `ctx.run(op)` which fires applicable rules.
 ```rust
 pub struct Context {
     pub messages: Vec<Message>,          // layer0::context::Message
-    pub extensions: Extensions,           // typed arbitrary state (anymap)
+    pub extensions: Extensions,           // typed arbitrary state (HashMap<TypeId, Box<dyn Any>>)
     pub effects: Vec<Effect>,             // layer0::effect::Effect
     pub metrics: TurnMetrics,             // tokens, cost, timing
     rules: Vec<Rule>,                     // reactive participants
@@ -78,10 +78,12 @@ pub struct TurnMetrics {
 
 ### Extensions
 
-Typed map for arbitrary state. Uses `anymap2::Map<dyn Any + Send + Sync>`.
+Typed map for arbitrary state. Hand-rolled `HashMap<TypeId, Box<dyn Any + Send + Sync>>`.
 
 ```rust
-pub type Extensions = anymap2::Map<dyn std::any::Any + Send + Sync>;
+pub struct Extensions {
+    map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
 ```
 
 ### EngineError
@@ -176,6 +178,7 @@ pub async fn react_loop<P: Provider>(
     ctx: &mut Context,
     provider: &P,
     tools: &ToolRegistry,
+    tool_ctx: &ToolCallContext,
     config: &ReactLoopConfig,
 ) -> Result<OperatorOutput, EngineError> {
     // assemble system prompt
@@ -192,12 +195,12 @@ pub async fn react_loop<P: Provider>(
         ctx.run(AppendResponse(result.response.clone())).await?;
 
         if !result.response.has_tool_calls() {
-            return Ok(make_output(&result.response, ExitReason::Complete, &ctx.metrics, &ctx.effects));
+            return Ok(make_output(result.response, ExitReason::Complete, &ctx));
         }
 
         // Dispatch tools
         for call in &result.response.tool_calls {
-            let tool_result = ctx.run(ExecuteTool::new(call.clone(), tools.clone())).await?;
+            let tool_result = ctx.run(ExecuteTool::new(call.clone(), tools.clone(), tool_ctx.clone())).await?;
             ctx.inject_message(InferResponse::tool_result_message(&call.id, &call.name, tool_result)).await?;
         }
 

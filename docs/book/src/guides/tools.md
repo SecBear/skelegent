@@ -132,7 +132,7 @@ pub enum ToolError {
 
 ## How tools integrate with operators
 
-The `ReactOperator` uses a `ToolRegistry` internally. When the model responds with a `ToolUse` content block, the operator:
+The `react_loop` function uses a `ToolRegistry` internally. When the model responds with a `ToolUse` content block, the loop:
 
 1. Looks up the tool by name in the registry.
 2. Fires `PreSubDispatch` hooks (which may skip or modify the call).
