@@ -31,8 +31,8 @@
 //! ## The ReAct Pattern
 //!
 //! [`react_loop()`] composes these primitives into a standard ReAct loop in ~50
-//! lines. It is a function, not a framework.
-//!
+//! lines. [`react_loop_structured()`] extends this with validated structured output.
+//! Both are functions, not frameworks.
 //! ## Rules — Reactive Participants
 //!
 //! Rules are [`ContextOp`]s with [`Trigger`]s. They fire automatically during
@@ -45,6 +45,7 @@ pub mod context;
 pub mod error;
 pub mod op;
 pub mod ops;
+pub mod output;
 pub mod react;
 pub mod rule;
 pub mod rules;
@@ -55,6 +56,7 @@ pub use context::{Context, Extensions, TurnMetrics};
 pub use error::EngineError;
 pub use op::ContextOp;
 pub use ops::*;
-pub use react::{ReactLoopConfig, react_loop};
+pub use output::{OutputError, OutputMode, OutputSchema, extract_json_block};
+pub use react::{ReactLoopConfig, react_loop, react_loop_structured};
 pub use rule::{Rule, Trigger};
 pub use rules::*;

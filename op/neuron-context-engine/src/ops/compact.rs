@@ -70,7 +70,7 @@ mod tests {
         let mut ctx = Context::new();
         for i in 0..10 {
             ctx.messages
-                .push(Message::new(Role::User, Content::text(&format!("msg {i}"))));
+                .push(Message::new(Role::User, Content::text(format!("msg {i}"))));
         }
 
         let result = ctx
