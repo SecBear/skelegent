@@ -16,7 +16,7 @@ use layer0::{
     OrchError, Orchestrator, SubDispatchRecord, ToolMetadata, WorkflowId,
 };
 
-use crate::{ToolConcurrencyHint, ToolDyn, ToolRegistry};
+use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolRegistry};
 
 /// Wraps an `Arc<dyn ToolDyn>` as an `Operator`, bridging the tool abstraction
 /// to the operator protocol. This allows existing tools to participate in
@@ -57,7 +57,8 @@ impl Operator for ToolOperator {
         let tool_input: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| OperatorError::NonRetryable(format!("invalid tool input JSON: {e}")))?;
 
-        match self.tool.call(tool_input).await {
+        let ctx = ToolCallContext::new(AgentId::new("agent"));
+        match self.tool.call(tool_input, &ctx).await {
             Ok(result) => {
                 let mut output =
                     OperatorOutput::new(Content::text(result.to_string()), ExitReason::Complete);
@@ -146,7 +147,7 @@ impl Orchestrator for ToolRegistryOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
+    use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
     use layer0::operator::TriggerType;
     use layer0::{AgentId, Content, ExitReason, OperatorError, OperatorInput, OrchError};
     use serde_json::json;
@@ -171,6 +172,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -195,6 +197,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
+            _ctx: &ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Err(ToolError::ExecutionFailed("always fails".into())) })

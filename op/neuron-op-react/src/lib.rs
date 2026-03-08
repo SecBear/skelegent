@@ -1765,6 +1765,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<Output = Result<serde_json::Value, neuron_tool::ToolError>>
@@ -2333,6 +2334,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<Output = Result<serde_json::Value, neuron_tool::ToolError>>
@@ -2525,6 +2527,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<Output = Result<serde_json::Value, neuron_tool::ToolError>>
@@ -2542,6 +2545,7 @@ mod tests {
         fn call_streaming<'a>(
             &'a self,
             _input: serde_json::Value,
+            _ctx: &'a neuron_tool::ToolCallContext,
             on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<(), neuron_tool::ToolError>> + Send + 'a>,
@@ -2633,6 +2637,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<Output = Result<serde_json::Value, neuron_tool::ToolError>>

@@ -24,7 +24,7 @@
 //!     fn name(&self) -> &str { "echo" }
 //!     fn description(&self) -> &str { "echoes input" }
 //!     fn input_schema(&self) -> Value { json!({"type": "object"}) }
-//!     fn call(&self, input: Value) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
+//!     fn call(&self, input: Value, _ctx: &neuron_tool::ToolCallContext) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
 //!         Box::pin(async move { Ok(json!({"echo": input})) })
 //!     }
 //! }
@@ -93,7 +93,8 @@ impl Operator for BarrierOperator {
             for (id, name, params) in batch.drain(..) {
                 let start = std::time::Instant::now();
                 if let Some(tool) = tools.get(&name) {
-                    match tool.call(params).await {
+                    let ctx = neuron_tool::ToolCallContext::new(layer0::id::AgentId::new("barrier"));
+                    match tool.call(params, &ctx).await {
                         Ok(val) => {
                             let content = val.to_string();
                             out_blocks.push(ContentBlock::ToolResult {
@@ -199,6 +200,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {

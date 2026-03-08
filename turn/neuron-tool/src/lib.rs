@@ -7,11 +7,45 @@
 
 pub mod adapter;
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
+
+use layer0::id::AgentId;
+
+/// Context available to tools during execution.
+///
+/// Carries agent identity, typed dependencies (via Any downcasting),
+/// and metadata for the current tool call.
+pub struct ToolCallContext {
+    /// Identity of the agent making the tool call.
+    pub agent_id: AgentId,
+    /// Typed dependencies, downcast at the call site.
+    pub deps: Arc<dyn Any + Send + Sync>,
+}
+
+impl ToolCallContext {
+    /// Create a new context with the given agent ID and no deps.
+    pub fn new(agent_id: AgentId) -> Self {
+        Self {
+            agent_id,
+            deps: Arc::new(()),
+        }
+    }
+
+    /// Create a context with typed dependencies.
+    pub fn with_deps(agent_id: AgentId, deps: Arc<dyn Any + Send + Sync>) -> Self {
+        Self { agent_id, deps }
+    }
+
+    /// Downcast deps to a specific type.
+    pub fn deps<T: 'static>(&self) -> Option<&T> {
+        self.deps.downcast_ref::<T>()
+    }
+}
 
 /// Errors from tool operations.
 #[non_exhaustive]
@@ -51,6 +85,7 @@ pub trait ToolDynStreaming: Send + Sync + 'static + ToolDyn {
     fn call_streaming<'a>(
         &'a self,
         input: serde_json::Value,
+        ctx: &'a ToolCallContext,
         on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
     ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>>;
 }
@@ -72,6 +107,7 @@ pub trait ToolDyn: Send + Sync {
     fn call(
         &self,
         input: serde_json::Value,
+        ctx: &ToolCallContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>;
 
     /// If this tool also supports streaming, return a reference to its streaming interface.
@@ -128,8 +164,9 @@ impl ToolDyn for AliasedTool {
     fn call(
         &self,
         input: serde_json::Value,
+        ctx: &ToolCallContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
-        self.inner.call(input)
+        self.inner.call(input, ctx)
     }
 
     fn concurrency_hint(&self) -> ToolConcurrencyHint {
@@ -229,6 +266,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -250,6 +288,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
+            _ctx: &ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Err(ToolError::ExecutionFailed("always fails".into())) })
@@ -284,7 +323,7 @@ mod tests {
         reg.register(Arc::new(EchoTool));
 
         let tool = reg.get("echo").unwrap();
-        let result = tool.call(json!({"msg": "hello"})).await.unwrap();
+        let result = tool.call(json!({"msg": "hello"}), &ToolCallContext::new(AgentId::new("test"))).await.unwrap();
         assert_eq!(result, json!({"echoed": {"msg": "hello"}}));
     }
 
@@ -296,7 +335,7 @@ mod tests {
         assert_eq!(tool.name(), "echo_alias");
         assert_eq!(tool.description(), inner.description());
 
-        let result = tool.call(json!({"msg": "hi"})).await.unwrap();
+        let result = tool.call(json!({"msg": "hi"}), &ToolCallContext::new(AgentId::new("test"))).await.unwrap();
         assert_eq!(result, json!({"echoed": {"msg": "hi"}}));
     }
 
@@ -306,7 +345,7 @@ mod tests {
         reg.register(Arc::new(FailTool));
 
         let tool = reg.get("fail").unwrap();
-        let result = tool.call(json!({})).await;
+        let result = tool.call(json!({}), &ToolCallContext::new(AgentId::new("test"))).await;
         assert!(result.is_err());
     }
 
@@ -335,6 +374,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
+            _ctx: &ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Ok(serde_json::json!({"status":"done"})) })
@@ -347,6 +387,7 @@ mod tests {
         fn call_streaming<'a>(
             &'a self,
             _input: serde_json::Value,
+            _ctx: &'a ToolCallContext,
             on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
         ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>> {
             Box::pin(async move {
@@ -373,7 +414,8 @@ mod tests {
             c2.fetch_add(1, Ordering::SeqCst);
             s2.lock().unwrap().push(c.to_string());
         });
-        let res = tool.call_streaming(serde_json::json!({}), on_chunk).await;
+        let ctx = ToolCallContext::new(AgentId::new("test"));
+        let res = tool.call_streaming(serde_json::json!({}), &ctx, on_chunk).await;
         assert!(res.is_ok());
         assert_eq!(count.load(Ordering::SeqCst), 3);
         let got = seen.lock().unwrap().clone();

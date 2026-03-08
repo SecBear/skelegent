@@ -52,6 +52,7 @@ impl ToolDyn for OperatorToolAdapter {
     fn call(
         &self,
         input: serde_json::Value,
+        _ctx: &neuron_tool::ToolCallContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         let operator = Arc::clone(&self.operator);
         Box::pin(async move {
@@ -261,7 +262,7 @@ impl ServerHandler for McpServerHandler {
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
-        match tool.call(input).await {
+        match tool.call(input, &neuron_tool::ToolCallContext::new(layer0::AgentId::new("mcp-server"))).await {
             Ok(result) => {
                 let text =
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
@@ -410,6 +411,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -431,6 +433,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Err(ToolError::ExecutionFailed("deliberate failure".into())) })
@@ -605,7 +608,8 @@ mod tests {
         registry.register(Arc::new(TestTool { tool_name: "echo" }));
 
         let tool = registry.get("echo").unwrap();
-        let result = tool.call(json!({"msg": "hello"})).await;
+        let ctx = neuron_tool::ToolCallContext::new(layer0::AgentId::new("test"));
+        let result = tool.call(json!({"msg": "hello"}), &ctx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), json!({"echoed": {"msg": "hello"}}));
     }
@@ -616,7 +620,8 @@ mod tests {
         registry.register(Arc::new(FailingTool));
 
         let tool = registry.get("fail_tool").unwrap();
-        let result = tool.call(json!({})).await;
+        let ctx = neuron_tool::ToolCallContext::new(layer0::AgentId::new("test"));
+        let result = tool.call(json!({}), &ctx).await;
         assert!(result.is_err());
     }
 
@@ -745,7 +750,8 @@ mod tests {
         assert_eq!(adapter.input_schema(), schema);
 
         // call roundtrip: input is serialized → operator echoes JSON string → parsed back
-        let result = adapter.call(json!({"query": "hello"})).await.unwrap();
+        let ctx = neuron_tool::ToolCallContext::new(layer0::AgentId::new("test"));
+        let result = adapter.call(json!({"query": "hello"}), &ctx).await.unwrap();
         assert_eq!(result, json!({"result": "ok"}));
     }
 }

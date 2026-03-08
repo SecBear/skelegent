@@ -397,6 +397,7 @@ impl ToolDyn for McpToolWrapper {
     fn call(
         &self,
         input: serde_json::Value,
+        _ctx: &neuron_tool::ToolCallContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         let name: Cow<'static, str> = self.tool.name.clone();
         let arguments = input.as_object().cloned();
@@ -668,6 +669,7 @@ mod tests {
             fn call(
                 &self,
                 _: serde_json::Value,
+                _ctx: &neuron_tool::ToolCallContext,
             ) -> Pin<
                 Box<
                     dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>
