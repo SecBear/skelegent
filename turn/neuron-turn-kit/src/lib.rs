@@ -32,6 +32,11 @@
 //! assert!(matches!(plan[0], neuron_turn_kit::BatchItem::Shared(_)));
 //! ```
 
+#[cfg(feature = "typed-output")]
+pub mod typed_output;
+#[cfg(feature = "typed-output")]
+pub use typed_output::{OutputValidator, ToolSchemaEntry, TypedOutput, RETURN_RESULT_TOOL};
+
 use serde_json::Value;
 use std::path::PathBuf;
 

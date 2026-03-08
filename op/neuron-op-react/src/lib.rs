@@ -204,6 +204,9 @@ pub struct ReactOperator<P: Provider> {
     current_context: Arc<Mutex<Vec<Message>>>,
     /// Number of messages removed in the most recent compaction cycle.
     last_compaction_removed: Arc<Mutex<usize>>,
+    /// Typed output validator (set via `.output_type::<T>()`).
+    #[cfg(feature = "typed-output")]
+    output_validator: Option<Box<dyn neuron_turn_kit::OutputValidator>>,
 }
 
 impl<P: Provider> ReactOperator<P> {
@@ -231,8 +234,24 @@ impl<P: Provider> ReactOperator<P> {
             orchestrator,
             current_context: Arc::new(Mutex::new(Vec::new())),
             last_compaction_removed: Arc::new(Mutex::new(0)),
+            #[cfg(feature = "typed-output")]
+            output_validator: None,
         }
     }
+    /// Opt-in: set a typed output constraint.
+    ///
+    /// When set, a `return_result` tool is injected into the tool list.
+    /// When the model calls it, the output is validated as type `T`.
+    /// On validation failure, the error is sent back for retry.
+    #[cfg(feature = "typed-output")]
+    pub fn with_output_type<T>(mut self, typed: neuron_turn_kit::TypedOutput<T>) -> Self
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        self.output_validator = Some(typed.into_validator());
+        self
+    }
+
     /// Opt-in: set a custom dispatch planner.
     pub fn with_planner(mut self, planner: Box<dyn DispatchPlanner>) -> Self {
         self.planner = planner;
@@ -379,6 +398,18 @@ impl<P: Provider> ReactOperator<P> {
         // Filter by allowed_operators if specified
         if let Some(allowed) = &config.allowed_operators {
             schemas.retain(|s| allowed.contains(&s.name));
+        }
+
+
+        // Add typed output tool if configured
+        #[cfg(feature = "typed-output")]
+        if let Some(ref validator) = self.output_validator {
+            let entry = validator.tool_schema();
+            schemas.push(ToolSchema {
+                name: entry.name.clone(),
+                description: entry.description.clone(),
+                input_schema: entry.input_schema.clone(),
+            });
         }
 
         schemas
@@ -1283,7 +1314,46 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                     return Ok(ctx.output(ExitReason::Complete));
                 }
                 StopReason::ToolUse => {
-                    // Continue to tool execution
+                    // Check for typed output before normal dispatch
+                    #[cfg(feature = "typed-output")]
+                    if let Some(ref validator) = self.output_validator
+                        && let Some(tc) = response.tool_calls.iter().find(|tc| {
+                            tc.name == neuron_turn_kit::RETURN_RESULT_TOOL
+                        })
+                    {
+                        match validator.validate(&tc.input) {
+                            Ok(value) => {
+                                ctx.last_content = Content::text(
+                                    serde_json::to_string(&value)
+                                        .unwrap_or_else(|_| "null".to_string()),
+                                );
+                                return Ok(ctx.output(ExitReason::Complete));
+                            }
+                            Err(error) => {
+                                // Retry: add assistant message + error tool result
+                                ctx.messages.push(response.to_message());
+                                ctx.messages.push(Message::new(
+                                    L0Role::User,
+                                    Content::Blocks(vec![
+                                        layer0::content::ContentBlock::ToolResult {
+                                            tool_use_id: tc.id.clone(),
+                                            content: format!(
+                                                "Validation failed: {error}. Please fix and call return_result again."
+                                            ),
+                                            is_error: true,
+                                        },
+                                    ]),
+                                ));
+                                *self
+                                    .current_context
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner()) =
+                                    ctx.messages.clone();
+                                continue; // retry the loop
+                            }
+                        }
+                    }
+                    // Normal tool execution continues
                 }
             }
 
@@ -3209,5 +3279,95 @@ mod tests {
         assert_eq!(output.metadata.sub_dispatches.len(), 1);
         assert_eq!(output.metadata.sub_dispatches[0].name, "echo");
         assert!(output.metadata.sub_dispatches[0].success);
+    }
+
+    #[cfg(feature = "typed-output")]
+    mod typed_output_tests {
+        use super::*;
+        use schemars::JsonSchema;
+        use serde::Deserialize;
+
+        #[derive(Debug, Deserialize, JsonSchema)]
+        #[allow(dead_code)]
+        struct CityInfo {
+            name: String,
+            population: u64,
+        }
+
+        fn return_result_response(input: serde_json::Value) -> InferResponse {
+            InferResponse {
+                content: Content::Blocks(vec![layer0::content::ContentBlock::ToolUse {
+                    id: "tu1".into(),
+                    name: "return_result".into(),
+                    input: input.clone(),
+                }]),
+                tool_calls: vec![ToolCall {
+                    id: "tu1".into(),
+                    name: "return_result".into(),
+                    input,
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: TokenUsage {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    ..Default::default()
+                },
+                model: "mock".into(),
+                cost: None,
+                truncated: None,
+            }
+        }
+
+        #[tokio::test]
+        async fn typed_output_valid_returns_complete() {
+            let provider = TestProvider::with_responses(vec![
+                return_result_response(serde_json::json!({
+                    "result": { "name": "Tokyo", "population": 13960000_u64 }
+                })),
+            ]);
+            let tools = ToolRegistry::new();
+            let state: Arc<dyn layer0::StateReader> = Arc::new(NullStateReader);
+            let config = ReactConfig::default();
+            let typed = neuron_turn_kit::TypedOutput::<CityInfo>::new();
+            let op = ReactOperator::new(provider, tools, state, config)
+                .with_output_type(typed);
+            let input = OperatorInput::new(
+                Content::text("What is Tokyo?"),
+                layer0::operator::TriggerType::Task,
+            );
+            let output = op.execute(input).await.unwrap();
+            assert!(matches!(output.exit_reason, ExitReason::Complete));
+            let text = output.message.as_text().unwrap();
+            assert!(text.contains("Tokyo"), "output: {text}");
+            assert!(text.contains("13960000"), "output: {text}");
+        }
+
+        #[tokio::test]
+        async fn typed_output_invalid_retries_then_succeeds() {
+            let provider = TestProvider::with_responses(vec![
+                // First: invalid (missing population)
+                return_result_response(serde_json::json!({
+                    "result": { "name": "Tokyo" }
+                })),
+                // Second: valid
+                return_result_response(serde_json::json!({
+                    "result": { "name": "Tokyo", "population": 13960000_u64 }
+                })),
+            ]);
+            let tools = ToolRegistry::new();
+            let state: Arc<dyn layer0::StateReader> = Arc::new(NullStateReader);
+            let config = ReactConfig::default();
+            let typed = neuron_turn_kit::TypedOutput::<CityInfo>::new();
+            let op = ReactOperator::new(provider, tools, state, config)
+                .with_output_type(typed);
+            let input = OperatorInput::new(
+                Content::text("What is Tokyo?"),
+                layer0::operator::TriggerType::Task,
+            );
+            let output = op.execute(input).await.unwrap();
+            assert!(matches!(output.exit_reason, ExitReason::Complete));
+            // Turns: 1 (failed validation + retry) + 2 (success)
+            assert_eq!(output.metadata.turns_used, 2);
+        }
     }
 }
