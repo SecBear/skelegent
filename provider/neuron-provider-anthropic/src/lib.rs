@@ -32,6 +32,7 @@ enum ApiKeySource {
 }
 
 /// Anthropic API provider.
+#[derive(Clone)]
 pub struct AnthropicProvider {
     api_key_source: ApiKeySource,
     client: reqwest::Client,
