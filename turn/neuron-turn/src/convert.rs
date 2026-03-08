@@ -1,7 +1,9 @@
 //! Bidirectional conversion between layer0 types and internal types.
 
+use crate::context::AnnotatedMessage;
 use crate::types::{ContentPart, ImageSource, ProviderMessage, Role};
 use layer0::content::{Content, ContentBlock};
+use layer0::context::{Message, MessageMeta, Role as L0Role};
 
 /// Convert a layer0 `ContentBlock` to an internal `ContentPart`.
 pub fn content_block_to_part(block: &ContentBlock) -> ContentPart {
@@ -110,6 +112,82 @@ fn image_source_to_layer0(source: &ImageSource) -> layer0::content::ImageSource 
     match source {
         ImageSource::Base64 { data } => layer0::content::ImageSource::Base64 { data: data.clone() },
         ImageSource::Url { url } => layer0::content::ImageSource::Url { url: url.clone() },
+    }
+}
+
+// ── Role conversion ──────────────────────────────────────────────────
+
+/// Convert a turn-internal `Role` to a layer0 `Role`.
+///
+/// Note: `turn::Role` has no `Tool` variant — tool results are content-level
+/// in the provider wire format, not role-level.
+pub fn role_to_layer0(role: &Role) -> L0Role {
+    match role {
+        Role::System => L0Role::System,
+        Role::User => L0Role::User,
+        Role::Assistant => L0Role::Assistant,
+    }
+}
+
+/// Convert a layer0 `Role` to a turn-internal `Role`.
+///
+/// The `Tool` variant maps to `User` because provider wire format
+/// encodes tool results as user-role messages with `ToolResult` content.
+pub fn role_from_layer0(role: &L0Role) -> Role {
+    match role {
+        L0Role::System => Role::System,
+        L0Role::User => Role::User,
+        L0Role::Assistant => Role::Assistant,
+        L0Role::Tool { .. } => Role::User,
+        // Handle non_exhaustive
+        _ => Role::User,
+    }
+}
+
+// ── Message conversion ──────────────────────────────────────────────
+
+/// Convert a `ProviderMessage` to a layer0 `Message` with default metadata.
+impl From<ProviderMessage> for Message {
+    fn from(pm: ProviderMessage) -> Self {
+        Message::new(role_to_layer0(&pm.role), parts_to_content(&pm.content))
+    }
+}
+
+/// Convert an `AnnotatedMessage` to a layer0 `Message`, preserving metadata.
+impl From<AnnotatedMessage> for Message {
+    fn from(am: AnnotatedMessage) -> Self {
+        let role = role_to_layer0(&am.message.role);
+        let content = parts_to_content(&am.message.content);
+        let mut meta = MessageMeta::default();
+        if let Some(policy) = am.policy {
+            meta.policy = policy;
+        }
+        meta.source = am.source;
+        meta.salience = am.salience;
+        let mut msg = Message::new(role, content);
+        msg.meta = meta;
+        msg
+    }
+}
+
+/// Convert a layer0 `Message` to a `ProviderMessage`.
+///
+/// Metadata (policy, salience, source) is discarded — the provider wire
+/// format does not carry it.
+impl From<Message> for ProviderMessage {
+    fn from(msg: Message) -> Self {
+        ProviderMessage {
+            role: role_from_layer0(&msg.role),
+            content: content_to_parts(&msg.content),
+        }
+    }
+}
+
+/// Convert a `&Message` to a `ProviderMessage` (cloning).
+pub fn message_to_provider(msg: &Message) -> ProviderMessage {
+    ProviderMessage {
+        role: role_from_layer0(&msg.role),
+        content: content_to_parts(&msg.content),
     }
 }
 
