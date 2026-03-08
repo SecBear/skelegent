@@ -53,6 +53,28 @@ impl Default for MessageMeta {
     }
 }
 
+impl MessageMeta {
+    /// Create metadata with the given policy and defaults for all other fields.
+    pub fn with_policy(policy: CompactionPolicy) -> Self {
+        Self {
+            policy,
+            ..Default::default()
+        }
+    }
+
+    /// Set the source.
+    pub fn set_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    /// Set the salience score.
+    pub fn set_salience(mut self, salience: f64) -> Self {
+        self.salience = Some(salience);
+        self
+    }
+}
+
 /// Role of a message in the context window.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

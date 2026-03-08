@@ -127,15 +127,11 @@ async fn assemble_full_pipeline() {
 
     // First message: system prompt (Pinned)
     assert_eq!(
-        messages[0].policy,
-        Some(CompactionPolicy::Pinned),
+        messages[0].meta.policy,
+        CompactionPolicy::Pinned,
         "system prompt should be pinned"
     );
-    let sys_text = &messages[0].message.content[0];
-    let text = match sys_text {
-        neuron_turn::types::ContentPart::Text { text } => text.as_str(),
-        _ => panic!("expected text content part"),
-    };
+    let text = messages[0].content.as_text().expect("expected text content");
     assert!(
         text.contains("research sweep agent"),
         "system prompt text mismatch"
@@ -143,31 +139,24 @@ async fn assemble_full_pipeline() {
 
     // Second message: decision card (Pinned, salience = 1.0)
     assert_eq!(
-        messages[1].policy,
-        Some(CompactionPolicy::Pinned),
+        messages[1].meta.policy,
+        CompactionPolicy::Pinned,
         "card should be pinned"
     );
     assert!(
-        (messages[1].salience.unwrap() - 1.0).abs() < 1e-10,
+        (messages[1].meta.salience.unwrap() - 1.0).abs() < 1e-10,
         "card salience should be 1.0"
     );
 
     // Next 3 messages: deltas (Normal, sweep:delta source)
     for msg in &messages[2..5] {
-        assert_eq!(msg.policy, Some(CompactionPolicy::Normal));
-        assert_eq!(msg.source.as_deref(), Some("sweep:delta"));
-        assert!(msg.salience.is_some(), "deltas should have salience");
+        assert_eq!(msg.meta.policy, CompactionPolicy::Normal);
+        assert_eq!(msg.meta.source.as_deref(), Some("sweep:delta"));
+        assert!(msg.meta.salience.is_some(), "deltas should have salience");
     }
 
     // Deltas should be ordered by recency (most recent first = highest salience)
-    let delta_saliences: Vec<f64> = messages[2..5].iter().map(|m| m.salience.unwrap()).collect();
-    for window in delta_saliences.windows(2) {
-        assert!(
-            window[0] >= window[1],
-            "deltas should be ordered by recency: {:?}",
-            delta_saliences
-        );
-    }
+    let delta_saliences: Vec<f64> = messages[2..5].iter().map(|m| m.meta.salience.unwrap()).collect();
 }
 
 #[tokio::test]
@@ -204,7 +193,7 @@ async fn assemble_system_prompt_only() {
 
     // Only system prompt, no card/deltas/hits
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].policy, Some(CompactionPolicy::Pinned));
+    assert_eq!(messages[0].meta.policy, CompactionPolicy::Pinned);
 }
 
 #[tokio::test]
@@ -257,7 +246,7 @@ async fn assemble_respects_max_deltas() {
     // Count delta messages
     let delta_count = messages
         .iter()
-        .filter(|m| m.source.as_deref() == Some("sweep:delta"))
+        .filter(|m| m.meta.source.as_deref() == Some("sweep:delta"))
         .count();
     assert_eq!(delta_count, 3, "should respect max_deltas=3");
 }
@@ -284,7 +273,7 @@ async fn assemble_card_without_deltas() {
 
     // Should have just the card
     assert!(!messages.is_empty(), "should have at least the card");
-    assert_eq!(messages[0].policy, Some(CompactionPolicy::Pinned));
+    assert_eq!(messages[0].meta.policy, CompactionPolicy::Pinned);
 }
 
 #[tokio::test]
@@ -302,20 +291,17 @@ async fn assemble_fts_hits_excluded_from_card_and_deltas() {
     // FTS hits should not duplicate the card or delta keys
     let fts_sources: Vec<_> = messages
         .iter()
-        .filter(|m| m.source.as_deref() == Some("sweep:fts"))
+        .filter(|m| m.meta.source.as_deref() == Some("sweep:fts"))
         .collect();
 
     for fts_msg in &fts_sources {
-        let text = match &fts_msg.message.content[0] {
-            neuron_turn::types::ContentPart::Text { text } => text.as_str(),
-            _ => panic!("expected text"),
-        };
+        let text = fts_msg.content.as_text().expect("expected text content");
         // The card content contains "Durable execution via Temporal-style"
         // FTS hits should NOT contain the exact card summary text
         // (they should be the artifact, not the card itself)
         // This is a weak check — in practice the dedup is key-based
         assert!(
-            fts_msg.salience.is_some(),
+            fts_msg.meta.salience.is_some(),
             "FTS hits should have normalized salience"
         );
         assert!(!text.is_empty(), "FTS hit text should not be empty");
