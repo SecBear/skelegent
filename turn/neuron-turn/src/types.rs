@@ -305,13 +305,6 @@ impl From<Message> for ProviderMessage {
     }
 }
 
-/// Convert a `&Message` to a `ProviderMessage` (cloning).
-pub fn message_to_provider(msg: &Message) -> ProviderMessage {
-    ProviderMessage {
-        role: role_from_layer0(&msg.role),
-        content: content_to_parts(&msg.content),
-    }
-}
 
 #[cfg(test)]
 mod tests {
