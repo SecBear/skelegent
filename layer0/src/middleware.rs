@@ -13,6 +13,7 @@ use crate::environment::EnvironmentSpec;
 use crate::error::{EnvError, OrchError, StateError};
 use crate::id::AgentId;
 use crate::operator::{OperatorInput, OperatorOutput};
+use crate::state::StoreOptions;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -63,6 +64,7 @@ pub trait StoreWriteNext: Send + Sync {
         scope: &Scope,
         key: &str,
         value: serde_json::Value,
+        options: Option<&StoreOptions>,
     ) -> Result<(), StateError>;
 }
 
@@ -88,6 +90,7 @@ pub trait StoreMiddleware: Send + Sync {
         scope: &Scope,
         key: &str,
         value: serde_json::Value,
+        options: Option<&StoreOptions>,
         next: &dyn StoreWriteNext,
     ) -> Result<(), StateError>;
 
@@ -273,17 +276,19 @@ impl StoreStack {
         scope: &Scope,
         key: &str,
         value: serde_json::Value,
+        options: Option<&StoreOptions>,
         terminal: &dyn StoreWriteNext,
     ) -> Result<(), StateError> {
         if self.layers.is_empty() {
-            return terminal.write(scope, key, value).await;
+            return terminal.write(scope, key, value, options).await;
         }
         let chain = StoreWriteChain {
             layers: &self.layers,
             index: 0,
             terminal,
+            options,
         };
-        chain.write(scope, key, value).await
+        chain.write(scope, key, value, options).await
     }
 
     /// Read through the middleware chain, ending at `terminal`.
@@ -338,6 +343,7 @@ struct StoreWriteChain<'a> {
     layers: &'a [Arc<dyn StoreMiddleware>],
     index: usize,
     terminal: &'a dyn StoreWriteNext,
+    options: Option<&'a StoreOptions>,
 }
 
 #[async_trait]
@@ -347,16 +353,18 @@ impl StoreWriteNext for StoreWriteChain<'_> {
         scope: &Scope,
         key: &str,
         value: serde_json::Value,
+        options: Option<&StoreOptions>,
     ) -> Result<(), StateError> {
         if self.index >= self.layers.len() {
-            return self.terminal.write(scope, key, value).await;
+            return self.terminal.write(scope, key, value, options).await;
         }
         let next = StoreWriteChain {
             layers: self.layers,
             index: self.index + 1,
             terminal: self.terminal,
+            options: self.options,
         };
-        self.layers[self.index].write(scope, key, value, &next).await
+        self.layers[self.index].write(scope, key, value, options, &next).await
     }
 }
 
@@ -522,9 +530,10 @@ mod tests {
                 scope: &Scope,
                 key: &str,
                 value: serde_json::Value,
+                options: Option<&StoreOptions>,
                 next: &dyn StoreWriteNext,
             ) -> Result<(), StateError> {
-                next.write(scope, key, value).await
+                next.write(scope, key, value, options).await
             }
         }
 
@@ -669,10 +678,11 @@ mod tests {
                 scope: &Scope,
                 key: &str,
                 value: serde_json::Value,
+                options: Option<&StoreOptions>,
                 next: &dyn StoreWriteNext,
             ) -> Result<(), StateError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                next.write(scope, key, value).await
+                next.write(scope, key, value, options).await
             }
         }
 
@@ -685,6 +695,7 @@ mod tests {
                 _scope: &Scope,
                 _key: &str,
                 _value: serde_json::Value,
+                _options: Option<&StoreOptions>,
             ) -> Result<(), StateError> {
                 Ok(())
             }
@@ -699,7 +710,7 @@ mod tests {
             agent: AgentId::from("a"),
         };
         stack
-            .write_with(&scope, "k", serde_json::json!(1), &NoOpStore)
+            .write_with(&scope, "k", serde_json::json!(1), None, &NoOpStore)
             .await
             .unwrap();
         assert_eq!(write_count.load(Ordering::SeqCst), 1);

@@ -1,13 +1,14 @@
-use neuron_hooks::HookRegistry;
+use layer0::middleware::{StoreStack, StoreWriteNext};
 
 use async_trait::async_trait;
-use layer0::effect::Effect;
+use layer0::effect::{Effect, Scope};
 use layer0::error::{OrchError, StateError};
 use layer0::id::{AgentId, WorkflowId};
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::Orchestrator;
 use layer0::state::{StateStore, StoreOptions};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use thiserror::Error;
 
 /// Errors returned by `neuron-orch-kit`.
@@ -111,22 +112,46 @@ pub trait EffectInterpreter: Send + Sync {
 pub struct LocalEffectInterpreter<S: StateStore + ?Sized> {
     /// State backend used for memory effects.
     pub state: Arc<S>,
-    hooks: Option<Arc<HookRegistry>>,
+    middleware: Option<StoreStack>,
 }
 
 impl<S: StateStore + ?Sized> LocalEffectInterpreter<S> {
     /// Create a new local effect interpreter.
     pub fn new(state: Arc<S>) -> Self {
-        Self { state, hooks: None }
+        Self { state, middleware: None }
     }
 
-    /// Attach a hook registry. `PreMemoryWrite` fires before every `WriteMemory` effect.
+    /// Attach a store middleware stack. Runs before every `WriteMemory` effect.
     ///
-    /// If a guardrail returns `Halt`, the write is skipped without error.
-    /// If a transformer returns `ModifyDispatchOutput`, its value replaces the original.
-    pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
-        self.hooks = Some(hooks);
+    /// A guard that does not call `next` silently skips the write (not an error).
+    /// A transformer calls `next` with a modified value.
+    pub fn with_store_middleware(mut self, stack: StoreStack) -> Self {
+        self.middleware = Some(stack);
         self
+    }
+}
+
+// ── Write terminal ───────────────────────────────────────────────────────────
+/// Middleware chain terminal: calls `write_hinted` on the underlying store.
+/// The `committed` flag is set to `true` iff the write actually reached storage.
+struct WriteTo<S: StateStore + ?Sized> {
+    state: Arc<S>,
+    committed: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl<S: StateStore + ?Sized + 'static> StoreWriteNext for WriteTo<S> {
+    async fn write(
+        &self,
+        scope: &Scope,
+        key: &str,
+        value: serde_json::Value,
+        options: Option<&StoreOptions>,
+    ) -> Result<(), StateError> {
+        let opts = options.cloned().unwrap_or_default();
+        self.state.write_hinted(scope, key, value, &opts).await?;
+        self.committed.store(true, Ordering::Relaxed);
+        Ok(())
     }
 }
 
@@ -149,33 +174,6 @@ impl<S: StateStore + ?Sized + 'static> EffectInterpreter for LocalEffectInterpre
                 salience,
                 ttl,
             } => {
-                let effective_value = if let Some(hooks) = &self.hooks {
-                    use layer0::hook::{HookAction, HookContext, HookPoint};
-                    let mut ctx = HookContext::new(HookPoint::PreMemoryWrite);
-                    ctx.memory_key = Some(key.clone());
-                    ctx.memory_value = Some(value.clone());
-                    ctx.memory_options = Some(layer0::StoreOptions {
-                        tier: *tier,
-                        lifetime: *lifetime,
-                        content_kind: content_kind.clone(),
-                        salience: *salience,
-                        ttl: *ttl,
-                    });
-                    match hooks.dispatch(&ctx).await {
-                        HookAction::Halt { reason } => {
-                            tracing::warn!(
-                                key = %key,
-                                reason = %reason,
-                                "PreMemoryWrite hook halted write"
-                            );
-                            return Ok(());
-                        }
-                        HookAction::ModifyDispatchOutput { new_output } => new_output,
-                        _ => value.clone(),
-                    }
-                } else {
-                    value.clone()
-                };
                 let opts = StoreOptions {
                     tier: *tier,
                     lifetime: *lifetime,
@@ -183,12 +181,20 @@ impl<S: StateStore + ?Sized + 'static> EffectInterpreter for LocalEffectInterpre
                     salience: *salience,
                     ttl: *ttl,
                 };
-                self.state
-                    .write_hinted(scope, key, effective_value, &opts)
-                    .await?;
-                trace
-                    .events
-                    .push(ExecutionEvent::MemoryWritten { key: key.clone() });
+                if let Some(stack) = &self.middleware {
+                    let committed = Arc::new(AtomicBool::new(false));
+                    let terminal = WriteTo {
+                        state: self.state.clone(),
+                        committed: committed.clone(),
+                    };
+                    stack.write_with(scope, key, value.clone(), Some(&opts), &terminal).await?;
+                    if committed.load(Ordering::Relaxed) {
+                        trace.events.push(ExecutionEvent::MemoryWritten { key: key.clone() });
+                    }
+                } else {
+                    self.state.write_hinted(scope, key, value.clone(), &opts).await?;
+                    trace.events.push(ExecutionEvent::MemoryWritten { key: key.clone() });
+                }
             }
             Effect::DeleteMemory { scope, key } => {
                 self.state.delete(scope, key).await?;
