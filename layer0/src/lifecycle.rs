@@ -213,7 +213,7 @@ pub enum CompactionEvent {
 
 /// Policy controlling how a message survives compaction.
 ///
-/// Attached to individual messages via [`Message::meta`].
+/// Stored in [`crate::MessageMeta`], which is attached to every message.
 /// All variants are advisory when used with strategies that don't inspect policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

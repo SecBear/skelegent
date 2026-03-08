@@ -423,10 +423,12 @@ impl<P: Provider> ReactOperator<P> {
             let scope = Scope::Session(session.clone());
             match self.state_reader.read(&scope, "messages").await {
                 Ok(Some(history)) => {
+                    // NOTE: Stored state format changed from Vec<ProviderMessage> to Vec<Message>.
+                    // Breaking change to serialized session state; acceptable per project constraints.
                     if let Ok(history_messages) =
-                        serde_json::from_value::<Vec<ProviderMessage>>(history)
+                        serde_json::from_value::<Vec<Message>>(history)
                     {
-                        messages = history_messages.into_iter().map(Message::from).collect();
+                        messages = history_messages;
                     }
                 }
                 Ok(None) => {} // No history yet
@@ -605,8 +607,7 @@ impl<P: Provider> ReactOperator<P> {
         if injected.is_empty() {
             return false;
         }
-        ctx.messages
-            .extend(injected.into_iter().map(Message::from));
+        ctx.messages.extend(injected);
 
         // Skip remaining tools with placeholders
         let skipped_names: Vec<String> = remaining.iter().map(|(_, n, _)| n.clone()).collect();
@@ -635,7 +636,7 @@ impl<P: Provider> ReactOperator<P> {
     async fn poll_steering(
         &self,
         ctx: &LoopCtx,
-    ) -> (Vec<ProviderMessage>, Vec<ContextCommand>) {
+    ) -> (Vec<Message>, Vec<ContextCommand>) {
         let Some(s) = &self.steering else {
             return (vec![], vec![]);
         };
@@ -929,8 +930,7 @@ impl<P: Provider> ReactOperator<P> {
                             let (injected, ctx_cmds) = self.poll_steering(ctx).await;
                             apply_context_commands(&mut ctx.messages, ctx_cmds);
                             if !injected.is_empty() {
-                                ctx.messages
-                                    .extend(injected.into_iter().map(Message::from));
+                                ctx.messages.extend(injected);
                                 let skipped_names: Vec<String> =
                                     remaining.iter().map(|(_, n, _)| n.clone()).collect();
                                 for (rid, rname, _) in remaining {
@@ -965,8 +965,7 @@ impl<P: Provider> ReactOperator<P> {
                         let (injected, ctx_cmds) = self.poll_steering(ctx).await;
                         apply_context_commands(&mut ctx.messages, ctx_cmds);
                         if !injected.is_empty() {
-                            ctx.messages
-                                .extend(injected.into_iter().map(Message::from));
+                            ctx.messages.extend(injected);
                             _steered = true;
                             break 'batches;
                         }
@@ -1029,8 +1028,7 @@ impl<P: Provider> ReactOperator<P> {
                         let (injected, ctx_cmds) = self.poll_steering(ctx).await;
                         apply_context_commands(&mut ctx.messages, ctx_cmds);
                         if !injected.is_empty() {
-                            ctx.messages
-                                .extend(injected.into_iter().map(Message::from));
+                            ctx.messages.extend(injected);
                             _steered = true;
                             break 'batches;
                         }
@@ -1354,6 +1352,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         }
                     }
                     // Normal tool execution continues
+                }
+                _ => {
+                    // Unknown future stop reason — treat as EndTurn.
+                    return Ok(ctx.output(ExitReason::Complete));
                 }
             }
 
@@ -2051,11 +2053,11 @@ mod tests {
 
     // -- Steering Mocks --
     struct MockSteering {
-        seq: Mutex<VecDeque<Vec<ProviderMessage>>>,
+        seq: Mutex<VecDeque<Vec<Message>>>,
         calls: AtomicUsize,
     }
     impl MockSteering {
-        fn new(seq: Vec<Vec<ProviderMessage>>) -> Self {
+        fn new(seq: Vec<Vec<Message>>) -> Self {
             Self {
                 seq: Mutex::new(seq.into()),
                 calls: AtomicUsize::new(0),
@@ -2124,11 +2126,8 @@ mod tests {
         }
     }
 
-    fn user_msg(text: &str) -> ProviderMessage {
-        ProviderMessage {
-            role: Role::User,
-            content: vec![ContentPart::Text { text: text.into() }],
-        }
+    fn user_msg(text: &str) -> Message {
+        Message::new(L0Role::User, Content::text(text))
     }
 
     #[tokio::test]

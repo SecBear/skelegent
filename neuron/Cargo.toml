@@ -67,3 +67,6 @@ providers-all = ["provider-openai", "provider-anthropic", "provider-ollama"]
 
 # High-level agent API
 agent = ["op-react", "state-memory"]
+
+# Proc-macro support for deriving ToolDyn
+macros = ["neuron-tool/macros"]

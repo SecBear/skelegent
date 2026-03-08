@@ -1,13 +1,10 @@
 //! Unified inference types that speak [`Message`] natively.
 //!
-//! These types replace operator-facing use of [`ProviderRequest`] / [`ProviderResponse`].
 //! Operators build an [`InferRequest`] using layer0 [`Message`]s directly —
 //! no manual conversion to wire-format types. Each [`Provider`] implementation
 //! converts to its wire format internally.
 //!
 //! [`Message`]: layer0::context::Message
-//! [`ProviderRequest`]: crate::types::ProviderRequest
-//! [`ProviderResponse`]: crate::types::ProviderResponse
 //! [`Provider`]: crate::provider::Provider
 
 use layer0::content::Content;

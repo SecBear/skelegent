@@ -32,6 +32,8 @@
 //! assert!(matches!(plan[0], neuron_turn_kit::BatchItem::Shared(_)));
 //! ```
 
+use layer0::context::Message;
+
 #[cfg(feature = "typed-output")]
 pub mod typed_output;
 #[cfg(feature = "typed-output")]
@@ -61,7 +63,7 @@ pub trait ConcurrencyDecider: Send + Sync {
 /// the next inference call. These bypass the LLM entirely.
 #[derive(Debug, Clone)]
 pub enum ContextCommand {
-    /// Promote message at `index` to [`layer0::CompactionPolicy::Pinned`].
+    /// Promote message at `index` to `CompactionPolicy::Pinned`.
     ///
     /// Pinned messages survive all compaction. Index is into the current buffer.
     Pin {
@@ -98,7 +100,7 @@ pub enum ContextCommand {
 #[derive(Debug, Clone)]
 pub enum SteeringCommand {
     /// Inject a message into the context at the steering boundary.
-    Message(neuron_turn::types::ProviderMessage),
+    Message(Message),
     /// Execute a context manipulation command.
     Context(ContextCommand),
 }

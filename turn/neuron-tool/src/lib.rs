@@ -7,6 +7,9 @@
 
 pub mod adapter;
 
+#[cfg(feature = "macros")]
+pub use neuron_tool_macro::neuron_tool;
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
@@ -20,6 +23,7 @@ use layer0::id::AgentId;
 ///
 /// Carries agent identity, typed dependencies (via Any downcasting),
 /// and metadata for the current tool call.
+#[derive(Clone)]
 pub struct ToolCallContext {
     /// Identity of the agent making the tool call.
     pub agent_id: AgentId,

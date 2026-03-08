@@ -67,7 +67,7 @@ impl ProviderError {
 /// `NeuronTurn<P: Provider>` is generic, and the object-safe boundary
 /// is `layer0::Turn`.
 pub trait Provider: Send + Sync {
-    /// Run inference using layer0 [`Message`] types directly.
+    /// Run inference using [`layer0::context::Message`] types directly.
     ///
     /// Operators call this. The provider converts to its wire format internally.
     fn infer(

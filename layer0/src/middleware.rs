@@ -1,9 +1,9 @@
 //! Per-boundary middleware traits using the continuation pattern.
 //!
 //! Three middleware traits — one per layer0 protocol boundary:
-//! - [`DispatchMiddleware`] wraps [`Orchestrator::dispatch`]
-//! - [`StoreMiddleware`] wraps [`StateStore`] read/write
-//! - [`ExecMiddleware`] wraps [`Environment::run`]
+//! - [`DispatchMiddleware`] wraps [`crate::Orchestrator`]`::dispatch`
+//! - [`StoreMiddleware`] wraps [`crate::StateStore`] read/write
+//! - [`ExecMiddleware`] wraps [`crate::Environment`]`::run`
 //!
 //! Provider middleware is NOT here — it lives in the turn layer (Layer 1)
 //! because Provider is RPITIT, not object-safe.

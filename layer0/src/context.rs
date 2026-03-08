@@ -413,7 +413,7 @@ impl<M: Clone + fmt::Debug> AgentContext<M> {
     ///
     /// Calls `on_inject` on all registered watchers first. Returns
     /// [`ContextError::Rejected`] if any watcher rejects, or
-    /// [`ContextError::OutOfBounds`] if [`Position::At(i)`] exceeds the current
+    /// [`ContextError::OutOfBounds`] if [`Position::At`] exceeds the current
     /// length.
     pub fn inject(&mut self, msg: ContextMessage<M>, pos: Position) -> Result<(), ContextError> {
         for watcher in &self.watchers {

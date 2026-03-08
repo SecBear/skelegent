@@ -16,6 +16,7 @@ members = [
   "orch/neuron-orch-local",
   "orch/neuron-orch-kit",
   "turn/neuron-tool",
+  "turn/neuron-tool-macro",
   "turn/neuron-turn",
   "op/neuron-op-react",
   "op/neuron-op-single-shot",

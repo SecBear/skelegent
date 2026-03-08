@@ -1084,8 +1084,22 @@ version = "0.4.0"
 dependencies = [
  "async-trait",
  "layer0",
+ "neuron-tool-macro",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "neuron-tool-macro"
+version = "0.4.0"
+dependencies = [
+ "layer0",
+ "neuron-tool",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.117",
  "tokio",
 ]
 
@@ -1106,6 +1120,7 @@ dependencies = [
 name = "neuron-turn-kit"
 version = "0.4.0"
 dependencies = [
+ "layer0",
  "neuron-turn",
  "schemars 0.8.22",
  "serde",

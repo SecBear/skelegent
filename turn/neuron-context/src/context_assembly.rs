@@ -2,7 +2,7 @@
 //!
 //! Assembles a [`Vec<Message>`] from state store data for a given
 //! decision ID. The output is intended for downstream compaction by
-//! [`SaliencePackingStrategy`](crate::SaliencePackingStrategy).
+//! [`salience_packing_compactor`](crate::salience_packing_compactor).
 //!
 //! # Assembly pipeline
 //!
@@ -11,7 +11,7 @@
 //! 3. **Recent deltas** (Normal, recency-scored) — latest changes/findings.
 //! 4. **FTS search hits** (Normal, BM25-scored) — related evidence.
 //! 5. **Combine** — all messages, ready for
-//!    [`SaliencePackingStrategy::compact()`](crate::SaliencePackingStrategy).
+//!    [`salience_packing_compactor`](crate::salience_packing_compactor).
 //!
 //! # Key schema
 //!
@@ -84,7 +84,7 @@ impl ContextAssembler {
     /// - FTS search hits (Normal, BM25-normalized salience)
     ///
     /// The returned messages are NOT yet budget-enforced. Pass them through
-    /// [`SaliencePackingStrategy::compact()`](crate::SaliencePackingStrategy)
+    /// [`salience_packing_compactor`](crate::salience_packing_compactor)
     /// to enforce token limits.
     ///
     /// # Errors

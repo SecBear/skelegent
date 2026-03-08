@@ -160,7 +160,7 @@ impl McpServer {
 
     /// Create an MCP server from a set of operators with metadata.
     ///
-    /// Each `(operator, metadata)` pair is wrapped in an [`OperatorToolAdapter`] and
+    /// Each `(operator, metadata)` pair is wrapped in an `OperatorToolAdapter` and
     /// registered in an internal [`ToolRegistry`].  This bridges the operator protocol
     /// into the existing tool-based MCP serving infrastructure.
     pub fn from_operators(
