@@ -78,7 +78,7 @@ The key integration pattern:
 ```text
 Your domain context (shell history, file state, user prefs)
     ↓ feeds into
-Context via inject_system(), inject_message(), or system_addendum in ReactLoopConfig
+Context via inject_system(), inject_message(), or system_addendum in OperatorConfig
     ↓ manages
 LLM conversation turns (Message with Role + Content)
     ↓ compiles to

@@ -10,55 +10,13 @@
 
 use layer0::content::Content;
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
-use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
 use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use neuron_provider_anthropic::AnthropicProvider;
-use neuron_provider_ollama::OllamaProvider;
 use neuron_provider_openai::OpenAIProvider;
-use neuron_tool::ToolRegistry;
-use std::sync::Arc;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Helpers
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/// Null state reader: no history, no state.
-struct NullStateReader;
-
-#[async_trait::async_trait]
-impl layer0::StateReader for NullStateReader {
-    async fn read(
-        &self,
-        _scope: &layer0::effect::Scope,
-        _key: &str,
-    ) -> Result<Option<serde_json::Value>, layer0::StateError> {
-        Ok(None)
-    }
-    async fn list(
-        &self,
-        _scope: &layer0::effect::Scope,
-        _prefix: &str,
-    ) -> Result<Vec<String>, layer0::StateError> {
-        Ok(vec![])
-    }
-    async fn search(
-        &self,
-        _scope: &layer0::effect::Scope,
-        _query: &str,
-        _limit: usize,
-    ) -> Result<Vec<layer0::state::SearchResult>, layer0::StateError> {
-        Ok(vec![])
-    }
-}
-
-fn react_config(model: &str) -> ReactLoopConfig {
-    ReactLoopConfig {
-        system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
-        model: Some(model.into()),
-        max_tokens: Some(256),
-        temperature: None,
-    }
-}
 
 fn single_shot_config(model: &str) -> SingleShotConfig {
     SingleShotConfig {
@@ -79,9 +37,7 @@ fn simple_input(text: &str) -> OperatorInput {
 #[tokio::test]
 #[ignore]
 async fn anthropic_react_simple_prompt() {
-    // TODO: migrate to context-engine
-    // This test used ReactOperator with AnthropicProvider.
-    // Rewrite to use react_loop() with Context::new() and inject_message().
+    // TODO: migrate to context-engine using react_loop() + Context::new()
 }
 
 #[tokio::test]
@@ -114,9 +70,7 @@ async fn anthropic_single_shot() {
 #[tokio::test]
 #[ignore]
 async fn openai_react_simple_prompt() {
-    // TODO: migrate to context-engine
-    // This test used ReactOperator with OpenAIProvider.
-    // Rewrite to use react_loop() with Context::new() and inject_message().
+    // TODO: migrate to context-engine using react_loop() + Context::new()
 }
 
 #[tokio::test]
@@ -148,7 +102,5 @@ async fn openai_single_shot() {
 #[tokio::test]
 #[ignore]
 async fn ollama_react_simple_prompt() {
-    // TODO: migrate to context-engine
-    // This test used ReactOperator with OllamaProvider.
-    // Rewrite to use react_loop() with Context::new() and inject_message().
+    // TODO: migrate to context-engine using react_loop() + Context::new()
 }

@@ -230,7 +230,7 @@ zero. Selective/tiered compaction (`TieredStrategy`) is implemented — context
 partitioned into zones with different policies (pin, compress, discard).
 Recursive summarization degradation is a documented failure mode: summarizing
 summaries loses critical detail after 2-3 cycles; fresh summary replacement is
-the mitigation. Message-level metadata (`AnnotatedMessage`, `CompactionPolicy`)
+the mitigation. Message-level metadata (`Message` from `layer0::context`, `CompactionPolicy`)
 enables per-message pin/compress/discard policies.
 
 **Crash recovery**: Entangled with orchestration by design. Local: no recovery,

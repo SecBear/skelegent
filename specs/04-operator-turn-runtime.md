@@ -4,7 +4,7 @@
 
 The operator runtime is where the agent "thinks and acts." It is the inner loop.
 
-In Neuron, this is implemented by crates like `neuron-op-react` and `neuron-op-single-shot` using provider implementations and tool/context infrastructure.
+In Neuron, this is implemented by crates like `neuron-context-engine` and `neuron-op-single-shot` using provider implementations and tool/context infrastructure.
 
 ## Required Capabilities
 
@@ -25,11 +25,9 @@ Core capabilities expected from turn/operator implementations:
 Operators compose three independent primitives:
 
 ```rust
-let operator = ReactOperator::new(
-    provider, tools, context_strategy, middleware, state_reader, config,
-)
-    .with_steering(source)       // external control flow (optional)
-    .with_planner(barrier);      // execution strategy (optional)
+let mut ctx = Context::new();
+ctx.inject_message(Message::new(Role::User, input.message)).await?;
+let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config).await?;
 ```
 
 Middleware stacks, operators registered with `ToolMetadata` (`tools`), context strategy, and state reader are required constructor parameters. Steering and planner are optional builder methods; the planner type is `DispatchPlanner` (renamed from `ToolExecutionPlanner`). Default: no steering, sequential planner. See `ARCHITECTURE.md` §Three-Primitive and `specs/09-hooks-lifecycle-and-governance.md` for full architectural position.
@@ -95,11 +93,11 @@ Steering poll-and-dispatch logic is extracted into a helper (`poll_steering`) sh
 
 ## Model Selection
 
-`ReactConfig` supports an optional `model_selector` callback invoked before each inference. The selector sees the full `ProviderRequest` and returns a model override or `None` for the default. This enables task-type routing (route by complexity) without coupling model selection to provider implementation.
+`ReactLoopConfig` holds the system prompt, model, max tokens, and temperature. Model selection can be overridden per-invocation via `OperatorConfig.model`. For task-type routing (route by complexity), callers set the model in the `OperatorInput.config` field.
 
 ## Context Budget
 
-Compaction reserve must never be zero. `ReactConfig.compaction_reserve_pct` (default 10%) ensures headroom to run compaction. Effective limit:
+Context budget management is handled by the `BudgetGuard` rule in `neuron-context-engine`. The guard checks cost, turn count, and duration limits before each inference call.
 
 ```
 effective_limit = max_tokens * 4 * (1 - compaction_reserve_pct)
@@ -109,12 +107,12 @@ effective_limit = max_tokens * 4 * (1 - compaction_reserve_pct)
 
 ## Context Assembly
 
-### AnnotatedMessage
+### Message
 
-`AnnotatedMessage` wraps `ProviderMessage` with per-message metadata enabling selective compaction. Defined in `turn/neuron-turn/src/context.rs`.
+`Message` (from `layer0::context`) wraps `ProviderMessage` with per-message metadata enabling selective compaction. Defined in `layer0/src/context.rs`.
 
 ```rust
-pub struct AnnotatedMessage {
+pub struct Message {
     pub message: ProviderMessage,
     pub policy: Option<CompactionPolicy>,  // default: Normal
     pub source: Option<String>,            // e.g. "mcp:github", "user", "tool:shell"
@@ -122,11 +120,11 @@ pub struct AnnotatedMessage {
 }
 ```
 
-An unannotated `ProviderMessage` wrapped via `AnnotatedMessage::from(msg)` behaves as if `policy = Normal`. Convenience constructors: `AnnotatedMessage::pinned(msg)`, `AnnotatedMessage::from_mcp(msg, server_name)`.
+An unannotated `ProviderMessage` wrapped via `Message::from(msg)` behaves as if `policy = Normal`. Convenience constructors: `Message::pinned(msg)`, `Message::from_mcp(msg, server_name)`.
 
 ### CompactionPolicy
 
-`CompactionPolicy` is defined in `layer0/src/lifecycle.rs` and attached to messages via `AnnotatedMessage`. All variants are advisory when used with strategies that don't inspect policy.
+`CompactionPolicy` is defined in `layer0/src/lifecycle.rs` and attached to messages via `Message`. All variants are advisory when used with strategies that don't inspect policy.
 
 | Variant | Semantics |
 |---|---|
@@ -139,7 +137,7 @@ An unannotated `ProviderMessage` wrapped via `AnnotatedMessage::from(msg)` behav
 
 ### TieredStrategy
 
-`TieredStrategy` (`turn/neuron-turn/src/tiered.rs`) implements `ContextStrategy` using a four-zone partition. It eliminates recursive-summarization degradation: the summary is always first-generation, derived from original messages, never from a previous summary.
+`TieredStrategy` (in `neuron-context`) implements tiered compaction using a four-zone partition. It eliminates recursive-summarization degradation: the summary is always first-generation, derived from original messages, never from a previous summary.
 
 **Zone model**:
 
@@ -184,13 +182,13 @@ If the flush fails, `CompactionEvent::FlushFailed` is emitted with the scope and
 
 Operators emit `BudgetEvent` and `CompactionEvent` lifecycle events. See `specs/09-hooks-lifecycle-and-governance.md` for the full vocabulary and semantics.
 
-Attach optional sinks via `ReactOperator::with_budget_sink(sink)` and `ReactOperator::with_compaction_sink(sink)`.
+Budget and compaction events are handled via the Rule system in `neuron-context-engine`. Attach a `BudgetGuard` rule to the `Context` before calling `react_loop()`.
 
 ## Current Implementation Status
 
 Implemented:
 - `neuron-op-single-shot` — functional.
-- `neuron-op-react` — full ReAct loop; emits effects.
+- `neuron-context-engine` — full ReAct loop; emits effects.
 - Steering integrated with boundary polling and skip semantics.
 - Middleware dispatch at PreInference, PostInference, PreSubDispatch, PostSubDispatch, ExitCheck, SubDispatchUpdate.
 - ExitCheck middleware fires before all limit checks.
@@ -198,8 +196,8 @@ Implemented:
 - Step/loop limits (`max_sub_dispatches`, `max_repeat_dispatches`) with BudgetEvent emission.
 - Model selector callback.
 - `TieredStrategy` with zone-partitioned compaction.
-- `AnnotatedMessage` and `CompactionPolicy` enabling per-message compaction metadata.
-- `BudgetEventSink` and `CompactionEventSink` opt-in sinks on `ReactOperator`.
+- `Message` and `CompactionPolicy` enabling per-message compaction metadata.
+- `BudgetEventSink` and `CompactionEventSink` opt-in sinks on the react loop operator.
 - `ExitReason::SafetyStop`; maps `StopReason::ContentFilter` to it.
 
 Still required:

@@ -43,7 +43,7 @@
 //!
 //! | Feature | What it enables |
 //! |---------|----------------|
-//! | `core` *(default)* | [`layer0`] protocols + [`neuron_tool`] + [`neuron_turn`] |
+//! | `core` *(default)* | [`layer0`] protocols + [`neuron_context`] + [`neuron_tool`] + [`neuron_turn`] |
 //! | `agent` | [`agent()`](crate::agent) builder (implies `context-engine` + `state-memory`) |
 //! | `context-engine` | [`neuron_context_engine::Context`] — composable context engine |
 //! | `op-single-shot` | [`neuron_op_single_shot::SingleShotOperator`] — one-shot operator |
@@ -57,6 +57,8 @@
 //! | `orch-local` | [`neuron_orch_kit::OrchestratedRunner`] — local runner |
 //! | `mcp` | [`neuron_mcp`] MCP server/client integration |
 //! | `env-local` | [`neuron_env_local`] local process environment |
+//! | `agent` | High-level agent API (implies `context-engine` + `state-memory`) |
+//! | `macros` | Proc-macro support for deriving `ToolDyn` |
 //!
 //! ## Key Types (via [`prelude`])
 //!

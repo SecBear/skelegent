@@ -23,7 +23,7 @@ pub trait ToolDyn: Send + Sync {
 - **`name()`** -- Unique identifier for the tool. This is what the model uses to request the tool.
 - **`description()`** -- Human-readable description. Sent to the model as part of the tool definition.
 - **`input_schema()`** -- JSON Schema describing the tool's parameters. The model generates input conforming to this schema.
-- **`call()`** -- Async execution. Takes JSON input, returns JSON output or a `ToolError`.
+- **`call()`** -- Async execution. Takes JSON input and a `&ToolCallContext`, returns JSON output or a `ToolError`.
 
 ## Creating a tool
 
@@ -62,6 +62,7 @@ impl ToolDyn for ReadFileTool {
     fn call(
         &self,
         input: Value,
+        ctx: &ToolCallContext,
     ) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
         Box::pin(async move {
             let path = input["path"]
@@ -136,7 +137,7 @@ The `react_loop` function uses a `ToolRegistry` internally. When the model respo
 
 1. Looks up the tool by name in the registry.
 2. Fires `PreSubDispatch` hooks (which may skip or modify the call).
-3. Calls `tool.call(input)`.
+3. Calls `tool.call(input, ctx)`.
 4. Fires `PostSubDispatch` hooks (which may modify the output).
 5. Backfills the tool result into the conversation context.
 6. Calls the model again with the updated context.

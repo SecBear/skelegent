@@ -50,9 +50,10 @@ the chain, or returns early to short-circuit (e.g., to halt or skip an operation
 
 ### Typed Interceptors
 
-`neuron-op-react` provides the `ReactInterceptor` trait for typed, operator-specific
-interception points. This is a higher-level abstraction over `DispatchMiddleware` that
-provides typed access to ReAct-specific context (tool calls, model responses, etc.).
+`neuron-context-engine` provides the `Rule` system for typed, operator-local interception
+points. Rules offer a higher-level abstraction over `DispatchMiddleware` with typed access
+to ReAct-specific context (tool calls, model responses, etc.). For cross-cutting concerns
+that span operators, use the continuation-based middleware traits in `layer0::middleware`.
 
 ### Exit Priority
 
@@ -143,7 +144,7 @@ disabled when the orchestrator manages budget governance.
 - All nine middleware boundaries — including `PreSteeringInject`, `PostSteeringSkip`, and `PreMemoryWrite` — are in layer0.
 - Middleware error logging via `tracing::warn` is implemented.
 - Security middleware exists in `neuron-hook-security`: `RedactionMiddleware` and `ExfilGuardMiddleware`.
-- `ReactInterceptor` provides typed interception in `neuron-op-react`.
+- The `Rule` system in `neuron-context-engine` provides typed, operator-local interception.
 
 Still required for "core complete":
 

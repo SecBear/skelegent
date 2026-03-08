@@ -30,7 +30,7 @@ Turn (`turn/`):
 
 Operators (`op/`):
 
-- `neuron-op-react` — ReAct-style operator loop
+- `neuron-context-engine` — ReAct-style operator loop
 - `neuron-op-single-shot` — single-shot operator
 
 Orchestration (`orch/`):

@@ -42,7 +42,7 @@ Layer 0 is the stability contract. It defines the four protocol traits (`Operato
 ## Layer 1 -- Operator Implementations
 
 **Crates:**
-- `neuron-turn` -- Shared toolkit: `Provider` trait, `ContextStrategy`, type conversions
+- `neuron-turn` -- Shared toolkit: `Provider` trait, `InferRequest`, `InferResponse`, `TokenUsage`, type conversions
 - `neuron-turn-kit` -- Turn decomposition primitives and helpers
 - `neuron-provider-anthropic` -- Anthropic Claude API provider
 - `neuron-provider-openai` -- OpenAI API provider

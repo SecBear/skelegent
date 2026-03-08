@@ -65,6 +65,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `provider-openai` | `core` + `neuron-provider-openai` | OpenAI GPT |
 | `provider-ollama` | `core` + `neuron-provider-ollama` | Ollama local models |
 | `providers-all` | all three providers | All built-in providers |
+| `agent` | `context-engine` + `state-memory` | High-level agent API |
+| `macros` | `neuron-tool/macros` | Proc-macro support for deriving ToolDyn |
 
 ## Workspace crates
 

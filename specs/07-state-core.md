@@ -195,15 +195,16 @@ pub enum ContentKind {
 Backends with category-aware storage (e.g., separate vector namespaces per kind) can use
 `ContentKind` for routing. Backends without category support ignore it.
 
-## AnnotatedMessage and CompactionPolicy
+## Message and CompactionPolicy
 
-`AnnotatedMessage` wraps a `ProviderMessage` with optional per-message compaction metadata
-(`policy`, `source`, `salience`). `CompactionPolicy` controls how a `ContextStrategy`
+`Message` (from `layer0::context`) wraps a provider message with optional per-message compaction metadata
+(`policy`, `source`, `salience`). `CompactionPolicy` controls how a compaction strategy
 treats the message (Pinned / Normal / CompressFirst / DiscardWhenDone).
 
-Both types are defined in the turn layer (`turn/neuron-turn/src/context.rs` and
-`layer0/src/lifecycle.rs` respectively) and are used by `ContextStrategy` implementations
-to decide what to retain, compress, or discard during compaction.
+`Message` is defined in `layer0/src/context.rs` and `CompactionPolicy` in
+`layer0/src/lifecycle.rs`. These types are used by the context-engine's assembly and
+compaction functions (e.g., `sliding_window_compactor`, `tiered_compactor`) to decide
+what to retain, compress, or discard during compaction.
 
 For the full reference — struct fields, variants, convenience constructors, and how
 metadata flows through context assembly — see
@@ -219,7 +220,7 @@ Implemented:
 - `write_hinted` / `read_hinted` on `StateStore` and `StateReader` — defaults delegate to
   unhinted variants; backends override to act on hints.
 - `clear_transient` — default no-op; backends that track `Lifetime::Transient` override.
-- `AnnotatedMessage`, `CompactionPolicy` — defined in `turn/neuron-turn/src/context.rs`
+- `Message`, `CompactionPolicy` — defined in `layer0/src/context.rs`
   and `layer0/src/lifecycle.rs` respectively.
 - `Effect::WriteMemory` carries the same five advisory fields as `StoreOptions`.
 

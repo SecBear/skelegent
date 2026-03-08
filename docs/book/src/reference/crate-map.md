@@ -12,7 +12,7 @@ All crates in the neuron workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-turn` | Shared toolkit: `Provider` trait, `ContextStrategy`, provider request/response types, content conversions. |
+| `neuron-turn` | Shared toolkit: `Provider` trait, `InferRequest`, `InferResponse`, `TokenUsage`, provider request/response types, content conversions. |
 | `neuron-provider-anthropic` | Anthropic Claude API provider. Implements `Provider` for the Messages API. |
 | `neuron-provider-openai` | OpenAI API provider. Implements `Provider` for the Chat Completions API. |
 | `neuron-provider-ollama` | Ollama local model provider. Implements `Provider` for the Ollama API. |
