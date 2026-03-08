@@ -213,7 +213,7 @@ pub enum CompactionEvent {
 
 /// Policy controlling how a message survives compaction.
 ///
-/// Attached to individual messages via [`AnnotatedMessage`] in the turn layer.
+/// Attached to individual messages via [`Message::meta`].
 /// All variants are advisory when used with strategies that don't inspect policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -227,61 +227,4 @@ pub enum CompactionPolicy {
     CompressFirst,
     /// Discard when the originating tool session or MCP session ends.
     DiscardWhenDone,
-}
-
-/// Observability events — the common vocabulary all layers emit.
-#[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObservableEvent {
-    /// Which protocol emitted this.
-    pub source: EventSource,
-    /// Event type (free-form, namespaced by convention).
-    pub event_type: String,
-    /// When it happened (milliseconds since workflow start, not wall clock).
-    pub timestamp: DurationMs,
-    /// Event payload.
-    pub data: serde_json::Value,
-    /// Correlation ID across protocols.
-    pub trace_id: Option<String>,
-    /// Workflow context.
-    pub workflow_id: Option<WorkflowId>,
-    /// Agent context.
-    pub agent_id: Option<AgentId>,
-}
-
-/// Which protocol layer emitted an event.
-#[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum EventSource {
-    /// From the Turn protocol.
-    Turn,
-    /// From the Orchestration protocol.
-    Orchestration,
-    /// From the State protocol.
-    State,
-    /// From the Environment protocol.
-    Environment,
-    /// From middleware.
-    Middleware,
-}
-
-impl ObservableEvent {
-    /// Create a new observable event with required fields.
-    pub fn new(
-        source: EventSource,
-        event_type: impl Into<String>,
-        timestamp: DurationMs,
-        data: serde_json::Value,
-    ) -> Self {
-        Self {
-            source,
-            event_type: event_type.into(),
-            timestamp,
-            data,
-            trace_id: None,
-            workflow_id: None,
-            agent_id: None,
-        }
-    }
 }

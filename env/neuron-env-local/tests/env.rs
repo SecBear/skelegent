@@ -1,7 +1,6 @@
 use layer0::content::Content;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
-use layer0::lifecycle::ObservableEvent;
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 use layer0::test_utils::EchoOperator;
@@ -146,25 +145,16 @@ impl SecretResolver for StubSecretResolver {
 
 #[derive(Default)]
 struct EventCollector {
-    observable: Mutex<Vec<ObservableEvent>>,
     secret_access: Mutex<Vec<SecretAccessEvent>>,
 }
 
 impl EventCollector {
-    fn observable_events(&self) -> Vec<ObservableEvent> {
-        self.observable.lock().unwrap().clone()
-    }
-
     fn secret_access_events(&self) -> Vec<SecretAccessEvent> {
         self.secret_access.lock().unwrap().clone()
     }
 }
 
 impl EnvironmentEventSink for EventCollector {
-    fn emit_observable(&self, event: ObservableEvent) {
-        self.observable.lock().unwrap().push(event);
-    }
-
     fn emit_secret_access(&self, event: SecretAccessEvent) {
         self.secret_access.lock().unwrap().push(event);
     }
@@ -207,21 +197,6 @@ async fn resolves_injects_and_emits_events() {
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].credential_name, "anthropic-api-key");
     assert_eq!(audit[0].outcome, SecretAccessOutcome::Resolved);
-
-    let observable = events.observable_events();
-    assert!(
-        observable
-            .iter()
-            .any(|e| e.event_type == "environment.credential_resolved")
-    );
-    assert!(
-        observable
-            .iter()
-            .any(|e| e.event_type == "environment.credential_injected")
-    );
-
-    let observable_json = serde_json::to_string(&observable).unwrap();
-    assert!(!observable_json.contains(SECRET_VALUE));
 }
 
 #[tokio::test]

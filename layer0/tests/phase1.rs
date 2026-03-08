@@ -516,22 +516,6 @@ fn compaction_event_round_trip() {
     assert_eq!(json, json2);
 }
 
-#[test]
-fn observable_event_round_trip() {
-    let mut e = ObservableEvent::new(
-        layer0::lifecycle::EventSource::Turn,
-        "turn.complete",
-        DurationMs::from_millis(1500),
-        json!({"tokens": 100}),
-    );
-    e.trace_id = Some("trace-abc".into());
-    e.workflow_id = Some(WorkflowId::new("wf-1"));
-    e.agent_id = Some(AgentId::new("a1"));
-    let json = serde_json::to_string(&e).unwrap();
-    let back: ObservableEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Orchestrator QueryPayload round-trip
@@ -1128,25 +1112,6 @@ fn credential_injection_variants_round_trip() {
     }
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// EventSource round-trip
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn event_source_round_trip() {
-    let sources = vec![
-        layer0::lifecycle::EventSource::Turn,
-        layer0::lifecycle::EventSource::Orchestration,
-        layer0::lifecycle::EventSource::State,
-        layer0::lifecycle::EventSource::Environment,
-        layer0::lifecycle::EventSource::Middleware,
-    ];
-    for s in sources {
-        let json = serde_json::to_string(&s).unwrap();
-        let back: layer0::lifecycle::EventSource = serde_json::from_str(&json).unwrap();
-        assert_eq!(s, back);
-    }
-}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Compaction event variants
