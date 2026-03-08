@@ -7,6 +7,8 @@ mod types;
 
 use neuron_auth::{AuthProvider, AuthRequest};
 use neuron_turn::provider::{Provider, ProviderError};
+use neuron_turn::infer::{InferRequest, InferResponse, ToolCall};
+use layer0::content::{Content, ContentBlock, ImageSource as L0ImageSource};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
 use std::sync::Arc;
@@ -132,6 +134,181 @@ impl AnthropicProvider {
             tools,
         }
     }
+
+    fn build_infer_request(&self, request: &InferRequest) -> AnthropicRequest {
+        let model = request
+            .model
+            .clone()
+            .unwrap_or_else(|| "claude-haiku-4-5-20251001".into());
+        let max_tokens = request.max_tokens.unwrap_or(4096);
+
+        let messages: Vec<AnthropicMessage> = request
+            .messages
+            .iter()
+            .map(|m| AnthropicMessage {
+                role: match &m.role {
+                    layer0::context::Role::User => "user".into(),
+                    layer0::context::Role::Assistant => "assistant".into(),
+                    layer0::context::Role::System => "user".into(),
+                    layer0::context::Role::Tool { .. } => "user".into(),
+                    _ => "user".into(),
+                },
+                content: message_content_to_anthropic(&m.content),
+            })
+            .collect();
+
+        let tools: Vec<AnthropicTool> = request
+            .tools
+            .iter()
+            .map(|t| AnthropicTool {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                input_schema: t.input_schema.clone(),
+            })
+            .collect();
+
+        AnthropicRequest {
+            model,
+            max_tokens,
+            messages,
+            system: request.system.clone(),
+            tools,
+        }
+    }
+}
+
+/// Convert layer0 [`Content`] to Anthropic wire-format content.
+fn message_content_to_anthropic(content: &Content) -> AnthropicContent {
+    match content {
+        Content::Text(text) => AnthropicContent::Text(text.clone()),
+        Content::Blocks(blocks) => {
+            let anthropic_blocks: Vec<AnthropicContentBlock> = blocks
+                .iter()
+                .filter_map(content_block_to_anthropic)
+                .collect();
+            if anthropic_blocks.len() == 1
+                && let AnthropicContentBlock::Text { text } = &anthropic_blocks[0]
+            {
+                return AnthropicContent::Text(text.clone());
+            }
+            AnthropicContent::Blocks(anthropic_blocks)
+        }
+        // Future Content variants — treat as empty text
+        _ => AnthropicContent::Text(String::new()),
+    }
+}
+
+/// Convert a single layer0 [`ContentBlock`] to an Anthropic content block.
+fn content_block_to_anthropic(block: &ContentBlock) -> Option<AnthropicContentBlock> {
+    match block {
+        ContentBlock::Text { text } => Some(AnthropicContentBlock::Text { text: text.clone() }),
+        ContentBlock::ToolUse { id, name, input } => Some(AnthropicContentBlock::ToolUse {
+            id: id.clone(),
+            name: name.clone(),
+            input: input.clone(),
+        }),
+        ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => Some(AnthropicContentBlock::ToolResult {
+            tool_use_id: tool_use_id.clone(),
+            content: content.clone(),
+            is_error: *is_error,
+        }),
+        ContentBlock::Image { source, media_type } => Some(AnthropicContentBlock::Image {
+            source: match source {
+                L0ImageSource::Base64 { data } => {
+                    AnthropicImageSource::Base64 { data: data.clone() }
+                }
+                L0ImageSource::Url { url } => AnthropicImageSource::Url { url: url.clone() },
+                _ => return None,
+            },
+            media_type: media_type.clone(),
+        }),
+        // Skip custom blocks — not supported by Anthropic API
+        _ => None,
+    }
+}
+
+/// Parse a raw [`AnthropicResponse`] into an [`InferResponse`].
+fn parse_anthropic_infer_response(
+    response: AnthropicResponse,
+) -> Result<InferResponse, ProviderError> {
+    let mut text_parts: Vec<ContentBlock> = Vec::new();
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+    for block in &response.content {
+        match block {
+            AnthropicContentBlock::Text { text } => {
+                text_parts.push(ContentBlock::Text { text: text.clone() });
+            }
+            AnthropicContentBlock::ToolUse { id, name, input } => {
+                tool_calls.push(ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                });
+            }
+            AnthropicContentBlock::ToolResult { .. } => {
+                // Unexpected in a response — ignore
+            }
+            AnthropicContentBlock::Image { source, media_type } => {
+                text_parts.push(ContentBlock::Image {
+                    source: match source {
+                        AnthropicImageSource::Base64 { data } => {
+                            L0ImageSource::Base64 { data: data.clone() }
+                        }
+                        AnthropicImageSource::Url { url } => {
+                            L0ImageSource::Url { url: url.clone() }
+                        }
+                    },
+                    media_type: media_type.clone(),
+                });
+            }
+        }
+    }
+
+    let content = if text_parts.len() == 1 {
+        if let ContentBlock::Text { text } = &text_parts[0] {
+            Content::Text(text.clone())
+        } else {
+            Content::Blocks(text_parts)
+        }
+    } else if text_parts.is_empty() {
+        Content::text("")
+    } else {
+        Content::Blocks(text_parts)
+    };
+
+    let stop_reason = match response.stop_reason.as_str() {
+        "end_turn" => StopReason::EndTurn,
+        "tool_use" => StopReason::ToolUse,
+        "max_tokens" => StopReason::MaxTokens,
+        "refusal" => StopReason::ContentFilter,
+        _ => StopReason::EndTurn,
+    };
+
+    let usage = TokenUsage {
+        input_tokens: response.usage.input_tokens,
+        output_tokens: response.usage.output_tokens,
+        cache_read_tokens: response.usage.cache_read_input_tokens,
+        cache_creation_tokens: response.usage.cache_creation_input_tokens,
+    };
+
+    let input_cost = Decimal::from(response.usage.input_tokens) * Decimal::new(25, 8);
+    let output_cost = Decimal::from(response.usage.output_tokens) * Decimal::new(125, 8);
+    let cost = input_cost + output_cost;
+
+    Ok(InferResponse {
+        content,
+        tool_calls,
+        stop_reason,
+        usage,
+        model: response.model,
+        cost: Some(cost),
+        truncated: None,
+    })
 }
 
 /// Parse a raw [`AnthropicResponse`] into a [`ProviderResponse`].
@@ -211,6 +388,76 @@ async fn resolve_key(source: &ApiKeySource) -> Result<String, ProviderError> {
 }
 
 impl Provider for AnthropicProvider {
+    fn infer(
+        &self,
+        request: InferRequest,
+    ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        let source = self.api_key_source.clone();
+        let api_request = self.build_infer_request(&request);
+        let client = self.client.clone();
+        let api_url = self.api_url.clone();
+        let api_version = self.api_version.clone();
+
+        let model = request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.infer", provider = "anthropic", model);
+
+        async move {
+            let key = resolve_key(&source).await?;
+
+            let mut builder = client.post(&api_url);
+            if is_oauth_token(&key) {
+                builder = builder
+                    .header("Authorization", format!("Bearer {key}"))
+                    .header("anthropic-beta", "oauth-2025-04-20");
+            } else {
+                builder = builder.header("x-api-key", key);
+            }
+            let http_request = builder
+                .header("anthropic-version", &api_version)
+                .header("content-type", "application/json")
+                .json(&api_request);
+
+            let http_response =
+                http_request
+                    .send()
+                    .await
+                    .map_err(|e| ProviderError::TransientError {
+                        message: e.to_string(),
+                        status: None,
+                    })?;
+
+            let status = http_response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(ProviderError::RateLimited);
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                let body = http_response.text().await.unwrap_or_default();
+                return Err(ProviderError::AuthFailed(body));
+            }
+            if !status.is_success() {
+                let body = http_response.text().await.unwrap_or_default();
+                return Err(map_error_response(status, &body));
+            }
+
+            let api_response: AnthropicResponse = http_response
+                .json()
+                .await
+                .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
+
+            let response = parse_anthropic_infer_response(api_response)?;
+            tracing::info!(
+                input_tokens = response.usage.input_tokens,
+                output_tokens = response.usage.output_tokens,
+                "inference finished"
+            );
+            Ok(response)
+        }
+        .instrument(span)
+    }
+
+    #[allow(deprecated)]
     fn complete(
         &self,
         request: ProviderRequest,

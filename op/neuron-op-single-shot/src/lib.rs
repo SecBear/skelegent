@@ -8,12 +8,12 @@
 
 use async_trait::async_trait;
 use layer0::content::Content;
+use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
 use layer0::error::OperatorError;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorMetadata, OperatorOutput};
-use neuron_turn::convert::{content_to_user_message, parts_to_content};
+use neuron_turn::infer::InferRequest;
 use neuron_turn::provider::Provider;
-use neuron_turn::types::*;
 use rust_decimal::Decimal;
 use std::time::Instant;
 
@@ -92,26 +92,23 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         let system = self.resolve_system(&input);
         let max_tokens = self.config.default_max_tokens;
 
-        // Build single user message
-        let messages = vec![content_to_user_message(&input.message)];
+        // Build single user message from trigger content
+        let user_msg = Message::new(Role::User, input.message.clone());
 
-        // Build request with no tools
-        let request = ProviderRequest {
-            model,
-            messages,
-            tools: vec![],
-            max_tokens: Some(max_tokens),
-            temperature: None,
-            system: if system.is_empty() {
-                None
-            } else {
-                Some(system)
-            },
-            extra: input.metadata.clone(),
-        };
+        // Build inference request
+        let mut request = InferRequest::new(vec![user_msg]);
+        if let Some(m) = model {
+            request = request.with_model(m);
+        }
+        if !system.is_empty() {
+            request = request.with_system(system);
+        }
+        request = request
+            .with_max_tokens(max_tokens)
+            .with_extra(input.metadata.clone());
 
         // Single model call
-        let response = self.provider.complete(request).await.map_err(|e| {
+        let response = self.provider.infer(request).await.map_err(|e| {
             if e.is_retryable() {
                 OperatorError::Retryable(e.to_string())
             } else {
@@ -130,8 +127,8 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         metadata.sub_dispatches = vec![];
         metadata.duration = duration;
 
-        // Convert response content to layer0 Content
-        let message: Content = parts_to_content(&response.content);
+        // Response content is already layer0 Content
+        let message: Content = response.content;
 
         // Always ExitReason::Complete for single-shot
         let mut output = OperatorOutput::new(message, ExitReason::Complete);
@@ -146,6 +143,7 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
 mod tests {
     use super::*;
     use neuron_turn::provider::ProviderError;
+    use neuron_turn::types::{ContentPart, ProviderRequest, ProviderResponse, StopReason, TokenUsage};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};

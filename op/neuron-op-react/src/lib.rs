@@ -22,7 +22,7 @@ use neuron_tool::adapter::ToolRegistryOrchestrator;
 use neuron_tool::{ToolConcurrencyHint, ToolRegistry};
 
 use layer0::context::{Message, Role as L0Role};
-use neuron_turn::convert::{message_to_provider, parts_to_content};
+use neuron_turn::infer::InferRequest;
 use neuron_turn::provider::Provider;
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
@@ -87,7 +87,7 @@ pub struct ReactConfig {
     /// Returns a model name override, or None to use the default.
     /// Enables task-type routing (e.g. route by message count, tool count, or cost).
     #[allow(clippy::type_complexity)]
-    pub model_selector: Option<Arc<dyn Fn(&ProviderRequest) -> Option<String> + Send + Sync>>,
+    pub model_selector: Option<Arc<dyn Fn(&InferRequest) -> Option<String> + Send + Sync>>,
 }
 
 impl Default for ReactConfig {
@@ -289,7 +289,7 @@ impl<P: Provider> ReactOperator<P> {
     /// override the model for that call, or `None` to use the default.
     pub fn with_model_selector(
         mut self,
-        f: impl Fn(&ProviderRequest) -> Option<String> + Send + Sync + 'static,
+        f: impl Fn(&InferRequest) -> Option<String> + Send + Sync + 'static,
     ) -> Self {
         self.config.model_selector = Some(Arc::new(f));
         self
@@ -643,7 +643,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
         let mut turns_used: u32 = 0;
         let mut dispatch_records: Vec<SubDispatchRecord> = vec![];
         let mut effects: Vec<Effect> = vec![];
-        let mut last_content: Vec<ContentPart> = vec![];
+        let mut last_content: Content = Content::text("");
         let mut total_sub_dispatches: u32 = 0;
         let mut recent_calls: std::collections::VecDeque<(String, u64)> =
             std::collections::VecDeque::new();
@@ -663,7 +663,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 );
                 if let ReactAction::Halt { reason } = interceptor.pre_inference(&state).await {
                     return Ok(Self::make_output(
-                        parts_to_content(&last_content),
+                        last_content.clone(),
                         ExitReason::InterceptorHalt { reason },
                         self.build_metadata(
                             total_tokens_in,
@@ -678,10 +678,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 }
             }
 
-            // 2. Build ProviderRequest
-            let request = ProviderRequest {
+            // 2. Build InferRequest
+            let request = InferRequest {
                 model: config.model.clone(),
-                messages: messages.iter().map(message_to_provider).collect(),
+                messages: messages.clone(),
                 tools: tools.clone(),
                 max_tokens: Some(config.max_tokens),
                 temperature: None,
@@ -701,7 +701,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             };
 
             // 3. Call provider
-            let response = self.provider.complete(request).await.map_err(|e| {
+            let response = self.provider.infer(request).await.map_err(|e| {
                 if e.is_retryable() {
                     OperatorError::Retryable(e.to_string())
                 } else {
@@ -718,12 +718,11 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                     turns_used,
                     DurationMs::from(start.elapsed()),
                 );
-                let resp_content = parts_to_content(&response.content);
                 if let ReactAction::Halt { reason } =
-                    interceptor.post_inference(&state, &resp_content).await
+                    interceptor.post_inference(&state, &response.content).await
                 {
                     return Ok(Self::make_output(
-                        parts_to_content(&response.content),
+                        response.content.clone(),
                         ExitReason::InterceptorHalt { reason },
                         self.build_metadata(
                             total_tokens_in + response.usage.input_tokens,
@@ -745,7 +744,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 total_cost += cost;
             }
 
-            last_content.clone_from(&response.content);
+            last_content = response.content.clone();
 
             // 6. Check StopReason
             match response.stop_reason {
@@ -754,7 +753,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 }
                 StopReason::ContentFilter => {
                     return Ok(Self::make_output(
-                        parts_to_content(&response.content),
+                        response.content.clone(),
                         ExitReason::SafetyStop {
                             reason: "content_filter".into(),
                         },
@@ -771,7 +770,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 }
                 StopReason::EndTurn => {
                     return Ok(Self::make_output(
-                        parts_to_content(&response.content),
+                        response.content.clone(),
                         ExitReason::Complete,
                         self.build_metadata(
                             total_tokens_in,
@@ -791,23 +790,15 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
 
             // 7. Tool execution
             // Add assistant message to context
-            messages.push(Message::new(
-                L0Role::Assistant,
-                parts_to_content(&response.content),
-            ));
+            messages.push(response.to_message());
 
-            let mut dispatch_results: Vec<ContentPart> = Vec::new();
+            let mut dispatch_results: Vec<layer0::content::ContentBlock> = Vec::new();
             // Use planner to decide batches. Build (id,name,input) vector first.
             let planned = {
                 let calls: Vec<(String, String, serde_json::Value)> = response
-                    .content
+                    .tool_calls
                     .iter()
-                    .filter_map(|part| match part {
-                        ContentPart::ToolUse { id, name, input } => {
-                            Some((id.clone(), name.clone(), input.clone()))
-                        }
-                        _ => None,
-                    })
+                    .map(|tc| (tc.id.clone(), tc.name.clone(), tc.input.clone()))
                     .collect();
                 self.planner.plan(&calls, self.decider.as_ref())
             };
@@ -834,11 +825,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 let skipped_names: Vec<String> =
                                     call_group.iter().map(|(_, n, _)| n.clone()).collect();
                                 for (id, name, _input) in call_group.into_iter() {
-                                    dispatch_results.push(ContentPart::ToolResult {
-                                        tool_use_id: id,
-                                        content: "Skipped due to steering".into(),
-                                        is_error: false,
-                                    });
+                                    dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
+                                    content: "Skipped due to steering".into(),
+                                    is_error: false, });
                                     dispatch_records.push(SubDispatchRecord::new(
                                         &name,
                                         DurationMs::ZERO,
@@ -886,11 +875,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     for (rid, rname, _rinput) in
                                         call_group.iter().skip(idx).cloned()
                                     {
-                                        dispatch_results.push(ContentPart::ToolResult {
-                                            tool_use_id: rid,
-                                            content: "Skipped due to steering".into(),
-                                            is_error: false,
-                                        });
+                                        dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: rid,
+                                        content: "Skipped due to steering".into(),
+                                        is_error: false, });
                                         dispatch_records.push(SubDispatchRecord::new(
                                             &rname,
                                             DurationMs::ZERO,
@@ -918,11 +905,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             // Effects handled immediately
                             if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
                                 effects.push(effect);
-                                dispatch_results.push(ContentPart::ToolResult {
-                                    tool_use_id: id,
-                                    content: format!("{name} effect recorded."),
-                                    is_error: false,
-                                });
+                                dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
+                                content: format!("{name} effect recorded."),
+                                is_error: false, });
                                 dispatch_records.push(SubDispatchRecord::new(
                                     &name,
                                     DurationMs::ZERO,
@@ -962,7 +947,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     {
                                         SubDispatchAction::Halt { reason } => {
                                             return Ok(Self::make_output(
-                                                parts_to_content(&last_content),
+                                                last_content.clone(),
                                                 ExitReason::InterceptorHalt { reason },
                                                 self.build_metadata(
                                                     total_tokens_in,
@@ -976,11 +961,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                             ));
                                         }
                                         SubDispatchAction::Skip { reason } => {
-                                            dispatch_results.push(ContentPart::ToolResult {
-                                                tool_use_id: id,
-                                                content: format!("Skipped: {reason}"),
-                                                is_error: false,
-                                            });
+                                            dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
+                                            content: format!("Skipped: {reason}"),
+                                            is_error: false, });
                                             dispatch_records.push(SubDispatchRecord::new(
                                                 &name,
                                                 DurationMs::ZERO,
@@ -1048,7 +1031,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     {
                                         SubDispatchResult::Halt { reason } => {
                                             return Ok(Self::make_output(
-                                                parts_to_content(&last_content),
+                                                last_content.clone(),
                                                 ExitReason::InterceptorHalt { reason },
                                                 self.build_metadata(
                                                     total_tokens_in,
@@ -1067,11 +1050,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         SubDispatchResult::Continue => {}
                                     }
                                 }
-                                dispatch_results.push(ContentPart::ToolResult {
-                                    tool_use_id: id,
-                                    content: result_content,
-                                    is_error,
-                                });
+                                dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
+                                content: result_content,
+                                is_error, });
                                 // track regular tool call
                                 total_sub_dispatches += 1;
                                 {
@@ -1116,11 +1097,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         for (rid, rname, _rinput) in
                                             call_group.iter().skip(idx + 1).cloned()
                                         {
-                                            dispatch_results.push(ContentPart::ToolResult {
-                                                tool_use_id: rid,
-                                                content: "Skipped due to steering".into(),
-                                                is_error: false,
-                                            });
+                                            dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: rid,
+                                            content: "Skipped due to steering".into(),
+                                            is_error: false, });
                                             dispatch_records.push(SubDispatchRecord::new(
                                                 &rname,
                                                 DurationMs::ZERO,
@@ -1181,11 +1160,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             if !injected.is_empty() {
                                 messages.extend(injected.into_iter().map(Message::from));
                                 let skipped_names = vec![name.clone()];
-                                dispatch_results.push(ContentPart::ToolResult {
-                                    tool_use_id: id,
-                                    content: "Skipped due to steering".into(),
-                                    is_error: false,
-                                });
+                                dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
+                                content: "Skipped due to steering".into(),
+                                is_error: false, });
                                 dispatch_records.push(SubDispatchRecord::new(
                                     &name,
                                     DurationMs::ZERO,
@@ -1207,11 +1184,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         }
                         if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
                             effects.push(effect);
-                            dispatch_results.push(ContentPart::ToolResult {
-                                tool_use_id: id,
-                                content: format!("{name} effect recorded."),
-                                is_error: false,
-                            });
+                            dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
+                            content: format!("{name} effect recorded."),
+                            is_error: false, });
                             dispatch_records.push(SubDispatchRecord::new(
                                 &name,
                                 DurationMs::ZERO,
@@ -1251,7 +1226,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             {
                                 SubDispatchAction::Halt { reason } => {
                                     return Ok(Self::make_output(
-                                        parts_to_content(&last_content),
+                                        last_content.clone(),
                                         ExitReason::InterceptorHalt { reason },
                                         self.build_metadata(
                                             total_tokens_in,
@@ -1265,11 +1240,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     ));
                                 }
                                 SubDispatchAction::Skip { reason } => {
-                                    dispatch_results.push(ContentPart::ToolResult {
-                                        tool_use_id: id,
-                                        content: format!("Skipped: {reason}"),
-                                        is_error: false,
-                                    });
+                                    dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
+                                    content: format!("Skipped: {reason}"),
+                                    is_error: false, });
                                     dispatch_records.push(SubDispatchRecord::new(
                                         &name,
                                         DurationMs::ZERO,
@@ -1328,7 +1301,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             {
                                 SubDispatchResult::Halt { reason } => {
                                     return Ok(Self::make_output(
-                                        parts_to_content(&last_content),
+                                        last_content.clone(),
                                         ExitReason::InterceptorHalt { reason },
                                         self.build_metadata(
                                             total_tokens_in,
@@ -1347,11 +1320,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 SubDispatchResult::Continue => {}
                             }
                         }
-                        dispatch_results.push(ContentPart::ToolResult {
-                            tool_use_id: id,
-                            content: result_content,
-                            is_error,
-                        });
+                        dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
+                        content: result_content,
+                        is_error, });
                         // track tool call
                         total_sub_dispatches += 1;
                         {
@@ -1395,7 +1366,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             // Add tool results as user message
             messages.push(Message::new(
                 L0Role::User,
-                parts_to_content(&dispatch_results),
+                Content::Blocks(dispatch_results),
             ));
             *self
                 .current_context
@@ -1413,7 +1384,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 );
                 if let ReactAction::Halt { reason } = interceptor.exit_check(&state).await {
                     return Ok(Self::make_output(
-                        parts_to_content(&last_content),
+                        last_content.clone(),
                         ExitReason::InterceptorHalt { reason },
                         self.build_metadata(
                             total_tokens_in,
@@ -1455,7 +1426,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 }
 
                 return Ok(Self::make_output(
-                    parts_to_content(&last_content),
+                    last_content.clone(),
                     ExitReason::BudgetExhausted,
                     self.build_metadata(
                         total_tokens_in,
@@ -1487,7 +1458,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                     }
 
                     return Ok(Self::make_output(
-                        parts_to_content(&last_content),
+                        last_content.clone(),
                         ExitReason::Custom("stuck_detected".into()),
                         self.build_metadata(
                             total_tokens_in,
@@ -1504,7 +1475,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             // 9b. MaxTurns
             if turns_used >= config.max_turns {
                 return Ok(Self::make_output(
-                    parts_to_content(&last_content),
+                    last_content.clone(),
                     ExitReason::MaxTurns,
                     self.build_metadata(
                         total_tokens_in,
@@ -1522,7 +1493,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 && total_cost >= *max_cost
             {
                 return Ok(Self::make_output(
-                    parts_to_content(&last_content),
+                    last_content.clone(),
                     ExitReason::BudgetExhausted,
                     self.build_metadata(
                         total_tokens_in,
@@ -1561,7 +1532,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 }
 
                 return Ok(Self::make_output(
-                    parts_to_content(&last_content),
+                    last_content.clone(),
                     ExitReason::Timeout,
                     self.build_metadata(
                         total_tokens_in,
@@ -3171,7 +3142,7 @@ mod tests {
                 ..Default::default()
             },
         )
-        .with_model_selector(|req: &ProviderRequest| {
+        .with_model_selector(|req: &InferRequest| {
             if req.messages.len() > 1 {
                 Some("big-model".to_string())
             } else {

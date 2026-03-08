@@ -5,6 +5,9 @@
 
 mod types;
 
+use layer0::content::{Content, ContentBlock};
+use layer0::context;
+use neuron_turn::infer::{InferRequest, InferResponse, ToolCall};
 use neuron_turn::provider::{Provider, ProviderError};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
@@ -324,9 +327,407 @@ impl OpenAIProvider {
             truncated: None,
         })
     }
+
+    /// Build an [`OpenAIRequest`] from an [`InferRequest`] (layer0 Message types).
+    fn build_infer_request(&self, request: &InferRequest) -> OpenAIRequest {
+        let model = request
+            .model
+            .clone()
+            .unwrap_or_else(|| "gpt-4o-mini".into());
+
+        let mut messages: Vec<OpenAIMessage> = Vec::new();
+
+        // System prompt becomes a system message.
+        if let Some(ref system) = request.system {
+            messages.push(OpenAIMessage {
+                role: "system".into(),
+                content: Some(OpenAIContent::Text(system.clone())),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+
+        // Map layer0 Messages to OpenAI messages.
+        for msg in &request.messages {
+            match &msg.role {
+                context::Role::System => {
+                    let text = content_to_text(&msg.content);
+                    messages.push(OpenAIMessage {
+                        role: "system".into(),
+                        content: Some(OpenAIContent::Text(text)),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+                }
+                context::Role::User => {
+                    // Separate tool results from other content.
+                    // OpenAI uses role="tool" for tool results.
+                    match &msg.content {
+                        Content::Text(text) => {
+                            messages.push(OpenAIMessage {
+                                role: "user".into(),
+                                content: Some(OpenAIContent::Text(text.clone())),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                        }
+                        Content::Blocks(blocks) => {
+                            let mut tool_results = Vec::new();
+                            let mut other_parts = Vec::new();
+                            for block in blocks {
+                                match block {
+                                    ContentBlock::ToolResult {
+                                        tool_use_id,
+                                        content,
+                                        ..
+                                    } => {
+                                        tool_results
+                                            .push((tool_use_id.clone(), content.clone()));
+                                    }
+                                    _ => {
+                                        other_parts.push(block.clone());
+                                    }
+                                }
+                            }
+                            // Emit tool result messages first.
+                            for (tool_call_id, content) in tool_results {
+                                messages.push(OpenAIMessage {
+                                    role: "tool".into(),
+                                    content: Some(OpenAIContent::Text(content)),
+                                    tool_calls: None,
+                                    tool_call_id: Some(tool_call_id),
+                                });
+                            }
+                            // Emit user message if there are other parts.
+                            if !other_parts.is_empty() {
+                                messages.push(OpenAIMessage {
+                                    role: "user".into(),
+                                    content: Some(blocks_to_openai_content(&other_parts)),
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                });
+                            }
+                        }
+                        _ => {
+                            let text = content_to_text(&msg.content);
+                            messages.push(OpenAIMessage {
+                                role: "user".into(),
+                                content: Some(OpenAIContent::Text(text)),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                        }
+                    }
+                }
+                context::Role::Assistant => {
+                    // Separate tool-use blocks from text/image content.
+                    match &msg.content {
+                        Content::Text(text) => {
+                            messages.push(OpenAIMessage {
+                                role: "assistant".into(),
+                                content: Some(OpenAIContent::Text(text.clone())),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                        }
+                        Content::Blocks(blocks) => {
+                            let mut tool_calls = Vec::new();
+                            let mut text_blocks = Vec::new();
+                            for block in blocks {
+                                match block {
+                                    ContentBlock::ToolUse { id, name, input } => {
+                                        tool_calls.push(OpenAIToolCall {
+                                            id: id.clone(),
+                                            call_type: "function".into(),
+                                            function: OpenAIFunctionCall {
+                                                name: name.clone(),
+                                                arguments: serde_json::to_string(input)
+                                                    .unwrap_or_default(),
+                                            },
+                                        });
+                                    }
+                                    _ => {
+                                        text_blocks.push(block.clone());
+                                    }
+                                }
+                            }
+                            let content = if text_blocks.is_empty() {
+                                None
+                            } else {
+                                Some(blocks_to_openai_content(&text_blocks))
+                            };
+                            let tool_calls_field = if tool_calls.is_empty() {
+                                None
+                            } else {
+                                Some(tool_calls)
+                            };
+                            messages.push(OpenAIMessage {
+                                role: "assistant".into(),
+                                content,
+                                tool_calls: tool_calls_field,
+                                tool_call_id: None,
+                            });
+                        }
+                        _ => {
+                            let text = content_to_text(&msg.content);
+                            messages.push(OpenAIMessage {
+                                role: "assistant".into(),
+                                content: Some(OpenAIContent::Text(text)),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                        }
+                    }
+                }
+                context::Role::Tool { call_id, .. } => {
+                    // Tool result message.
+                    let text = content_to_text(&msg.content);
+                    // Try to extract tool_call_id from ToolResult blocks if call_id is empty.
+                    let resolved_call_id = if call_id.is_empty() {
+                        if let Content::Blocks(blocks) = &msg.content {
+                            blocks
+                                .iter()
+                                .find_map(|b| match b {
+                                    ContentBlock::ToolResult {
+                                        tool_use_id, ..
+                                    } => Some(tool_use_id.clone()),
+                                    _ => None,
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        call_id.clone()
+                    };
+                    messages.push(OpenAIMessage {
+                        role: "tool".into(),
+                        content: Some(OpenAIContent::Text(text)),
+                        tool_calls: None,
+                        tool_call_id: Some(resolved_call_id),
+                    });
+                }
+                _ => {
+                    // Future role variants — treat as user message.
+                    let text = content_to_text(&msg.content);
+                    messages.push(OpenAIMessage {
+                        role: "user".into(),
+                        content: Some(OpenAIContent::Text(text)),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    });
+                }
+            }
+        }
+
+        let tools: Vec<OpenAITool> = request
+            .tools
+            .iter()
+            .map(|t| OpenAITool {
+                tool_type: "function".into(),
+                function: OpenAIFunction {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    parameters: t.input_schema.clone(),
+                },
+            })
+            .collect();
+
+        // Extract provider-specific fields from extra.
+        let service_tier = request
+            .extra
+            .get("service_tier")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let reasoning_effort = request
+            .extra
+            .get("reasoning_effort")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let parallel_tool_calls = request
+            .extra
+            .get("parallel_tool_calls")
+            .and_then(|v| v.as_bool());
+
+        OpenAIRequest {
+            model,
+            messages,
+            max_tokens: request.max_tokens,
+            temperature: request.temperature,
+            tools,
+            parallel_tool_calls,
+            service_tier,
+            reasoning_effort,
+        }
+    }
+
+    /// Parse an [`OpenAIResponse`] into an [`InferResponse`].
+    fn parse_infer_response(
+        &self,
+        response: OpenAIResponse,
+    ) -> Result<InferResponse, ProviderError> {
+        let choice = response
+            .choices
+            .into_iter()
+            .next()
+            .ok_or_else(|| ProviderError::InvalidResponse("no choices in response".into()))?;
+
+        let mut content_blocks: Vec<ContentBlock> = Vec::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+        // Extract text/image content.
+        if let Some(msg_content) = choice.message.content {
+            match msg_content {
+                OpenAIContent::Text(text) => {
+                    if !text.is_empty() {
+                        content_blocks.push(ContentBlock::Text { text });
+                    }
+                }
+                OpenAIContent::Parts(parts) => {
+                    for part in parts {
+                        match part {
+                            OpenAIContentPart::Text { text } => {
+                                content_blocks.push(ContentBlock::Text { text });
+                            }
+                            OpenAIContentPart::ImageUrl { image_url } => {
+                                content_blocks.push(ContentBlock::Image {
+                                    source: layer0::content::ImageSource::Url { url: image_url.url },
+                                    media_type: "image/png".into(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract tool calls.
+        if let Some(tc_list) = choice.message.tool_calls {
+            for tc in tc_list {
+                let input: serde_json::Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                tool_calls.push(ToolCall {
+                    id: tc.id,
+                    name: tc.function.name,
+                    input,
+                });
+            }
+        }
+
+        let stop_reason = match choice.finish_reason.as_str() {
+            "stop" => StopReason::EndTurn,
+            "tool_calls" => StopReason::ToolUse,
+            "length" => StopReason::MaxTokens,
+            "content_filter" => StopReason::ContentFilter,
+            _ => StopReason::EndTurn,
+        };
+
+        let usage = TokenUsage {
+            input_tokens: response.usage.prompt_tokens,
+            output_tokens: response.usage.completion_tokens,
+            cache_read_tokens: response
+                .usage
+                .prompt_tokens_details
+                .and_then(|d| d.cached_tokens),
+            cache_creation_tokens: None,
+        };
+
+        let input_cost = Decimal::from(response.usage.prompt_tokens) * Decimal::new(15, 8);
+        let output_cost =
+            Decimal::from(response.usage.completion_tokens) * Decimal::new(60, 8);
+        let cost = input_cost + output_cost;
+
+        // Build Content from blocks.
+        let content = if content_blocks.is_empty() {
+            Content::text("")
+        } else if content_blocks.len() == 1 {
+            if let ContentBlock::Text { ref text } = content_blocks[0] {
+                Content::Text(text.clone())
+            } else {
+                Content::Blocks(content_blocks)
+            }
+        } else {
+            Content::Blocks(content_blocks)
+        };
+
+        Ok(InferResponse {
+            content,
+            tool_calls,
+            stop_reason,
+            usage,
+            model: response.model,
+            cost: Some(cost),
+            truncated: None,
+        })
+    }
 }
 
 impl Provider for OpenAIProvider {
+    fn infer(
+        &self,
+        request: InferRequest,
+    ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        let api_key_result = self.resolve_api_key();
+        let api_request = self.build_infer_request(&request);
+        let http_opt = api_key_result.map(|key| {
+            let mut builder = self
+                .client
+                .post(&self.api_url)
+                .header("authorization", format!("Bearer {}", key))
+                .header("content-type", "application/json");
+            if let Some(ref org_id) = self.org_id {
+                builder = builder.header("openai-organization", org_id);
+            }
+            builder.json(&api_request)
+        });
+
+        let model = request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.infer", provider = "openai", model);
+
+        async move {
+            let http_request: reqwest::RequestBuilder = match http_opt {
+                Err(e) => return Err(e),
+                Ok(r) => r,
+            };
+            let http_response = http_request.send().await.map_err(|e| {
+                ProviderError::TransientError {
+                    message: e.to_string(),
+                    status: None,
+                }
+            })?;
+
+            let status = http_response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(ProviderError::RateLimited);
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                let body = http_response.text().await.unwrap_or_default();
+                return Err(ProviderError::AuthFailed(body));
+            }
+            if !status.is_success() {
+                let body = http_response.text().await.unwrap_or_default();
+                return Err(map_error_response(status, &body));
+            }
+
+            let api_response: OpenAIResponse = http_response
+                .json()
+                .await
+                .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
+
+            let response = self.parse_infer_response(api_response)?;
+            tracing::info!(
+                input_tokens = response.usage.input_tokens,
+                output_tokens = response.usage.output_tokens,
+                "inference finished"
+            );
+            Ok(response)
+        }
+        .instrument(span)
+    }
+
+    #[allow(deprecated)]
     fn complete(
         &self,
         request: ProviderRequest,
@@ -411,6 +812,56 @@ fn map_error_response(status: reqwest::StatusCode, body: &str) -> ProviderError 
         message: format!("HTTP {status}: {body}"),
         status: Some(status_u16),
     }
+}
+
+/// Extract plain text from a layer0 [`Content`] value.
+fn content_to_text(content: &Content) -> String {
+    match content {
+        Content::Text(text) => text.clone(),
+        Content::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                ContentBlock::ToolResult { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Convert layer0 [`ContentBlock`]s to an [`OpenAIContent`] value.
+fn blocks_to_openai_content(blocks: &[ContentBlock]) -> OpenAIContent {
+    if blocks.len() == 1
+        && let ContentBlock::Text { text } = &blocks[0]
+    {
+        return OpenAIContent::Text(text.clone());
+    }
+    OpenAIContent::Parts(
+        blocks
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => {
+                    Some(OpenAIContentPart::Text { text: text.clone() })
+                }
+                ContentBlock::Image { source, .. } => {
+                    let url = match source {
+                        layer0::content::ImageSource::Url { url } => url.clone(),
+                        layer0::content::ImageSource::Base64 { data } => {
+                            format!("data:image/png;base64,{data}")
+                        }
+                        _ => return None,
+                    };
+                    Some(OpenAIContentPart::ImageUrl {
+                        image_url: OpenAIImageUrl { url },
+                    })
+                }
+                // ToolUse and ToolResult handled separately.
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 fn extract_text(parts: &[ContentPart]) -> String {

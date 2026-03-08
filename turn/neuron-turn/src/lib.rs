@@ -16,6 +16,9 @@ pub mod infer;
 pub mod provider;
 pub mod types;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
+
 // Re-exports
 pub use config::NeuronTurnConfig;
 pub use convert::{
