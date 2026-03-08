@@ -813,7 +813,6 @@ dependencies = [
  "layer0",
  "neuron-context",
  "neuron-env-local",
- "neuron-hooks",
  "neuron-mcp",
  "neuron-op-react",
  "neuron-op-single-shot",
@@ -901,17 +900,6 @@ dependencies = [
  "async-trait",
  "layer0",
  "regex",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-hooks"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
  "serde_json",
  "tokio",
  "tracing",
@@ -1128,7 +1116,6 @@ dependencies = [
  "layer0",
  "neuron",
  "neuron-context",
- "neuron-hooks",
  "neuron-op-react",
  "neuron-op-single-shot",
  "neuron-orch-local",

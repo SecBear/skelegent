@@ -72,11 +72,8 @@ pub trait StoreWriteNext: Send + Sync {
 #[async_trait]
 pub trait StoreReadNext: Send + Sync {
     /// Forward the read to the next layer.
-    async fn read(
-        &self,
-        scope: &Scope,
-        key: &str,
-    ) -> Result<Option<serde_json::Value>, StateError>;
+    async fn read(&self, scope: &Scope, key: &str)
+    -> Result<Option<serde_json::Value>, StateError>;
 }
 
 /// Middleware wrapping `StateStore` read and write operations.
@@ -364,7 +361,9 @@ impl StoreWriteNext for StoreWriteChain<'_> {
             terminal: self.terminal,
             options: self.options,
         };
-        self.layers[self.index].write(scope, key, value, options, &next).await
+        self.layers[self.index]
+            .write(scope, key, value, options, &next)
+            .await
     }
 }
 
@@ -608,7 +607,10 @@ mod tests {
                 _agent: &AgentId,
                 input: OperatorInput,
             ) -> Result<OperatorOutput, OrchError> {
-                Ok(OperatorOutput::new(input.message, crate::ExitReason::Complete))
+                Ok(OperatorOutput::new(
+                    input.message,
+                    crate::ExitReason::Complete,
+                ))
             }
         }
 
@@ -616,7 +618,9 @@ mod tests {
             crate::content::Content::text("test"),
             crate::operator::TriggerType::User,
         );
-        let result = stack.dispatch_with(&AgentId::from("a"), input, &EchoTerminal).await;
+        let result = stack
+            .dispatch_with(&AgentId::from("a"), input, &EchoTerminal)
+            .await;
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
@@ -647,7 +651,10 @@ mod tests {
                 _agent: &AgentId,
                 input: OperatorInput,
             ) -> Result<OperatorOutput, OrchError> {
-                Ok(OperatorOutput::new(input.message, crate::ExitReason::Complete))
+                Ok(OperatorOutput::new(
+                    input.message,
+                    crate::ExitReason::Complete,
+                ))
             }
         }
 
@@ -659,7 +666,9 @@ mod tests {
             crate::content::Content::text("hello"),
             crate::operator::TriggerType::User,
         );
-        let result = stack.dispatch_with(&AgentId::from("a"), input, &EchoTerminal).await;
+        let result = stack
+            .dispatch_with(&AgentId::from("a"), input, &EchoTerminal)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -741,13 +750,14 @@ mod tests {
                 input: OperatorInput,
                 _spec: &EnvironmentSpec,
             ) -> Result<OperatorOutput, EnvError> {
-                Ok(OperatorOutput::new(input.message, crate::ExitReason::Complete))
+                Ok(OperatorOutput::new(
+                    input.message,
+                    crate::ExitReason::Complete,
+                ))
             }
         }
 
-        let stack = ExecStack::builder()
-            .observe(Arc::new(LogExec))
-            .build();
+        let stack = ExecStack::builder().observe(Arc::new(LogExec)).build();
 
         let input = OperatorInput::new(
             crate::content::Content::text("run"),

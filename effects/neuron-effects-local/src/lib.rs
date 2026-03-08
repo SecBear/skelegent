@@ -4,11 +4,11 @@
 use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::effect::{Effect, Scope};
+use layer0::error::StateError;
+use layer0::middleware::{StoreStack, StoreWriteNext};
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::orchestrator::Orchestrator;
 use layer0::state::{StateStore, StoreOptions};
-use layer0::error::StateError;
-use layer0::middleware::{StoreStack, StoreWriteNext};
 use neuron_effects_core::{EffectExecutor, Error, UnknownEffectPolicy};
 use serde_json::json;
 use std::sync::Arc;
@@ -57,7 +57,7 @@ impl<S: StateStore + ?Sized, O: Orchestrator + ?Sized> LocalEffectExecutor<S, O>
     /// the stack before reaching the state backend.
     ///
     /// A guard middleware can skip the write by not calling `next` and returning `Ok(())`.
-      /// A transformer middleware can substitute the value before calling `next`.
+    /// A transformer middleware can substitute the value before calling `next`.
     pub fn with_store_middleware(mut self, stack: StoreStack) -> Self {
         self.middleware = Some(stack);
         self

@@ -266,9 +266,7 @@ async fn middleware_guard_can_halt_dispatch() {
         }
     }
 
-    let stack = DispatchStack::builder()
-        .guard(Arc::new(DenyAll))
-        .build();
+    let stack = DispatchStack::builder().guard(Arc::new(DenyAll)).build();
 
     let mut orch = LocalOrch::new().with_middleware(stack);
     orch.register(AgentId::new("echo"), Arc::new(EchoOperator));

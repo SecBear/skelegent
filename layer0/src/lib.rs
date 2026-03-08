@@ -16,7 +16,7 @@
 //!
 //! | Interface | Types | What it does |
 //! |-----------|-------|-------------|
-//! | ⑤ Hooks | [`Hook`], [`HookPoint`], [`HookAction`] | Observation + intervention |
+//! | ⑤ Middleware | [`DispatchMiddleware`], [`StoreMiddleware`], [`ExecMiddleware`] | Interception + policy |
 //! | ⑥ Lifecycle | [`BudgetEvent`], [`CompactionEvent`] | Cross-layer coordination |
 //!
 //! ## Design Principle
@@ -55,10 +55,9 @@ pub mod duration;
 pub mod effect;
 pub mod environment;
 pub mod error;
-pub mod hook;
-pub mod middleware;
 pub mod id;
 pub mod lifecycle;
+pub mod middleware;
 pub mod operator;
 pub mod orchestrator;
 pub mod secret;
@@ -76,14 +75,13 @@ pub use context::{
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
-pub use error::{EnvError, HookError, OperatorError, OrchError, StateError};
-pub use hook::{Hook, HookAction, HookContext, HookPoint};
+pub use error::{EnvError, OperatorError, OrchError, StateError};
+pub use id::{AgentId, ScopeId, SessionId, WorkflowId};
+pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy, ObservableEvent};
 pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
     StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,
 };
-pub use id::{AgentId, ScopeId, SessionId, WorkflowId};
-pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy, ObservableEvent};
 pub use operator::{
     ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMetadata, OperatorOutput,
     SubDispatchRecord, ToolMetadata,

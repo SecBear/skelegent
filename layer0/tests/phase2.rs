@@ -3,9 +3,7 @@
 
 #![cfg(feature = "test-utils")]
 
-use layer0::test_utils::{
-    EchoOperator, InMemoryStore, LocalEnvironment, LocalOrchestrator, LoggingHook,
-};
+use layer0::test_utils::{EchoOperator, InMemoryStore, LocalEnvironment, LocalOrchestrator};
 use layer0::*;
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -192,58 +190,6 @@ async fn local_environment_is_usable_as_dyn_environment() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// LoggingHook
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[tokio::test]
-async fn logging_hook_registers_all_points() {
-    let hook = LoggingHook::new();
-    let points = hook.points();
-    assert!(points.contains(&HookPoint::PreInference));
-    assert!(points.contains(&HookPoint::PostInference));
-    assert!(points.contains(&HookPoint::PreSubDispatch));
-    assert!(points.contains(&HookPoint::PostSubDispatch));
-    assert!(points.contains(&HookPoint::ExitCheck));
-}
-
-#[tokio::test]
-async fn logging_hook_returns_continue_at_every_point() {
-    let hook = LoggingHook::new();
-    let all_points = [
-        HookPoint::PreInference,
-        HookPoint::PostInference,
-        HookPoint::PreSubDispatch,
-        HookPoint::PostSubDispatch,
-        HookPoint::ExitCheck,
-    ];
-    for point in all_points {
-        let ctx = HookContext::new(point);
-        let action = hook.on_event(&ctx).await.unwrap();
-        assert!(matches!(action, HookAction::Continue));
-    }
-}
-
-#[tokio::test]
-async fn logging_hook_records_events() {
-    let hook = LoggingHook::new();
-    let mut ctx = HookContext::new(HookPoint::PreInference);
-    ctx.tokens_used = 100;
-    ctx.cost = Decimal::new(5, 3);
-    ctx.turns_completed = 1;
-    ctx.elapsed = DurationMs::from_secs(1);
-    hook.on_event(&ctx).await.unwrap();
-    let events = hook.events();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].point, HookPoint::PreInference);
-}
-
-#[tokio::test]
-async fn logging_hook_is_usable_as_dyn_hook() {
-    let hook: Box<dyn Hook> = Box::new(LoggingHook::new());
-    assert_eq!(hook.points().len(), 5);
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // LocalOrchestrator
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -335,8 +281,8 @@ async fn orchestrator_query_returns_null() {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Full integration: orchestrator dispatches to two echo agents,
-/// results are written to in-memory state, hooks log each step,
-/// environment wraps the execution. All through trait interfaces.
+/// results are written to in-memory state, environment wraps the execution.
+/// All through trait interfaces.
 #[tokio::test]
 async fn integration_compose_all_implementations() {
     // 1. Set up orchestrator with two agents
@@ -350,9 +296,6 @@ async fn integration_compose_all_implementations() {
 
     // 3. Set up environment
     let env = LocalEnvironment::new(Arc::new(EchoOperator));
-
-    // 4. Set up hook
-    let hook = LoggingHook::new();
 
     // 5. Dispatch two agents through the orchestrator
     let tasks = vec![
@@ -388,30 +331,6 @@ async fn integration_compose_all_implementations() {
         s.read(&scope, "result/agent-a").await.unwrap(),
         Some(json!({"message": "task for A"}))
     );
-
-    // 7. Fire hooks to simulate turn lifecycle observation
-    let mut ctx = HookContext::new(HookPoint::PostInference);
-    ctx.model_output = Some(Content::text("task for A"));
-    ctx.tokens_used = 100;
-    ctx.cost = Decimal::new(5, 3);
-    ctx.turns_completed = 1;
-    ctx.elapsed = DurationMs::from_millis(500);
-    let action = hook.on_event(&ctx).await.unwrap();
-    assert!(matches!(action, HookAction::Continue));
-
-    let mut ctx2 = HookContext::new(HookPoint::PostInference);
-    ctx2.model_output = Some(Content::text("task for B"));
-    ctx2.tokens_used = 200;
-    ctx2.cost = Decimal::new(10, 3);
-    ctx2.turns_completed = 2;
-    ctx2.elapsed = DurationMs::from_secs(1);
-    hook.on_event(&ctx2).await.unwrap();
-
-    // Verify hooks recorded both events
-    let events = hook.events();
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0].tokens_used, 100);
-    assert_eq!(events[1].tokens_used, 200);
 
     // 8. Run a turn through the environment (passthrough)
     let env_output = env

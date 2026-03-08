@@ -11,8 +11,6 @@ pub use layer0;
 pub use neuron_context;
 #[cfg(feature = "env-local")]
 pub use neuron_env_local;
-#[cfg(feature = "hooks")]
-pub use neuron_hooks;
 #[cfg(feature = "mcp")]
 pub use neuron_mcp;
 #[cfg(feature = "op-react")]
@@ -42,13 +40,15 @@ pub use neuron_turn;
 pub mod prelude {
     #[cfg(feature = "core")]
     pub use layer0::{
-        AgentId, Content, ContentBlock, Effect, Environment, ExitReason, Hook, HookAction,
-        HookContext, HookPoint, Operator, OperatorConfig, OperatorInput, OperatorOutput, Scope,
-        SessionId, StateReader, StateStore, WorkflowId,
+        AgentId, Content, ContentBlock, Effect, Environment, ExitReason, Operator, OperatorConfig,
+        OperatorInput, OperatorOutput, Scope, SessionId, StateReader, StateStore, WorkflowId,
     };
 
-    #[cfg(feature = "hooks")]
-    pub use neuron_hooks::HookRegistry;
+    #[cfg(feature = "core")]
+    pub use layer0::middleware::{
+        DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
+        StoreMiddleware, StoreStack, StoreWriteNext,
+    };
 
     #[cfg(feature = "core")]
     pub use neuron_tool::{ToolDyn, ToolError, ToolRegistry};

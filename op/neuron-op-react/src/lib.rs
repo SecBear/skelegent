@@ -546,7 +546,9 @@ impl<P: Provider> ReactOperator<P> {
         if let Some(ref interceptor) = self.interceptor {
             let state = self.build_loop_state(ti, to, cost, turns, elapsed);
             let msg_strs: Vec<String> = msgs_to_inject.iter().map(|m| format!("{:?}", m)).collect();
-            if let ReactAction::Halt { .. } = interceptor.pre_steering_inject(&state, &msg_strs).await {
+            if let ReactAction::Halt { .. } =
+                interceptor.pre_steering_inject(&state, &msg_strs).await
+            {
                 return (vec![], ctx_cmds);
             }
         }
@@ -715,7 +717,9 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                     DurationMs::from(start.elapsed()),
                 );
                 let resp_content = parts_to_content(&response.content);
-                if let ReactAction::Halt { reason } = interceptor.post_inference(&state, &resp_content).await {
+                if let ReactAction::Halt { reason } =
+                    interceptor.post_inference(&state, &resp_content).await
+                {
                     return Ok(Self::make_output(
                         parts_to_content(&response.content),
                         ExitReason::ObserverHalt { reason },
@@ -839,13 +843,15 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         false,
                                     ));
                                 }
-                                if !skipped_names.is_empty() && let Some(ref interceptor) = self.interceptor {
+                                if !skipped_names.is_empty()
+                                    && let Some(ref interceptor) = self.interceptor
+                                {
                                     let state = self.build_loop_state(
-                                    total_tokens_in,
-                                    total_tokens_out,
-                                    total_cost,
-                                    turns_used,
-                                    DurationMs::from(start.elapsed()),
+                                        total_tokens_in,
+                                        total_tokens_out,
+                                        total_cost,
+                                        turns_used,
+                                        DurationMs::from(start.elapsed()),
                                     );
                                     interceptor.post_steering_skip(&state, &skipped_names).await;
                                 }
@@ -890,15 +896,19 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                             false,
                                         ));
                                     }
-                                    if !skipped_names.is_empty() && let Some(ref interceptor) = self.interceptor {
+                                    if !skipped_names.is_empty()
+                                        && let Some(ref interceptor) = self.interceptor
+                                    {
                                         let state = self.build_loop_state(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        DurationMs::from(start.elapsed()),
+                                            total_tokens_in,
+                                            total_tokens_out,
+                                            total_cost,
+                                            turns_used,
+                                            DurationMs::from(start.elapsed()),
                                         );
-                                        interceptor.post_steering_skip(&state, &skipped_names).await;
+                                        interceptor
+                                            .post_steering_skip(&state, &skipped_names)
+                                            .await;
                                     }
                                     _steered = true;
                                 }
@@ -945,7 +955,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         turns_used,
                                         DurationMs::from(start.elapsed()),
                                     );
-                                    match interceptor.pre_sub_dispatch(&state, &name, &dispatch_input).await {
+                                    match interceptor
+                                        .pre_sub_dispatch(&state, &name, &dispatch_input)
+                                        .await
+                                    {
                                         SubDispatchAction::Halt { reason } => {
                                             return Ok(Self::make_output(
                                                 parts_to_content(&last_content),
@@ -1028,7 +1041,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         turns_used,
                                         DurationMs::from(start.elapsed()),
                                     );
-                                    match interceptor.post_sub_dispatch(&state, &name, &result_content).await {
+                                    match interceptor
+                                        .post_sub_dispatch(&state, &name, &result_content)
+                                        .await
+                                    {
                                         SubDispatchResult::Halt { reason } => {
                                             return Ok(Self::make_output(
                                                 parts_to_content(&last_content),
@@ -1111,15 +1127,19 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                                 false,
                                             ));
                                         }
-                                        if !skipped_names.is_empty() && let Some(ref interceptor) = self.interceptor {
+                                        if !skipped_names.is_empty()
+                                            && let Some(ref interceptor) = self.interceptor
+                                        {
                                             let state = self.build_loop_state(
-                                            total_tokens_in,
-                                            total_tokens_out,
-                                            total_cost,
-                                            turns_used,
-                                            DurationMs::from(start.elapsed()),
+                                                total_tokens_in,
+                                                total_tokens_out,
+                                                total_cost,
+                                                turns_used,
+                                                DurationMs::from(start.elapsed()),
                                             );
-                                            interceptor.post_steering_skip(&state, &skipped_names).await;
+                                            interceptor
+                                                .post_steering_skip(&state, &skipped_names)
+                                                .await;
                                         }
                                         break 'batches;
                                     }
@@ -1225,7 +1245,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 turns_used,
                                 DurationMs::from(start.elapsed()),
                             );
-                            match interceptor.pre_sub_dispatch(&state, &name, &dispatch_input).await {
+                            match interceptor
+                                .pre_sub_dispatch(&state, &name, &dispatch_input)
+                                .await
+                            {
                                 SubDispatchAction::Halt { reason } => {
                                     return Ok(Self::make_output(
                                         parts_to_content(&last_content),
@@ -1299,7 +1322,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 turns_used,
                                 DurationMs::from(start.elapsed()),
                             );
-                            match interceptor.post_sub_dispatch(&state, &name, &result_content).await {
+                            match interceptor
+                                .post_sub_dispatch(&state, &name, &result_content)
+                                .await
+                            {
                                 SubDispatchResult::Halt { reason } => {
                                     return Ok(Self::make_output(
                                         parts_to_content(&last_content),
@@ -1566,7 +1592,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                         turns_used,
                         DurationMs::from(start.elapsed()),
                     );
-                    matches!(interceptor.pre_compaction(&state, messages.len()).await, ReactAction::Continue)
+                    matches!(
+                        interceptor.pre_compaction(&state, messages.len()).await,
+                        ReactAction::Continue
+                    )
                 } else {
                     true
                 };
@@ -1614,7 +1643,13 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     turns_used,
                                     DurationMs::from(start.elapsed()),
                                 );
-                                interceptor.post_compaction(&state, before_count as usize, after_count as usize).await;
+                                interceptor
+                                    .post_compaction(
+                                        &state,
+                                        before_count as usize,
+                                        after_count as usize,
+                                    )
+                                    .await;
                             }
                         }
                         Err(e) => {

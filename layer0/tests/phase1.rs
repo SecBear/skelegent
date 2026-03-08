@@ -49,11 +49,6 @@ fn arc_environment_is_send_sync() {
 }
 
 #[test]
-fn arc_hook_is_send_sync() {
-    _assert_send_sync::<std::sync::Arc<dyn Hook>>();
-}
-
-#[test]
 fn orchestrator_is_object_safe_send_sync() {
     _assert_send_sync::<Box<dyn Orchestrator>>();
 }
@@ -71,11 +66,6 @@ fn state_reader_is_object_safe_send_sync() {
 #[test]
 fn environment_is_object_safe_send_sync() {
     _assert_send_sync::<Box<dyn Environment>>();
-}
-
-#[test]
-fn hook_is_object_safe_send_sync() {
-    _assert_send_sync::<Box<dyn Hook>>();
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -498,26 +488,6 @@ fn environment_spec_round_trip() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Hook types round-trips
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn hook_point_round_trip() {
-    let points = vec![
-        HookPoint::PreInference,
-        HookPoint::PostInference,
-        HookPoint::PreSubDispatch,
-        HookPoint::PostSubDispatch,
-        HookPoint::ExitCheck,
-    ];
-    for p in points {
-        let json = serde_json::to_string(&p).unwrap();
-        let back: HookPoint = serde_json::from_str(&json).unwrap();
-        assert_eq!(p, back);
-    }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Lifecycle event round-trips
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -842,12 +812,6 @@ fn env_error_display() {
     assert_eq!(e.to_string(), "provisioning failed: docker not available");
 }
 
-#[test]
-fn hook_error_display() {
-    let e = HookError::Failed("timeout".into());
-    assert_eq!(e.to_string(), "hook failed: timeout");
-}
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Error Display — remaining variants
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -928,12 +892,6 @@ fn env_error_display_remaining_variants() {
     );
     let boxed: Box<dyn std::error::Error + Send + Sync> = "env inner".into();
     assert_eq!(EnvError::Other(boxed).to_string(), "env inner");
-}
-
-#[test]
-fn hook_error_display_other_variant() {
-    let boxed: Box<dyn std::error::Error + Send + Sync> = "hook inner".into();
-    assert_eq!(HookError::Other(boxed).to_string(), "hook inner");
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1291,35 +1249,6 @@ fn compaction_quality_round_trip() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// HookAction serde round-trips
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn hook_action_variants_round_trip() {
-    let actions = vec![
-        HookAction::Continue,
-        HookAction::Halt {
-            reason: "policy violation".into(),
-        },
-        HookAction::SkipDispatch {
-            reason: "not allowed".into(),
-        },
-        HookAction::ModifyDispatchInput {
-            new_input: json!({"key": "modified"}),
-        },
-        HookAction::ModifyDispatchOutput {
-            new_output: json!({"redacted": true}),
-        },
-    ];
-    for action in actions {
-        let json = serde_json::to_string(&action).unwrap();
-        let back: HookAction = serde_json::from_str(&json).unwrap();
-        let json2 = serde_json::to_string(&back).unwrap();
-        assert_eq!(json, json2);
-    }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // BudgetEvent/BudgetDecision remaining variants
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1633,18 +1562,6 @@ fn credential_ref_with_source_round_trip() {
     let json = serde_json::to_string(&cred).unwrap();
     let back: CredentialRef = serde_json::from_str(&json).unwrap();
     assert_eq!(back.name, "anthropic-api-key");
-}
-
-#[test]
-fn hook_action_modify_dispatch_output_round_trip() {
-    use layer0::hook::HookAction;
-    let action = HookAction::ModifyDispatchOutput {
-        new_output: json!({"redacted": true}),
-    };
-    let json = serde_json::to_string(&action).unwrap();
-    let back: HookAction = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

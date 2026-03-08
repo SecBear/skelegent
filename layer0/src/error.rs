@@ -121,17 +121,3 @@ pub enum EnvError {
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
-
-/// Hook errors. These are logged but do NOT halt the operator
-/// (use HookAction::Halt to halt).
-#[non_exhaustive]
-#[derive(Debug, Error)]
-pub enum HookError {
-    /// The hook execution failed.
-    #[error("hook failed: {0}")]
-    Failed(String),
-
-    /// Catch-all.
-    #[error("{0}")]
-    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
-}

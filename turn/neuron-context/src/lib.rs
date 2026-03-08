@@ -351,7 +351,9 @@ mod tests {
         let compacted = compactor(&messages);
 
         assert!(
-            compacted.iter().any(|m| m.text_content() == "pinned constraint"),
+            compacted
+                .iter()
+                .any(|m| m.text_content() == "pinned constraint"),
             "pinned message must survive compaction"
         );
     }

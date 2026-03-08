@@ -118,7 +118,10 @@ pub struct LocalEffectInterpreter<S: StateStore + ?Sized> {
 impl<S: StateStore + ?Sized> LocalEffectInterpreter<S> {
     /// Create a new local effect interpreter.
     pub fn new(state: Arc<S>) -> Self {
-        Self { state, middleware: None }
+        Self {
+            state,
+            middleware: None,
+        }
     }
 
     /// Attach a store middleware stack. Runs before every `WriteMemory` effect.
@@ -187,13 +190,21 @@ impl<S: StateStore + ?Sized + 'static> EffectInterpreter for LocalEffectInterpre
                         state: self.state.clone(),
                         committed: committed.clone(),
                     };
-                    stack.write_with(scope, key, value.clone(), Some(&opts), &terminal).await?;
+                    stack
+                        .write_with(scope, key, value.clone(), Some(&opts), &terminal)
+                        .await?;
                     if committed.load(Ordering::Relaxed) {
-                        trace.events.push(ExecutionEvent::MemoryWritten { key: key.clone() });
+                        trace
+                            .events
+                            .push(ExecutionEvent::MemoryWritten { key: key.clone() });
                     }
                 } else {
-                    self.state.write_hinted(scope, key, value.clone(), &opts).await?;
-                    trace.events.push(ExecutionEvent::MemoryWritten { key: key.clone() });
+                    self.state
+                        .write_hinted(scope, key, value.clone(), &opts)
+                        .await?;
+                    trace
+                        .events
+                        .push(ExecutionEvent::MemoryWritten { key: key.clone() });
                 }
             }
             Effect::DeleteMemory { scope, key } => {

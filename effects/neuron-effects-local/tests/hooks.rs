@@ -124,7 +124,8 @@ impl StoreMiddleware for ModifyTransformer {
         options: Option<&StoreOptions>,
         next: &dyn StoreWriteNext,
     ) -> Result<(), StateError> {
-        next.write(scope, key, self.new_value.clone(), options).await
+        next.write(scope, key, self.new_value.clone(), options)
+            .await
     }
 }
 
@@ -187,9 +188,7 @@ async fn observer_hook_sees_key_and_value() {
     let orch = Arc::new(NoOpOrch);
 
     let observer = RecordingObserver::new();
-    let stack = StoreStack::builder()
-        .observe(observer.clone())
-        .build();
+    let stack = StoreStack::builder().observe(observer.clone()).build();
     let exec = LocalEffectExecutor::new(state.clone(), orch).with_store_middleware(stack);
 
     exec.execute(&[Effect::WriteMemory {

@@ -100,11 +100,7 @@ pub trait ReactInterceptor: Send + Sync {
     /// Called before steering messages are injected into the context.
     ///
     /// Return `Halt` to block injection (messages are discarded).
-    async fn pre_steering_inject(
-        &self,
-        _state: &LoopState,
-        _messages: &[String],
-    ) -> ReactAction {
+    async fn pre_steering_inject(&self, _state: &LoopState, _messages: &[String]) -> ReactAction {
         ReactAction::Continue
     }
 

@@ -13,8 +13,8 @@
 //! - [`ContextSnapshot`] — read-only introspection view
 //! - [`ContextError`] — mutation errors (rejected or out-of-bounds)
 
-use crate::id::AgentId;
 use crate::content::Content;
+use crate::id::AgentId;
 use crate::lifecycle::CompactionPolicy;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -1027,7 +1027,10 @@ mod tests {
         assert!(matches!(msg.role, Role::User));
 
         let tool_msg = Message {
-            role: Role::Tool { name: "shell".into(), call_id: "tc_1".into() },
+            role: Role::Tool {
+                name: "shell".into(),
+                call_id: "tc_1".into(),
+            },
             content: Content::text("output"),
             meta: MessageMeta::default(),
         };
@@ -1075,8 +1078,10 @@ mod tests {
         use crate::content::Content;
 
         let mut ctx = Context::new(AgentId::from("agent-1"));
-        ctx.push(Message::new(Role::User, Content::text("hello"))).unwrap();
-        ctx.push(Message::new(Role::Assistant, Content::text("hi"))).unwrap();
+        ctx.push(Message::new(Role::User, Content::text("hello")))
+            .unwrap();
+        ctx.push(Message::new(Role::Assistant, Content::text("hi")))
+            .unwrap();
         assert_eq!(ctx.len(), 2);
         assert!(matches!(ctx.messages()[0].role, Role::User));
         assert!(matches!(ctx.messages()[1].role, Role::Assistant));
@@ -1088,7 +1093,11 @@ mod tests {
 
         let mut ctx = Context::new(AgentId::from("a"));
         for i in 0..10 {
-            ctx.push(Message::new(Role::User, Content::text(format!("msg {}", i)))).unwrap();
+            ctx.push(Message::new(
+                Role::User,
+                Content::text(format!("msg {}", i)),
+            ))
+            .unwrap();
         }
         let removed = ctx.compact_truncate(3);
         assert_eq!(removed.len(), 7);
@@ -1100,9 +1109,17 @@ mod tests {
         use crate::content::Content;
 
         let mut ctx = Context::new(AgentId::from("a"));
-        ctx.push(Message::pinned(Role::System, Content::text("you are helpful"))).unwrap();
+        ctx.push(Message::pinned(
+            Role::System,
+            Content::text("you are helpful"),
+        ))
+        .unwrap();
         for i in 0..5 {
-            ctx.push(Message::new(Role::User, Content::text(format!("msg {}", i)))).unwrap();
+            ctx.push(Message::new(
+                Role::User,
+                Content::text(format!("msg {}", i)),
+            ))
+            .unwrap();
         }
         let removed = ctx.compact_by_policy();
         assert_eq!(ctx.len(), 1);
@@ -1116,10 +1133,15 @@ mod tests {
 
         let mut ctx = Context::new(AgentId::from("a"));
         for i in 0..6 {
-            ctx.push(Message::new(Role::User, Content::text(format!("msg {}", i)))).unwrap();
+            ctx.push(Message::new(
+                Role::User,
+                Content::text(format!("msg {}", i)),
+            ))
+            .unwrap();
         }
         let removed = ctx.compact_with(|msgs| {
-            msgs.iter().enumerate()
+            msgs.iter()
+                .enumerate()
                 .filter(|(i, _)| i % 2 == 0)
                 .map(|(_, m)| m.clone())
                 .collect()
@@ -1134,8 +1156,10 @@ mod tests {
         use crate::content::Content;
 
         let mut ctx = Context::new(AgentId::from("my-agent"));
-        ctx.push(Message::pinned(Role::System, Content::text("system"))).unwrap();
-        ctx.push(Message::new(Role::User, Content::text("hello"))).unwrap();
+        ctx.push(Message::pinned(Role::System, Content::text("system")))
+            .unwrap();
+        ctx.push(Message::new(Role::User, Content::text("hello")))
+            .unwrap();
 
         let snap = ctx.snapshot();
         assert_eq!(snap.message_count, 2);
@@ -1150,8 +1174,16 @@ mod tests {
 
         let mut ctx = Context::new(AgentId::from("a"));
         // 20 chars / 4 = 5, + 4 overhead = 9 per message
-        ctx.push(Message::new(Role::User, Content::text("12345678901234567890"))).unwrap();
-        ctx.push(Message::new(Role::User, Content::text("12345678901234567890"))).unwrap();
+        ctx.push(Message::new(
+            Role::User,
+            Content::text("12345678901234567890"),
+        ))
+        .unwrap();
+        ctx.push(Message::new(
+            Role::User,
+            Content::text("12345678901234567890"),
+        ))
+        .unwrap();
         assert_eq!(ctx.estimated_tokens(), 18);
     }
 }

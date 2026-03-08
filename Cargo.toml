@@ -15,7 +15,6 @@ members = [
   "env/neuron-env-local",
   "orch/neuron-orch-local",
   "orch/neuron-orch-kit",
-  "hooks/neuron-hooks",
   "turn/neuron-tool",
   "turn/neuron-turn",
   "op/neuron-op-react",
@@ -51,7 +50,6 @@ neuron-turn = { path = "turn/neuron-turn", version = "0.4.0" }
 neuron-op-react = { path = "op/neuron-op-react", version = "0.4.0" }
 neuron-op-single-shot = { path = "op/neuron-op-single-shot", version = "0.4.0" }
 neuron-context = { path = "turn/neuron-context", version = "0.4.0" }
-neuron-hooks = { path = "hooks/neuron-hooks", version = "0.4.0" }
 neuron-tool = { path = "turn/neuron-tool", version = "0.4.0" }
 neuron-state-memory = { path = "state/neuron-state-memory", version = "0.4.0" }
 neuron-state-fs = { path = "state/neuron-state-fs", version = "0.4.0" }
