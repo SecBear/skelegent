@@ -272,7 +272,7 @@ Middleware is composed into stacks:
 - **`StoreStack`** -- wraps state store access (redaction, audit logging)
 - **`ExecStack`** -- wraps operator execution (security guardrails, telemetry)
 
-The `ReactInterceptor` trait (in `neuron-op-react::intercept`) provides typed interception within the ReAct loop specifically, for use cases like tool-call filtering that are operator-internal rather than cross-cutting.
+The Rule system provides typed interception within the context engine specifically, for use cases like tool-call filtering that are operator-internal rather than cross-cutting. Rules fire via Trigger enum: Before (pre-inference, pre-tool), After (post-inference, post-tool), or When (exit checks, steering).
 
 ## Interface 6: Lifecycle Events
 

@@ -17,14 +17,14 @@ use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, Trig
 use layer0::orchestrator::Orchestrator;
 use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
-use neuron_op_react::{ReactConfig, ReactOperator};
+use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
 use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use neuron_orch_local::LocalOrch;
 use neuron_state_fs::FsStore;
 use neuron_state_memory::MemoryStore;
 use neuron_tool::ToolRegistry;
 use neuron_turn::infer::InferResponse;
-use neuron_turn::test_utils::{make_text_response, TestProvider};
+use neuron_turn::test_utils::{TestProvider, make_text_response};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
 use std::sync::Arc;
@@ -34,7 +34,13 @@ use std::sync::Arc;
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Build an InferResponse with custom token counts, model, and cost.
-fn make_response(text: &str, input_tokens: u64, output_tokens: u64, model: &str, cost: Decimal) -> InferResponse {
+fn make_response(
+    text: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    model: &str,
+    cost: Decimal,
+) -> InferResponse {
     InferResponse {
         content: Content::text(text),
         tool_calls: vec![],
@@ -52,30 +58,49 @@ fn make_response(text: &str, input_tokens: u64, output_tokens: u64, model: &str,
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Null state reader for ReactOperator
+// ContextEngineOperator: A wrapper for testing react_loop with Operator trait
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-struct NullStateReader;
+/// Wraps react_loop in an Operator implementation for test composability.
+struct ContextEngineOperator<P: neuron_turn::provider::Provider> {
+    provider: P,
+    config: ReactLoopConfig,
+    tools: ToolRegistry,
+    tool_ctx: neuron_tool::ToolCallContext,
+}
+
+impl<P: neuron_turn::provider::Provider> ContextEngineOperator<P> {
+    fn new(provider: P, tools: ToolRegistry, config: ReactLoopConfig) -> Self {
+        Self {
+            provider,
+            config,
+            tools,
+            tool_ctx: neuron_tool::ToolCallContext::new(layer0::id::AgentId::from("test")),
+        }
+    }
+}
 
 #[async_trait::async_trait]
-impl layer0::StateReader for NullStateReader {
-    async fn read(
-        &self,
-        _scope: &Scope,
-        _key: &str,
-    ) -> Result<Option<serde_json::Value>, layer0::StateError> {
-        Ok(None)
-    }
-    async fn list(&self, _scope: &Scope, _prefix: &str) -> Result<Vec<String>, layer0::StateError> {
-        Ok(vec![])
-    }
-    async fn search(
-        &self,
-        _scope: &Scope,
-        _query: &str,
-        _limit: usize,
-    ) -> Result<Vec<layer0::state::SearchResult>, layer0::StateError> {
-        Ok(vec![])
+impl<P: neuron_turn::provider::Provider> Operator for ContextEngineOperator<P> {
+    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, layer0::OperatorError> {
+        let mut ctx = Context::new();
+        // Inject the user input as the first message
+        ctx.inject_message(layer0::context::Message::new(
+            layer0::context::Role::User,
+            input.message,
+        ))
+        .await
+        .map_err(|e| layer0::OperatorError::NonRetryable(e.to_string()))?;
+
+        react_loop(
+            &mut ctx,
+            &self.provider,
+            &self.tools,
+            &self.tool_ctx,
+            &self.config,
+        )
+        .await
+        .map_err(|e| layer0::OperatorError::NonRetryable(e.to_string()))
     }
 }
 
@@ -87,61 +112,54 @@ fn simple_input(text: &str) -> OperatorInput {
     OperatorInput::new(Content::text(text), TriggerType::User)
 }
 
-fn react_config() -> ReactConfig {
-    ReactConfig {
+fn react_config() -> ReactLoopConfig {
+    ReactLoopConfig {
         system_prompt: "You are a helpful assistant.".into(),
-        default_model: "mock-model".into(),
-        default_max_tokens: 256,
-        default_max_turns: 5,
-        ..ReactConfig::default()
+        model: Some("mock-model".into()),
+        max_tokens: Some(256),
+        temperature: None,
     }
 }
 
-fn make_react_operator(provider: TestProvider) -> ReactOperator<TestProvider> {
-    ReactOperator::new(
-        provider,
-        ToolRegistry::new(),
-        Arc::new(NullStateReader),
-        react_config(),
-    )
+fn make_react_operator(provider: TestProvider) -> ContextEngineOperator<TestProvider> {
+    ContextEngineOperator::new(provider, ToolRegistry::new(), react_config())
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Pattern 1: Provider Swap
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-
 #[tokio::test]
 async fn provider_swap_same_config_different_backend() {
-    // The SAME ReactConfig, ToolRegistry, and context strategy.
+    // The SAME ReactLoopConfig, ToolRegistry, and context strategy.
     // Only the provider instance differs.
     let config = react_config();
     let tools = ToolRegistry::new();
 
     // Provider A: returns "Hello from A" with 25 input tokens
-    let provider_a = TestProvider::with_responses(vec![
-        make_response("Hello from provider A", 25, 10, "mock-model", Decimal::new(1, 4)),
-    ]);
-    let op_a: ReactOperator<TestProvider> = ReactOperator::new(
-        provider_a,
-        tools,
-        Arc::new(NullStateReader),
-        config,
-    );
+    let provider_a = TestProvider::with_responses(vec![make_response(
+        "Hello from provider A",
+        25,
+        10,
+        "mock-model",
+        Decimal::new(1, 4),
+    )]);
+    let op_a: ContextEngineOperator<TestProvider> =
+        ContextEngineOperator::new(provider_a, tools, config);
 
     let config_b = react_config();
     let tools_b = ToolRegistry::new();
 
     // Provider B: returns "Hello from B" with 30 input tokens
-    let provider_b = TestProvider::with_responses(vec![
-        make_response("Hello from provider B", 30, 15, "mock-model-b", Decimal::new(2, 4)),
-    ]);
-    let op_b: ReactOperator<TestProvider> = ReactOperator::new(
-        provider_b,
-        tools_b,
-        Arc::new(NullStateReader),
-        config_b,
-    );
+    let provider_b = TestProvider::with_responses(vec![make_response(
+        "Hello from provider B",
+        30,
+        15,
+        "mock-model-b",
+        Decimal::new(2, 4),
+    )]);
+    let op_b: ContextEngineOperator<TestProvider> =
+        ContextEngineOperator::new(provider_b, tools_b, config_b);
 
     // Execute the same input through both
     let input_a = simple_input("Greet me");
@@ -162,14 +180,14 @@ async fn provider_swap_same_config_different_backend() {
     assert_eq!(output_a.metadata.tokens_in, 25);
     assert_eq!(output_b.metadata.tokens_in, 30);
 
-    // Both implement the Operator trait and can be used as dyn Operator
-    let dyn_a: Arc<dyn Operator> = Arc::new(make_react_operator(
-        TestProvider::with_responses(vec![make_text_response("dyn A")]),
-    ));
-    let dyn_b: Arc<dyn Operator> = Arc::new(ReactOperator::new(
+    // Both can be used as dyn Operator (object-safe)
+    let dyn_a: Arc<dyn Operator> =
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![
+            make_text_response("dyn A"),
+        ])));
+    let dyn_b: Arc<dyn Operator> = Arc::new(ContextEngineOperator::new(
         TestProvider::with_responses(vec![make_text_response("dyn B")]),
         ToolRegistry::new(),
-        Arc::new(NullStateReader),
         react_config(),
     ));
 
@@ -296,8 +314,10 @@ async fn state_swap_scope_isolation() {
 async fn operator_swap_react_vs_single_shot() {
     let provider_response = make_response("Hello, world!", 20, 8, "mock-model", Decimal::new(5, 5));
 
-    // Operator A: ReactOperator (multi-turn with tools, hooks, state)
-    let react_op = make_react_operator(TestProvider::with_responses(vec![provider_response.clone()]));
+    // Operator A: ContextEngineOperator (multi-turn with tools, hooks, state)
+    let react_op = make_react_operator(TestProvider::with_responses(vec![
+        provider_response.clone(),
+    ]));
 
     // Operator B: SingleShotOperator (single call, no tools)
     let single_shot_op = SingleShotOperator::new(
@@ -333,7 +353,9 @@ async fn operator_swap_react_vs_single_shot() {
 
     // Both can be used as dyn Operator (object-safe)
     let operators: Vec<Arc<dyn Operator>> = vec![
-        Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("from react")]))),
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![
+            make_text_response("from react"),
+        ]))),
         Arc::new(SingleShotOperator::new(
             TestProvider::with_responses(vec![make_text_response("from single-shot")]),
             SingleShotConfig::default(),
@@ -382,7 +404,10 @@ async fn multi_agent_dispatch_single() {
     let mut orch = LocalOrch::new();
 
     // Register agents with different capabilities
-    let summarizer: Arc<dyn Operator> = Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Summary: the user greeted us.")])));
+    let summarizer: Arc<dyn Operator> =
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![
+            make_text_response("Summary: the user greeted us."),
+        ])));
     let classifier: Arc<dyn Operator> = Arc::new(SingleShotOperator::new(
         TestProvider::with_responses(vec![make_text_response("category: greeting")]),
         SingleShotConfig::default(),
@@ -428,7 +453,9 @@ async fn multi_agent_parallel_dispatch() {
     // Register multiple agents
     orch.register(
         AgentId::new("agent_a"),
-        Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Result from A")]))),
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![
+            make_text_response("Result from A"),
+        ]))),
     );
     orch.register(
         AgentId::new("agent_b"),
@@ -469,11 +496,15 @@ async fn multi_agent_with_state_storage() {
 
     orch.register(
         AgentId::new("researcher"),
-        Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Research findings: Rust is fast and safe.")]))),
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![
+            make_text_response("Research findings: Rust is fast and safe."),
+        ]))),
     );
     orch.register(
         AgentId::new("writer"),
-        Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Draft: Rust combines speed with memory safety.")]))),
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![
+            make_text_response("Draft: Rust combines speed with memory safety."),
+        ]))),
     );
 
     // Step 1: Dispatch research task
@@ -578,13 +609,16 @@ async fn combined_all_patterns() {
     // This test combines all four patterns in a single workflow:
     // 1. Provider swap: two agents use different mock providers
     // 2. State swap: results stored in both memory and filesystem
-    // 3. Operator swap: one agent uses ReactOperator, another uses SingleShot
+    // 3. Operator swap: one agent uses ContextEngineOperator, another uses SingleShot
     // 4. Orchestration: LocalOrch dispatches to both agents
 
     let mut orch = LocalOrch::new();
 
-    // Agent 1: ReactOperator with TestProvider (provider A)
-    let agent_react: Arc<dyn Operator> = Arc::new(make_react_operator(TestProvider::with_responses(vec![make_text_response("Analysis: topic is interesting.")])));
+    // Agent 1: ContextEngineOperator with TestProvider (provider A)
+    let agent_react: Arc<dyn Operator> =
+        Arc::new(make_react_operator(TestProvider::with_responses(vec![
+            make_text_response("Analysis: topic is interesting."),
+        ])));
 
     // Agent 2: SingleShotOperator with TestProvider (provider B)
     let agent_ss: Arc<dyn Operator> = Arc::new(SingleShotOperator::new(

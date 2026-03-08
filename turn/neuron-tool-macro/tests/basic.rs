@@ -3,7 +3,7 @@
 
 use neuron_tool::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError};
 use neuron_tool_macro::neuron_tool;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ── Test 1: basic required-parameter tool ─────────────────────────────────────
 
@@ -27,7 +27,9 @@ async fn test_basic_tool_schema() {
     assert_eq!(schema["type"], "object");
     assert_eq!(schema["properties"]["location"]["type"], "string");
 
-    let required = schema["required"].as_array().expect("required must be an array");
+    let required = schema["required"]
+        .as_array()
+        .expect("required must be an array");
     assert_eq!(required.len(), 1);
     assert!(required.iter().any(|v| v == "location"));
 }
@@ -56,7 +58,9 @@ async fn test_optional_param_schema() {
     assert_eq!(schema["properties"]["query"]["type"], "string");
     assert_eq!(schema["properties"]["limit"]["type"], "integer");
 
-    let required = schema["required"].as_array().expect("required must be an array");
+    let required = schema["required"]
+        .as_array()
+        .expect("required must be an array");
     // Only `query` is required; `limit` is optional
     assert_eq!(required.len(), 1);
     assert!(required.iter().any(|v| v == "query"));
@@ -101,7 +105,9 @@ async fn test_ctx_param_excluded_from_schema() {
     assert!(schema["properties"]["ctx"].is_null());
     // `label` must appear
     assert_eq!(schema["properties"]["label"]["type"], "string");
-    let required = schema["required"].as_array().expect("required must be an array");
+    let required = schema["required"]
+        .as_array()
+        .expect("required must be an array");
     assert!(required.iter().any(|v| v == "label"));
 }
 
@@ -117,7 +123,11 @@ async fn test_ctx_param_passed_through_to_function() {
 
 // ── Test 4: concurrent flag ───────────────────────────────────────────────────
 
-#[neuron_tool(name = "parallel_op", description = "Safe to run concurrently", concurrent)]
+#[neuron_tool(
+    name = "parallel_op",
+    description = "Safe to run concurrently",
+    concurrent
+)]
 async fn parallel_op(value: i64) -> Result<Value, ToolError> {
     Ok(json!({"value": value}))
 }
@@ -140,9 +150,13 @@ async fn test_zero_param_schema_is_empty_object() {
     let tool = PingTool::new();
     let schema = tool.input_schema();
     assert_eq!(schema["type"], "object");
-    let props = schema["properties"].as_object().expect("properties must be an object");
+    let props = schema["properties"]
+        .as_object()
+        .expect("properties must be an object");
     assert!(props.is_empty());
-    let required = schema["required"].as_array().expect("required must be an array");
+    let required = schema["required"]
+        .as_array()
+        .expect("required must be an array");
     assert!(required.is_empty());
 }
 

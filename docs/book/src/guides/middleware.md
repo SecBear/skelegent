@@ -3,7 +3,7 @@
 neuron uses two complementary interception mechanisms:
 
 - **Per-boundary middleware** (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`) — wraps protocol-level operations using the continuation pattern. Defined in `layer0::middleware`.
-- **Operator-local interception** (`ReactInterceptor`) — typed per-hook-point callbacks inside the ReAct loop. Defined in `neuron-op-react::intercept`.
+- **Operator-local interception** (Rule system) — typed per-trigger rules inside the context engine. Rules fire via Trigger enum: Before (pre-inference, pre-tool), After (post-inference, post-tool), or When (exit checks). Defined in `neuron-context-engine::rules`.
 
 Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware`) lives in the `neuron-hook-security` crate.
 
@@ -151,92 +151,90 @@ impl DispatchMiddleware for DenyToolMiddleware {
 }
 ```
 
-## ReactInterceptor (operator-local interception)
+## Rule System (operator-local interception)
 
-For interception inside the ReAct loop (before/after inference, before/after tool calls, exit checks), use the `ReactInterceptor` trait. Every method has a default no-op implementation — override only what you need.
+For interception inside the context engine (before/after inference, before/after tool calls, exit checks), use the Rule system. Rules fire via Trigger enum with three phases: Before (pre-inference, pre-tool), After (post-inference, post-tool), or When (exit conditions). Each rule has a default no-op implementation — override only what you need.
 
 ```rust
 #[async_trait]
-pub trait ReactInterceptor: Send + Sync {
-    async fn pre_inference(&self, state: &LoopState) -> ReactAction { ... }
-    async fn post_inference(&self, state: &LoopState, response: &Content) -> ReactAction { ... }
-    async fn pre_sub_dispatch(&self, state: &LoopState, tool: &str, input: &Value) -> SubDispatchAction { ... }
-    async fn post_sub_dispatch(&self, state: &LoopState, tool: &str, result: &str) -> SubDispatchResult { ... }
-    async fn exit_check(&self, state: &LoopState) -> ReactAction { ... }
-    async fn pre_steering_inject(&self, state: &LoopState, messages: &[String]) -> ReactAction { ... }
-    async fn post_steering_skip(&self, state: &LoopState, skipped: &[String]) { }
-    async fn pre_compaction(&self, state: &LoopState) -> ReactAction { ... }
-    async fn post_compaction(&self, state: &LoopState) { }
+pub trait Rule: Send + Sync {
+    async fn before_inference(&self, state: &LoopState) -> RuleAction { ... }
+    async fn after_inference(&self, state: &LoopState, response: &Content) -> RuleAction { ... }
+    async fn before_tool_call(&self, state: &LoopState, tool: &str, input: &Value) -> RuleAction { ... }
+    async fn after_tool_call(&self, state: &LoopState, tool: &str, result: &str) -> RuleAction { ... }
+    async fn when_exit_check(&self, state: &LoopState) -> RuleAction { ... }
+    async fn before_steering_inject(&self, state: &LoopState, messages: &[String]) -> RuleAction { ... }
+    async fn when_steering_skip(&self, state: &LoopState, skipped: &[String]) { }
+    async fn before_compaction(&self, state: &LoopState) -> RuleAction { ... }
+    async fn after_compaction(&self, state: &LoopState) { }
 }
 ```
 
 ### Return types
 
-- **`ReactAction`** — `Continue` or `Halt { reason }`. Returned by `pre_inference`, `post_inference`, `exit_check`, `pre_steering_inject`, `pre_compaction`.
-- **`SubDispatchAction`** — `Continue`, `Halt { reason }`, `Skip { reason }`, or `ModifyInput { new_input }`. Returned by `pre_sub_dispatch`.
-- **`SubDispatchResult`** — `Continue`, `Halt { reason }`, or `ModifyOutput { new_output }`. Returned by `post_sub_dispatch`.
+- **`RuleAction`** — `Continue` or `Halt { reason }`. Returned by `before_inference`, `after_inference`, `when_exit_check`, `before_steering_inject`, `before_compaction`.
 
-### Attaching an interceptor
+### Attaching a rule
 
 ```rust,no_run
 use std::sync::Arc;
-use neuron_op_react::{ReactOperator, ReactConfig};
-use neuron_op_react::intercept::ReactInterceptor;
+use neuron_context_engine::{ContextEngine, ReactLoopConfig};
+use neuron_context_engine::rules::Rule;
 
-let op = ReactOperator::new(provider, tools, context_strategy, state_reader, config)
-    .with_interceptor(Arc::new(my_interceptor));
+let op = ContextEngine::new(provider, tools, context_strategy, state_reader, config)
+    .with_rule(Arc::new(my_rule));
 ```
 
-### Example: budget enforcement interceptor
+### Example: budget enforcement rule
 
 ```rust,no_run
 use async_trait::async_trait;
-use neuron_op_react::intercept::{ReactInterceptor, ReactAction, LoopState};
+use neuron_context_engine::rules::{Rule, RuleAction, LoopState};
 use rust_decimal_macros::dec;
 
-struct BudgetInterceptor;
+struct BudgetRule;
 
 #[async_trait]
-impl ReactInterceptor for BudgetInterceptor {
-    async fn post_inference(&self, state: &LoopState, _response: &layer0::content::Content) -> ReactAction {
+impl Rule for BudgetRule {
+    async fn after_inference(&self, state: &LoopState, _response: &layer0::content::Content) -> RuleAction {
         if state.cost > dec!(1.00) {
-            ReactAction::Halt {
+            RuleAction::Halt {
                 reason: "budget exceeded $1.00".into(),
             }
         } else {
-            ReactAction::Continue
+            RuleAction::Continue
         }
     }
 }
 ```
 
-### Example: tool input sanitizer interceptor
+### Example: tool input sanitizer rule
 
 ```rust,no_run
 use async_trait::async_trait;
-use neuron_op_react::intercept::{ReactInterceptor, SubDispatchAction, LoopState};
+use neuron_context_engine::rules::{Rule, RuleAction, LoopState};
 use serde_json::Value;
 
-struct StripSecretInterceptor;
+struct StripSecretRule;
 
 #[async_trait]
-impl ReactInterceptor for StripSecretInterceptor {
-    async fn pre_sub_dispatch(
+impl Rule for StripSecretRule {
+    async fn before_tool_call(
         &self,
         _state: &LoopState,
         _tool_name: &str,
         input: &Value,
-    ) -> SubDispatchAction {
+    ) -> RuleAction {
         if let Some(obj) = input.as_object() {
             if obj.contains_key("api_key") {
                 let mut cleaned = obj.clone();
                 cleaned.remove("api_key");
-                return SubDispatchAction::ModifyInput {
+                return RuleAction::ModifyInput {
                     new_input: Value::Object(cleaned),
                 };
             }
         }
-        SubDispatchAction::Continue
+        RuleAction::Continue
     }
 }
 ```
@@ -252,10 +250,10 @@ The `neuron-hook-security` crate provides two production-ready middleware implem
 
 | Use case | Mechanism | Why |
 |----------|-----------|-----|
-| Budget enforcement | `ReactInterceptor::post_inference` | Needs access to loop state cost |
-| Tool policy (deny/skip) | `ReactInterceptor::pre_sub_dispatch` | Per-tool decision inside the loop |
-| Secret redaction | `RedactionMiddleware` or `ReactInterceptor::post_sub_dispatch` | Boundary-level or loop-level |
+| Budget enforcement | `Rule::after_inference` | Needs access to loop state cost |
+| Tool policy (deny/skip) | `Rule::before_tool_call` | Per-tool decision inside the loop |
+| Secret redaction | `RedactionMiddleware` or `Rule::after_tool_call` | Boundary-level or loop-level |
 | Telemetry / logging | `DispatchMiddleware` (observer) | Cross-cutting, protocol-level |
 | Encryption at rest | `StoreMiddleware` | Wraps state store reads/writes |
-| Steering audit | `ReactInterceptor::pre_steering_inject` | Observe/block steering injection |
+| Steering audit | `Rule::before_steering_inject` | Observe/block steering injection |
 | Exfiltration guard | `ExfilGuardMiddleware` | Policy enforcement at dispatch boundary |

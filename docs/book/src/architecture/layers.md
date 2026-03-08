@@ -50,10 +50,10 @@ Layer 0 is the stability contract. It defines the four protocol traits (`Operato
 - `neuron-tool` -- `ToolDyn` trait, `ToolRegistry`, `AliasedTool`
 - `neuron-context` -- Conversation context management and compaction strategies
 - `neuron-mcp` -- MCP (Model Context Protocol) client
-- `neuron-op-react` -- ReAct operator (reason-act-observe loop with tools)
+- `neuron-context-engine` -- Composable three-phase context engine (assembly, inference, reaction) with tool execution
 - `neuron-op-single-shot` -- Single-shot operator (one model call, no tools)
 
-Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `neuron-turn`) is intentionally not object-safe -- it uses RPITIT for zero-cost abstraction. The object-safe boundary is `layer0::Operator`. The bridge is `ReactOperator<P: Provider>`, which is generic over the provider type but implements the object-safe `Operator` trait.
+Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `neuron-turn`) is intentionally not object-safe -- it uses RPITIT for zero-cost abstraction. The object-safe boundary is `layer0::Operator`. The bridge is a context engine implementation (generic over the provider type) that implements the object-safe `Operator` trait.
 
 ## Layer 2 -- Orchestration
 
@@ -99,7 +99,7 @@ Layer 5 provides security middleware that wraps operator dispatch, store access,
 
 **Crate:** `neuron`
 
-The umbrella crate re-exports all layers behind feature flags. It exists so users can write `neuron = { features = ["op-react", "provider-anthropic"] }` instead of depending on 5+ individual crates. See [Installation](../getting-started/installation.md) for the full feature flag table.
+The umbrella crate re-exports all layers behind feature flags. It exists so users can write `neuron = { features = ["context-engine", "provider-anthropic"] }` instead of depending on 5+ individual crates. See [Installation](../getting-started/installation.md) for the full feature flag table.
 
 ## Dependency rules
 

@@ -327,7 +327,13 @@ mod tests {
         reg.register(Arc::new(EchoTool));
 
         let tool = reg.get("echo").unwrap();
-        let result = tool.call(json!({"msg": "hello"}), &ToolCallContext::new(AgentId::new("test"))).await.unwrap();
+        let result = tool
+            .call(
+                json!({"msg": "hello"}),
+                &ToolCallContext::new(AgentId::new("test")),
+            )
+            .await
+            .unwrap();
         assert_eq!(result, json!({"echoed": {"msg": "hello"}}));
     }
 
@@ -339,7 +345,13 @@ mod tests {
         assert_eq!(tool.name(), "echo_alias");
         assert_eq!(tool.description(), inner.description());
 
-        let result = tool.call(json!({"msg": "hi"}), &ToolCallContext::new(AgentId::new("test"))).await.unwrap();
+        let result = tool
+            .call(
+                json!({"msg": "hi"}),
+                &ToolCallContext::new(AgentId::new("test")),
+            )
+            .await
+            .unwrap();
         assert_eq!(result, json!({"echoed": {"msg": "hi"}}));
     }
 
@@ -349,7 +361,9 @@ mod tests {
         reg.register(Arc::new(FailTool));
 
         let tool = reg.get("fail").unwrap();
-        let result = tool.call(json!({}), &ToolCallContext::new(AgentId::new("test"))).await;
+        let result = tool
+            .call(json!({}), &ToolCallContext::new(AgentId::new("test")))
+            .await;
         assert!(result.is_err());
     }
 
@@ -419,7 +433,9 @@ mod tests {
             s2.lock().unwrap().push(c.to_string());
         });
         let ctx = ToolCallContext::new(AgentId::new("test"));
-        let res = tool.call_streaming(serde_json::json!({}), &ctx, on_chunk).await;
+        let res = tool
+            .call_streaming(serde_json::json!({}), &ctx, on_chunk)
+            .await;
         assert!(res.is_ok());
         assert_eq!(count.load(Ordering::SeqCst), 3);
         let got = seen.lock().unwrap().clone();

@@ -102,18 +102,18 @@ impl Provider for MockProvider {
 Then construct an operator with the mock provider:
 
 ```rust,no_run
-use neuron_op_react::{ReactConfig, ReactOperator};
+use neuron_context_engine::{ReactLoopConfig, ContextEngine};
 use neuron_tool::ToolRegistry;
 use neuron_turn_kit::FullContext;
 use neuron_state_memory::MemoryStore;
 use std::sync::Arc;
 
-let operator = ReactOperator::new(
+let operator = ContextEngine::new(
     mock_provider,
     ToolRegistry::new(),
     Box::new(FullContext),
     Arc::new(MemoryStore::new()),
-    ReactConfig::default(),
+    ReactLoopConfig::default(),
 );
 
 // Now test the operator without network calls
@@ -180,7 +180,7 @@ cargo test
 cargo test --features test-utils -p layer0
 
 # Run tests for a specific crate
-cargo test -p neuron-op-react
+cargo test -p neuron-context-engine
 
 # Verify no clippy warnings
 cargo clippy -- -D warnings

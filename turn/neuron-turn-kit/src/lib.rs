@@ -37,7 +37,7 @@ use layer0::context::Message;
 #[cfg(feature = "typed-output")]
 pub mod typed_output;
 #[cfg(feature = "typed-output")]
-pub use typed_output::{OutputValidator, ToolSchemaEntry, TypedOutput, RETURN_RESULT_TOOL};
+pub use typed_output::{OutputValidator, RETURN_RESULT_TOOL, ToolSchemaEntry, TypedOutput};
 
 use serde_json::Value;
 use std::path::PathBuf;

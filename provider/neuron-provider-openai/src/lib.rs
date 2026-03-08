@@ -141,8 +141,7 @@ impl OpenAIProvider {
                                         content,
                                         ..
                                     } => {
-                                        tool_results
-                                            .push((tool_use_id.clone(), content.clone()));
+                                        tool_results.push((tool_use_id.clone(), content.clone()));
                                     }
                                     _ => {
                                         other_parts.push(block.clone());
@@ -248,9 +247,9 @@ impl OpenAIProvider {
                             blocks
                                 .iter()
                                 .find_map(|b| match b {
-                                    ContentBlock::ToolResult {
-                                        tool_use_id, ..
-                                    } => Some(tool_use_id.clone()),
+                                    ContentBlock::ToolResult { tool_use_id, .. } => {
+                                        Some(tool_use_id.clone())
+                                    }
                                     _ => None,
                                 })
                                 .unwrap_or_default()
@@ -351,7 +350,9 @@ impl OpenAIProvider {
                             }
                             OpenAIContentPart::ImageUrl { image_url } => {
                                 content_blocks.push(ContentBlock::Image {
-                                    source: layer0::content::ImageSource::Url { url: image_url.url },
+                                    source: layer0::content::ImageSource::Url {
+                                        url: image_url.url,
+                                    },
                                     media_type: "image/png".into(),
                                 });
                             }
@@ -393,8 +394,7 @@ impl OpenAIProvider {
         };
 
         let input_cost = Decimal::from(response.usage.prompt_tokens) * Decimal::new(15, 8);
-        let output_cost =
-            Decimal::from(response.usage.completion_tokens) * Decimal::new(60, 8);
+        let output_cost = Decimal::from(response.usage.completion_tokens) * Decimal::new(60, 8);
         let cost = input_cost + output_cost;
 
         // Build Content from blocks.
@@ -449,12 +449,14 @@ impl Provider for OpenAIProvider {
                 Err(e) => return Err(e),
                 Ok(r) => r,
             };
-            let http_response = http_request.send().await.map_err(|e| {
-                ProviderError::TransientError {
-                    message: e.to_string(),
-                    status: None,
-                }
-            })?;
+            let http_response =
+                http_request
+                    .send()
+                    .await
+                    .map_err(|e| ProviderError::TransientError {
+                        message: e.to_string(),
+                        status: None,
+                    })?;
 
             let status = http_response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -535,9 +537,7 @@ fn blocks_to_openai_content(blocks: &[ContentBlock]) -> OpenAIContent {
         blocks
             .iter()
             .filter_map(|block| match block {
-                ContentBlock::Text { text } => {
-                    Some(OpenAIContentPart::Text { text: text.clone() })
-                }
+                ContentBlock::Text { text } => Some(OpenAIContentPart::Text { text: text.clone() }),
                 ContentBlock::Image { source, .. } => {
                     let url = match source {
                         layer0::content::ImageSource::Url { url } => url.clone(),

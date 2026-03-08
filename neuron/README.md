@@ -28,26 +28,22 @@ changing your operator code, and so on.
 
 ```toml
 [dependencies]
-neuron = { version = "0.4", features = ["op-react", "provider-anthropic", "state-memory", "env-local"] }
+neuron = { version = "0.4", features = ["agent", "provider-anthropic"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
 ```rust
-use neuron::prelude::*;
-use std::sync::Arc;
-
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let provider = AnthropicProvider::from_env()?;
-    let operator = ReactOperator::new(
-        Arc::new(provider),
-        Arc::new(ToolRegistry::new()),
-    );
-    let env = LocalEnv::new(Arc::new(EnvResolver));
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let output = neuron::agent("claude-sonnet-4-20250514")
+        .system("You are a helpful assistant.")
+        .build()?
+        .run("What is the capital of France?")
+        .await?;
 
-    let input = OperatorInput::new("What is 2 + 2?");
-    let output = operator.invoke(input, &env).await?;
-    println!("{}", output.content.as_text().unwrap_or_default());
+    if let Some(text) = output.message.as_text() {
+        println!("{text}");
+    }
     Ok(())
 }
 ```
@@ -57,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
 | Flag | Includes | Description |
 |------|----------|-------------|
 | `core` (default) | `layer0`, `neuron-context`, `neuron-tool`, `neuron-turn` | Protocol + wiring |
-| `op-react` | `core` + `neuron-op-react` | ReAct loop operator |
+| `context-engine` | `core` + `neuron-context-engine` | Composable context engine |
 | `op-single-shot` | `core` + `neuron-op-single-shot` | Single-turn operator |
 | `mcp` | `core` + `neuron-mcp` | MCP bridge |
 | `orch-kit` | `core` + `neuron-orch-kit` | Orchestration wiring |
@@ -81,7 +77,7 @@ The workspace is split into focused crates you can depend on individually:
 - [`neuron-context`](https://crates.io/crates/neuron-context) — context window strategies
 
 ### Operators
-- [`neuron-op-react`](https://crates.io/crates/neuron-op-react) — ReAct reasoning loop
+- [`neuron-context-engine`](https://crates.io/crates/neuron-context-engine) — Composable context engine
 - [`neuron-op-single-shot`](https://crates.io/crates/neuron-op-single-shot) — single model call
 
 ### Providers

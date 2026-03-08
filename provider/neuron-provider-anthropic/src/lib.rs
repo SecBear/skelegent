@@ -5,10 +5,10 @@
 
 mod types;
 
-use neuron_auth::{AuthProvider, AuthRequest};
-use neuron_turn::provider::{Provider, ProviderError};
-use neuron_turn::infer::{InferRequest, InferResponse, ToolCall};
 use layer0::content::{Content, ContentBlock, ImageSource as L0ImageSource};
+use neuron_auth::{AuthProvider, AuthRequest};
+use neuron_turn::infer::{InferRequest, InferResponse, ToolCall};
+use neuron_turn::provider::{Provider, ProviderError};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
 use std::sync::Arc;
@@ -403,8 +403,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-
-
     #[test]
     fn tool_schema_serializes() {
         let tool = AnthropicTool {
@@ -421,7 +419,6 @@ mod tests {
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "get_weather");
     }
-
 
     #[test]
     fn map_error_500_returns_transient() {

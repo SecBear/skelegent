@@ -20,4 +20,6 @@ serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-neuron-turn = { path = "../../turn/neuron-turn", version = "0.4.0", features = ["test-utils"] }
+neuron-turn = { path = "../../turn/neuron-turn", version = "0.4.0", features = [
+  "test-utils",
+] }

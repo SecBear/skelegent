@@ -812,9 +812,9 @@ version = "0.4.0"
 dependencies = [
  "layer0",
  "neuron-context",
+ "neuron-context-engine",
  "neuron-env-local",
  "neuron-mcp",
- "neuron-op-react",
  "neuron-op-single-shot",
  "neuron-orch-kit",
  "neuron-orch-local",
@@ -848,6 +848,22 @@ dependencies = [
  "neuron-turn",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "neuron-context-engine"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "neuron-context",
+ "neuron-tool",
+ "neuron-turn",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -922,24 +938,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "neuron-op-react"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "futures-util",
- "layer0",
- "neuron-tool",
- "neuron-turn",
- "neuron-turn-kit",
- "rust_decimal",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "neuron-op-single-shot"
 version = "0.4.0"
 dependencies = [
@@ -985,7 +983,7 @@ dependencies = [
  "layer0",
  "neuron-auth",
  "neuron-context",
- "neuron-op-react",
+ "neuron-context-engine",
  "neuron-state-memory",
  "neuron-tool",
  "neuron-turn",
@@ -1003,7 +1001,7 @@ version = "0.4.0"
 dependencies = [
  "layer0",
  "neuron-context",
- "neuron-op-react",
+ "neuron-context-engine",
  "neuron-state-memory",
  "neuron-tool",
  "neuron-turn",
@@ -1022,7 +1020,7 @@ version = "0.4.0"
 dependencies = [
  "layer0",
  "neuron-context",
- "neuron-op-react",
+ "neuron-context-engine",
  "neuron-state-memory",
  "neuron-tool",
  "neuron-turn",
@@ -1135,7 +1133,7 @@ dependencies = [
  "layer0",
  "neuron",
  "neuron-context",
- "neuron-op-react",
+ "neuron-context-engine",
  "neuron-op-single-shot",
  "neuron-orch-local",
  "neuron-provider-anthropic",

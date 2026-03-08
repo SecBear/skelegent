@@ -262,7 +262,13 @@ impl ServerHandler for McpServerHandler {
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
-        match tool.call(input, &neuron_tool::ToolCallContext::new(layer0::AgentId::new("mcp-server"))).await {
+        match tool
+            .call(
+                input,
+                &neuron_tool::ToolCallContext::new(layer0::AgentId::new("mcp-server")),
+            )
+            .await
+        {
             Ok(result) => {
                 let text =
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());

@@ -14,13 +14,13 @@ pub trait Operator: Send + Sync {
 }
 ```
 
-neuron ships two operator implementations: `ReactOperator` (full reasoning loop with tools) and `SingleShotOperator` (one model call, no tools).
+neuron ships two operator implementations: a context engine (composable three-phase engine with assembly, inference, reaction) and `SingleShotOperator` (one model call, no tools).
 
-## ReactOperator
+## Context Engine
 
-**Crate:** `neuron-op-react`
+**Crate:** `neuron-context-engine`
 
-The ReAct operator implements the Reason-Act-Observe cycle:
+The context engine implements a composable three-phase loop (assembly, inference, reaction):
 
 1. **Assemble context** -- Build the prompt from the system prompt, conversation history, tool definitions, and the new input message.
 2. **Call the model** -- Send the assembled context to the provider.
@@ -32,13 +32,13 @@ The ReAct operator implements the Reason-Act-Observe cycle:
 
 ```rust,no_run
 use std::sync::Arc;
-use neuron_op_react::{ReactConfig, ReactOperator};
+use neuron_context_engine::{ReactLoopConfig, ContextEngine};
 use neuron_provider_anthropic::AnthropicProvider;
 use neuron_tool::ToolRegistry;
 use neuron_turn::NoCompaction;
 use neuron_state_memory::MemoryStore;
 
-let config = ReactConfig {
+let config = ReactLoopConfig {
     system_prompt: "You are a coding assistant.".into(),
     default_model: "claude-haiku-4-5-20251001".into(),
     default_max_tokens: 4096,
@@ -49,7 +49,7 @@ let provider = AnthropicProvider::new("sk-ant-...");
 let tools = ToolRegistry::new();   // add tools as needed
 let state = Arc::new(MemoryStore::new());
 
-let operator = ReactOperator::new(
+let operator = ContextEngine::new(
     provider,
     tools,
     Box::new(NoCompaction),
@@ -60,14 +60,14 @@ let operator = ReactOperator::new(
 
 ### Configuration
 
-`ReactConfig` sets the static defaults for the operator instance:
+`ReactLoopConfig` sets the static defaults for the operator instance:
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `system_prompt` | `""` | Base system prompt prepended to every request |
 | `default_model` | `""` | Model identifier (e.g., `"claude-haiku-4-5-20251001"`) |
 | `default_max_tokens` | `4096` | Max tokens per model response |
-| `default_max_turns` | `10` | Max ReAct loop iterations before stopping |
+| `default_max_turns` | `10` | Max context engine loop iterations before stopping |
 
 These defaults can be overridden per-invocation via `OperatorConfig` in the `OperatorInput`:
 
@@ -90,19 +90,19 @@ input.config = Some(OperatorConfig {
 
 ### Exit reasons
 
-The ReAct loop stops when:
+The context engine loop stops when:
 
 - **`Complete`** -- The model produced a final text response without requesting any tool use.
 - **`MaxTurns`** -- The `max_turns` limit was reached.
 - **`BudgetExhausted`** -- Accumulated cost exceeded `max_cost`.
 - **`Timeout`** -- Wall-clock time exceeded `max_duration`.
-- **`InterceptorHalt`** -- A `ReactInterceptor` returned `ReactAction::Halt`.
+- **`RuleHalt`** -- A Rule returned `RuleAction::Halt`.
 - **`CircuitBreaker`** -- Too many consecutive failures (provider errors or tool errors).
 - **`Error`** -- An unrecoverable error occurred.
 
 ### Effects
 
-The `ReactOperator` supports effect-producing tools. If a tool is registered in the operator's `EffectTools` configuration, calling it produces an `Effect` in the `OperatorOutput` instead of executing the tool directly. This is useful for tools that should be executed by the orchestrator or environment rather than inline (e.g., spawning a sub-agent, signaling a workflow).
+The context engine supports effect-producing tools. If a tool is registered in the operator's `EffectTools` configuration, calling it produces an `Effect` in the `OperatorOutput` instead of executing the tool directly. This is useful for tools that should be executed by the orchestrator or environment rather than inline (e.g., spawning a sub-agent, signaling a workflow).
 
 ## SingleShotOperator
 
@@ -142,11 +142,11 @@ There is no loop, no tool execution, and no iteration. The exit reason is always
 
 | Use case | Operator | Why |
 |----------|----------|-----|
-| Agent with tools | `ReactOperator` | Needs the reasoning loop to call tools and iterate |
+| Agent with tools | Context Engine | Needs the reasoning loop to call tools and iterate |
 | Classification/extraction | `SingleShotOperator` | One model call is sufficient |
 | Summarization | `SingleShotOperator` | No tools needed |
-| Code generation with testing | `ReactOperator` | May need to run tests, read errors, and iterate |
-| Multi-step research | `ReactOperator` | Needs to search, read, and synthesize |
+| Code generation with testing | Context Engine | May need to run tests, read errors, and iterate |
+| Multi-step research | Context Engine | Needs to search, read, and synthesize |
 
 ## Using operators as trait objects
 
@@ -156,11 +156,11 @@ Both operators implement `layer0::Operator`, which is object-safe. You can use t
 use layer0::operator::Operator;
 use std::sync::Arc;
 
-let react_op: Arc<dyn Operator> = Arc::new(react_operator);
+let engine_op: Arc<dyn Operator> = Arc::new(context_engine);
 let single_op: Arc<dyn Operator> = Arc::new(single_shot_operator);
 
 // Orchestrator doesn't know or care which operator it's dispatching to
-orchestrator.register_agent("coder", react_op);
+orchestrator.register_agent("coder", engine_op);
 orchestrator.register_agent("classifier", single_op);
 ```
 
@@ -169,25 +169,25 @@ The provider's generic type parameter is erased at the `Operator` boundary. Call
 
 ## Custom operators: barrier scheduling and steering
 
-For detailed guidance on composing `ReactOperator` with `BarrierPlanner`, `SteeringSource`, and `BudgetEventSink`, see the dedicated guide:
+For detailed guidance on composing the context engine with `BarrierPlanner`, `SteeringSource`, and `BudgetEventSink`, see the dedicated guide:
 
 **[Building a custom operator](custom-operator.md)**
 
 That guide covers:
 - The three-primitive wiring pattern (`with_planner`, `with_steering`, `with_budget_sink`)
-- Implementing `ReactInterceptor` for loop interception
-- Implementing `SteeringSource` and making steering observable via interceptors
+- Implementing Rules for loop interception
+- Implementing `SteeringSource` and making steering observable via rules
 
-The brief example skeleton below shows the shape of a custom operator that uses `ReactOperator` as its foundation. For a runnable version see the `custom-operator-barrier` example crate.
+The brief example skeleton below shows the shape of a custom operator that uses the context engine as its foundation. For a runnable version see the `custom-operator-barrier` example crate.
 
 ```rust,no_run
 use std::sync::Arc;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, ExitReason};
-use neuron_op_react::{ReactConfig, ReactOperator, BarrierPlanner};
+use neuron_context_engine::{ReactLoopConfig, ContextEngine, BarrierPlanner};
 use neuron_tool::ToolRegistry;
 
-// Build a ReactOperator with barrier scheduling:
-// let op = ReactOperator::new(provider, tools, context_strategy, state_reader, config)
+// Build a context engine with barrier scheduling:
+// let op = ContextEngine::new(provider, tools, context_strategy, state_reader, config)
 //     .with_planner(Box::new(BarrierPlanner))
 //     .with_concurrency_decider(Box::new(my_decider));
 ```

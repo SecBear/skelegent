@@ -275,7 +275,6 @@ impl Default for OllamaProvider {
 }
 
 impl Provider for OllamaProvider {
-
     fn infer(
         &self,
         request: InferRequest,
@@ -365,8 +364,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-
-
     #[test]
     fn tool_schema_serializes() {
         let tool = OllamaTool {
@@ -389,23 +386,17 @@ mod tests {
         assert!(json["function"]["parameters"]["properties"]["location"].is_object());
     }
 
-
-
-
-
     #[test]
     fn with_url_overrides_api_url() {
         let provider = OllamaProvider::new().with_url("http://remote:11434/api/chat");
         assert_eq!(provider.api_url, "http://remote:11434/api/chat");
     }
 
-
     #[test]
     fn ollama_default_impl() {
         let provider = OllamaProvider::default();
         assert_eq!(provider.api_url, "http://localhost:11434/api/chat");
     }
-
 
     #[test]
     fn map_error_500_returns_transient() {

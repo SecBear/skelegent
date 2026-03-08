@@ -177,10 +177,12 @@ mod tests {
         let input = &schema.input_schema;
         assert_eq!(input["type"], "object");
         assert!(input["properties"]["result"].is_object());
-        assert!(input["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("result")));
+        assert!(
+            input["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("result"))
+        );
     }
 
     #[test]

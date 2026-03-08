@@ -31,6 +31,8 @@ schemars = { version = "0.8", optional = true }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde_json = "1"
-neuron-turn = { path = "../../turn/neuron-turn", version = "0.4.0", features = ["test-utils"] }
+neuron-turn = { path = "../../turn/neuron-turn", version = "0.4.0", features = [
+  "test-utils",
+] }
 schemars = "0.8"
 serde = { version = "1", features = ["derive"] }

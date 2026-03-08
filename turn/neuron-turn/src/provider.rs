@@ -76,7 +76,6 @@ pub trait Provider: Send + Sync {
     ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send;
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

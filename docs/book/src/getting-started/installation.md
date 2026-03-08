@@ -21,7 +21,7 @@ The `neuron` crate is an umbrella that re-exports all layers behind feature flag
 
 ```toml
 [dependencies]
-neuron = { version = "0.4", features = ["op-react", "provider-anthropic", "state-memory"] }
+neuron = { version = "0.4", features = ["context-engine", "provider-anthropic", "state-memory"] }
 ```
 
 ### Feature flags
@@ -31,7 +31,7 @@ The umbrella crate uses feature flags to control which implementations are compi
 | Feature | What it enables |
 |---------|----------------|
 | `core` | Layer 0 protocols + `neuron-turn` + `neuron-context` + `neuron-tool` (included in default) |
-| `op-react` | ReAct operator (`neuron-op-react`) |
+| `context-engine` | Context engine (neuron-context-engine) |
 | `op-single-shot` | Single-shot operator (`neuron-op-single-shot`) |
 | `provider-anthropic` | Anthropic Claude provider |
 | `provider-openai` | OpenAI provider |
@@ -53,7 +53,7 @@ You can also depend on individual crates directly if you want finer control over
 layer0 = "0.4"
 neuron-turn = "0.4"
 neuron-tool = "0.4"
-neuron-op-react = "0.4"
+neuron-context-engine = "0.4"
 neuron-provider-anthropic = "0.4"
 ```
 

@@ -11,12 +11,12 @@
 //! ```
 
 use layer0::content::Content;
+use layer0::context::Role;
 use layer0::error::OperatorError;
-use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
-#[allow(unused_imports)]
-use neuron_op_react::{ReactConfig, ReactOperator};
+use neuron_context_engine::{
+    AssemblyExt, Context, ReactLoopConfig, react_loop, rule::Trigger, rules::BudgetGuard,
+};
 use neuron_tool::ToolRegistry;
-use std::sync::Arc;
 
 /// Create an agent builder with the given model identifier.
 ///
@@ -89,38 +89,63 @@ impl AgentBuilder {
     /// - The required API key environment variable is not set
     /// - The provider feature is not enabled
     pub fn build(self) -> Result<BuiltAgent, AgentBuildError> {
-        let config = ReactConfig {
-            default_model: self.model.clone(),
-            system_prompt: self.system.unwrap_or_default(),
-            default_max_turns: self.max_turns.unwrap_or(10),
-            default_max_tokens: self.max_tokens.unwrap_or(4096),
-            ..ReactConfig::default()
-        };
-
-        let state: Arc<dyn layer0::StateReader> =
-            Arc::new(neuron_state_memory::MemoryStore::new());
-
-        let operator: Box<dyn Operator> = resolve_model(&self.model, self.tools, state, config)?;
-
-        Ok(BuiltAgent { operator })
+        resolve_model(
+            &self.model,
+            self.system.unwrap_or_default(),
+            self.tools,
+            self.max_turns.unwrap_or(10),
+            self.max_tokens.unwrap_or(4096),
+        )
     }
 }
 
 /// A fully constructed agent ready to run.
 pub struct BuiltAgent {
-    operator: Box<dyn Operator>,
+    model: String,
+    system_prompt: String,
+    tools: ToolRegistry,
+    max_turns: u32,
+    max_tokens: u32,
+    provider: ProviderKind,
 }
 
 impl BuiltAgent {
     /// Run the agent with a user message.
-    pub async fn run(&self, message: &str) -> Result<OperatorOutput, OperatorError> {
-        let input = OperatorInput::new(Content::text(message), TriggerType::Task);
-        self.operator.execute(input).await
-    }
+    pub async fn run(
+        &self,
+        message: &str,
+    ) -> Result<layer0::operator::OperatorOutput, OperatorError> {
+        // Create context with budget guard rule
+        let guard = BudgetGuard::with_config(neuron_context_engine::rules::BudgetGuardConfig {
+            max_cost: None,
+            max_turns: Some(self.max_turns),
+            max_duration: None,
+            max_tool_calls: None,
+        });
+        let rule =
+            neuron_context_engine::rule::Rule::new("budget_guard", Trigger::BeforeAny, 100, guard);
+        let mut ctx = Context::with_rules(vec![rule]);
 
-    /// Run the agent with a fully constructed [`OperatorInput`].
-    pub async fn run_input(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
-        self.operator.execute(input).await
+        // Inject system prompt and user message
+        ctx.inject_system(&self.system_prompt)
+            .await
+            .map_err(|_| OperatorError::InferenceError("Failed to inject system prompt".into()))?;
+        let user_msg = layer0::context::Message::new(Role::User, Content::text(message));
+        ctx.inject_message(user_msg)
+            .await
+            .map_err(|_| OperatorError::InferenceError("Failed to inject user message".into()))?;
+
+        // Run the react loop
+        let config = ReactLoopConfig {
+            system_prompt: self.system_prompt.clone(),
+            model: Some(self.model.clone()),
+            max_tokens: Some(self.max_tokens),
+            temperature: None,
+        };
+
+        self.provider
+            .react_loop(&mut ctx, &self.tools, &config)
+            .await
     }
 }
 
@@ -144,7 +169,10 @@ pub enum AgentBuildError {
 impl std::fmt::Display for AgentBuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownModel(m) => write!(f, "Unknown model: {m}. Expected claude-*, gpt-*, openai:*, anthropic:*, or ollama:*"),
+            Self::UnknownModel(m) => write!(
+                f,
+                "Unknown model: {m}. Expected claude-*, gpt-*, openai:*, anthropic:*, or ollama:*"
+            ),
             Self::MissingApiKey { env_var } => write!(f, "Missing API key: set {env_var}"),
             Self::FeatureNotEnabled { feature } => write!(f, "Feature not enabled: {feature}"),
         }
@@ -153,23 +181,69 @@ impl std::fmt::Display for AgentBuildError {
 
 impl std::error::Error for AgentBuildError {}
 
-#[allow(unused_variables)]
+/// Enum to hold different provider types (since Provider is RPITIT and not object-safe).
+enum ProviderKind {
+    #[cfg(feature = "provider-anthropic")]
+    Anthropic(neuron_provider_anthropic::AnthropicProvider),
+    #[cfg(feature = "provider-openai")]
+    OpenAI(neuron_provider_openai::OpenAIProvider),
+    #[cfg(feature = "provider-ollama")]
+    Ollama(neuron_provider_ollama::OllamaProvider),
+}
+
+impl ProviderKind {
+    /// Call react_loop with the appropriate provider.
+    async fn react_loop(
+        &self,
+        ctx: &mut Context,
+        tools: &ToolRegistry,
+        config: &ReactLoopConfig,
+    ) -> Result<layer0::operator::OperatorOutput, OperatorError> {
+        match self {
+            #[cfg(feature = "provider-anthropic")]
+            Self::Anthropic(provider) => {
+                neuron_context_engine::react_loop(ctx, provider, tools, config)
+                    .await
+                    .map_err(|e| {
+                        OperatorError::InferenceError(format!("Context engine error: {e}"))
+                    })
+            }
+            #[cfg(feature = "provider-openai")]
+            Self::OpenAI(provider) => {
+                neuron_context_engine::react_loop(ctx, provider, tools, config)
+                    .await
+                    .map_err(|e| {
+                        OperatorError::InferenceError(format!("Context engine error: {e}"))
+                    })
+            }
+            #[cfg(feature = "provider-ollama")]
+            Self::Ollama(provider) => {
+                neuron_context_engine::react_loop(ctx, provider, tools, config)
+                    .await
+                    .map_err(|e| {
+                        OperatorError::InferenceError(format!("Context engine error: {e}"))
+                    })
+            }
+        }
+    }
+}
+
 fn resolve_model(
     model: &str,
+    system_prompt: String,
     tools: ToolRegistry,
-    state: Arc<dyn layer0::StateReader>,
-    config: ReactConfig,
-) -> Result<Box<dyn Operator>, AgentBuildError> {
-    if model.starts_with("claude-") || model.starts_with("anthropic:") {
+    max_turns: u32,
+    max_tokens: u32,
+) -> Result<BuiltAgent, AgentBuildError> {
+    let provider = if model.starts_with("claude-") || model.starts_with("anthropic:") {
         #[cfg(feature = "provider-anthropic")]
         {
-            let api_key = std::env::var("ANTHROPIC_API_KEY")
-                .map_err(|_| AgentBuildError::MissingApiKey {
+            let api_key =
+                std::env::var("ANTHROPIC_API_KEY").map_err(|_| AgentBuildError::MissingApiKey {
                     env_var: "ANTHROPIC_API_KEY",
                 })?;
             let provider = neuron_provider_anthropic::AnthropicProvider::new(api_key);
-            let op = ReactOperator::new(provider, tools, state, config);
-            return Ok(Box::new(op));
+            ProviderKind::Anthropic(provider)
         }
         #[cfg(not(feature = "provider-anthropic"))]
         {
@@ -177,19 +251,19 @@ fn resolve_model(
                 feature: "provider-anthropic",
             });
         }
-    }
-
-    if model.starts_with("gpt-") || model.starts_with("openai:") || model.starts_with("o1-") || model.starts_with("o3-") {
+    } else if model.starts_with("gpt-")
+        || model.starts_with("openai:")
+        || model.starts_with("o1-")
+        || model.starts_with("o3-")
+    {
         #[cfg(feature = "provider-openai")]
         {
-            let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                AgentBuildError::MissingApiKey {
+            let api_key =
+                std::env::var("OPENAI_API_KEY").map_err(|_| AgentBuildError::MissingApiKey {
                     env_var: "OPENAI_API_KEY",
-                }
-            })?;
+                })?;
             let provider = neuron_provider_openai::OpenAIProvider::new(api_key);
-            let op = ReactOperator::new(provider, tools, state, config);
-            return Ok(Box::new(op));
+            ProviderKind::OpenAI(provider)
         }
         #[cfg(not(feature = "provider-openai"))]
         {
@@ -197,14 +271,11 @@ fn resolve_model(
                 feature: "provider-openai",
             });
         }
-    }
-
-    if model.starts_with("ollama:") {
+    } else if model.starts_with("ollama:") {
         #[cfg(feature = "provider-ollama")]
         {
             let provider = neuron_provider_ollama::OllamaProvider::new();
-            let op = ReactOperator::new(provider, tools, state, config);
-            return Ok(Box::new(op));
+            ProviderKind::Ollama(provider)
         }
         #[cfg(not(feature = "provider-ollama"))]
         {
@@ -212,7 +283,16 @@ fn resolve_model(
                 feature: "provider-ollama",
             });
         }
-    }
+    } else {
+        return Err(AgentBuildError::UnknownModel(model.to_string()));
+    };
 
-    Err(AgentBuildError::UnknownModel(model.to_string()))
+    Ok(BuiltAgent {
+        model: model.to_string(),
+        system_prompt,
+        tools,
+        max_turns,
+        max_tokens,
+        provider,
+    })
 }

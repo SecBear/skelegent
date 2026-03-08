@@ -25,7 +25,7 @@ tracing = "0.1"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 layer0 = { path = "../../layer0", version = "0.4.0" }
-neuron-op-react = { path = "../../op/neuron-op-react", version = "0.4.0" }
+neuron-context-engine = { path = "../../op/neuron-context-engine", version = "0.4.0" }
 neuron-tool = { path = "../../turn/neuron-tool", version = "0.4.0" }
 neuron-context = { path = "../../turn/neuron-context", version = "0.4.0" }
 neuron-state-memory = { path = "../../state/neuron-state-memory", version = "0.4.0" }

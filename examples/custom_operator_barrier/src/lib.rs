@@ -93,7 +93,8 @@ impl Operator for BarrierOperator {
             for (id, name, params) in batch.drain(..) {
                 let start = std::time::Instant::now();
                 if let Some(tool) = tools.get(&name) {
-                    let ctx = neuron_tool::ToolCallContext::new(layer0::id::AgentId::new("barrier"));
+                    let ctx =
+                        neuron_tool::ToolCallContext::new(layer0::id::AgentId::new("barrier"));
                     match tool.call(params, &ctx).await {
                         Ok(val) => {
                             let content = val.to_string();

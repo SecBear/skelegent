@@ -29,4 +29,4 @@ async-trait = "0.1"
 neuron-tool = { path = "../../turn/neuron-tool", version = "0.4.0" }
 neuron-context = { path = "../../turn/neuron-context", version = "0.4.0" }
 neuron-state-memory = { path = "../../state/neuron-state-memory", version = "0.4.0" }
-neuron-op-react = { path = "../../op/neuron-op-react", version = "0.4.0" }
+neuron-context-engine = { path = "../../op/neuron-context-engine", version = "0.4.0" }

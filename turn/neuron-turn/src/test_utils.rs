@@ -5,8 +5,8 @@
 //! implementing [`Provider`] via `infer()`.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use layer0::content::Content;
 
@@ -57,12 +57,7 @@ impl TestProvider {
     }
 
     /// Queue a tool-use response with `StopReason::ToolUse`.
-    pub fn respond_with_tool_call(
-        &self,
-        name: &str,
-        id: &str,
-        input: serde_json::Value,
-    ) -> &Self {
+    pub fn respond_with_tool_call(&self, name: &str, id: &str, input: serde_json::Value) -> &Self {
         self.responses
             .lock()
             .unwrap()
@@ -98,17 +93,11 @@ impl Provider for TestProvider {
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
         self.call_count.fetch_add(1, Ordering::SeqCst);
-        self.recorded_requests
-            .lock()
-            .unwrap()
-            .push(request.clone());
+        self.recorded_requests.lock().unwrap().push(request.clone());
 
-        let response = self
-            .responses
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("TestProvider: no more queued responses — queue a response before calling infer()");
+        let response = self.responses.lock().unwrap().pop_front().expect(
+            "TestProvider: no more queued responses — queue a response before calling infer()",
+        );
 
         async move { Ok(response) }
     }
@@ -245,11 +234,7 @@ pub fn make_text_response(text: &str) -> InferResponse {
 }
 
 /// Build a tool-call `InferResponse`.
-pub fn make_tool_call_response(
-    name: &str,
-    id: &str,
-    input: serde_json::Value,
-) -> InferResponse {
+pub fn make_tool_call_response(name: &str, id: &str, input: serde_json::Value) -> InferResponse {
     InferResponse {
         content: Content::text(""),
         tool_calls: vec![ToolCall {

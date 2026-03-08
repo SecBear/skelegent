@@ -14,7 +14,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
-use syn::{parse_macro_input, ItemFn, LitStr, Type};
+use syn::{ItemFn, LitStr, Type, parse_macro_input};
 
 /// Parsed arguments from `#[neuron_tool(...)]`.
 struct MacroArgs {
@@ -62,7 +62,10 @@ impl syn::parse::Parse for MacroArgs {
                 syn::Error::new(Span::call_site(), "missing required attribute `name`")
             })?,
             description: description.ok_or_else(|| {
-                syn::Error::new(Span::call_site(), "missing required attribute `description`")
+                syn::Error::new(
+                    Span::call_site(),
+                    "missing required attribute `description`",
+                )
             })?,
             concurrent,
         })
@@ -130,17 +133,8 @@ fn type_to_schema(ty: &Type) -> proc_macro2::TokenStream {
             Some("String") | Some("str") => {
                 return quote! { ::serde_json::json!({"type": "string"}) };
             }
-            Some("i8")
-            | Some("i16")
-            | Some("i32")
-            | Some("i64")
-            | Some("i128")
-            | Some("u8")
-            | Some("u16")
-            | Some("u32")
-            | Some("u64")
-            | Some("u128")
-            | Some("isize")
+            Some("i8") | Some("i16") | Some("i32") | Some("i64") | Some("i128") | Some("u8")
+            | Some("u16") | Some("u32") | Some("u64") | Some("u128") | Some("isize")
             | Some("usize") => {
                 return quote! { ::serde_json::json!({"type": "integer"}) };
             }

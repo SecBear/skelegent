@@ -19,7 +19,7 @@ pub trait Operator: Send + Sync {
 
 The trait is intentionally one method. From the outside, an operator is atomic -- you do not care whether it made 1 model call or 20, whether it used tools or not, or what context strategy it used. Those are implementation details.
 
-Implementations include `ReactOperator` (the ReAct reasoning loop with tools) and `SingleShotOperator` (one model call, no tools).
+Implementations include a context engine (composable three-phase engine with assembly, inference, reaction) and `SingleShotOperator` (one model call, no tools).
 
 ### Protocol 2: Orchestrator -- "How do agents compose?"
 
@@ -89,7 +89,7 @@ Per-boundary middleware traits wrap each protocol's operations using the continu
 
 Middleware composes via `DispatchStack`, `StoreStack`, and `ExecStack` builders that organize layers into observer → transformer → guard ordering.
 
-For operator-local interception (before/after inference, before/after tool use), `ReactInterceptor` (in `neuron-op-react`) provides typed per-hook-point methods with default no-op implementations.
+For operator-local interception (before/after inference, before/after tool use), the Rule system provides typed per-trigger-point rules with default no-op implementations. Rules fire via Trigger enum: Before, After, or When.
 ### Lifecycle -- Cross-layer coordination
 
 Lifecycle events (`BudgetEvent`, `CompactionEvent`) coordinate concerns that span multiple protocols. A budget event might originate from a middleware (observing cost) and propagate to the orchestrator (to cancel the workflow). A compaction event coordinates between the operator and the state store.
@@ -116,7 +116,7 @@ This means you can replace any layer's implementation without touching other lay
 A typical application composes the layers like this:
 
 ```
-Operator   = ReactOperator<AnthropicProvider> + ToolRegistry
+Operator   = ContextEngine<AnthropicProvider> + ToolRegistry
 Middleware = DispatchStack { RedactionMiddleware, ExfilGuardMiddleware }
 State      = FsStore (filesystem persistence)
 Env        = LocalEnv (no isolation, dev mode)
@@ -132,4 +132,4 @@ These terms name configuration patterns built on top of `Operator`, not separate
 
 **Tool:** An operator registered with `ToolMetadata` (name, description, JSON input schema, concurrency hint). The metadata makes the operator callable from an LLM reasoning loop. The distinction between a tool and any other operator is configuration, not type — the `Operator` trait is the same.
 
-**Agent:** A configured operator. Concretely: an `Operator` implementation (typically `ReactOperator`) wired with a provider, identity, tools, and optionally an `Arc<dyn Orchestrator>` for sub-dispatching to other agents. The term 'agent' has no corresponding trait; it describes how an operator is assembled and what capabilities it receives at construction time.
+**Agent:** A configured operator. Concretely: an `Operator` implementation (typically a context engine) wired with a provider, identity, tools, and optionally an `Arc<dyn Orchestrator>` for sub-dispatching to other agents. The term 'agent' has no corresponding trait; it describes how an operator is assembled and what capabilities it receives at construction time.

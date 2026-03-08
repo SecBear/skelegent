@@ -2,7 +2,7 @@
 //!
 //! [`ToolOperator`] lets any existing tool participate in orchestrator dispatch
 //! without rewriting it. [`ToolRegistryOrchestrator`] makes a whole registry
-//! available as an [`Orchestrator`], allowing `ReactOperator` to use tools via
+//! available as an [`Orchestrator`], allowing operators to use tools via
 //! the standard dispatch protocol.
 
 use std::sync::Arc;
@@ -79,7 +79,7 @@ impl Operator for ToolOperator {
 
 /// Wraps a [`ToolRegistry`] and implements [`Orchestrator`].
 ///
-/// This allows a `ReactOperator` (or any caller that speaks the orchestration
+/// This allows any operator that speaks the orchestration
 /// protocol) to use existing tools via `dispatch()` by name, without touching
 /// individual tool implementations.
 ///

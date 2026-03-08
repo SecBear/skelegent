@@ -16,7 +16,7 @@ This page shows how neuron's crates depend on each other. The fundamental rule i
          ┌────────────────────┼────────────────────────┐
          │                    │                        │
          ▼                    ▼                        ▼
-  neuron-op-react    neuron-op-single-shot     neuron-orch-local
+  neuron-context-engine  neuron-op-single-shot     neuron-orch-local
   (Layer 1)          (Layer 1)                 (Layer 2)
     │  │                 │                       │  │
     │  │                 │                       │  └──► neuron-orch-kit (L2)
@@ -74,7 +74,7 @@ The operator ecosystem has several internal dependencies:
 - **`neuron-turn`** provides the `Provider` trait and shared types. All three provider crates depend on it.
 - **`neuron-tool`** provides `ToolDyn` and `ToolRegistry`. It depends only on `layer0`.
 - **`neuron-mcp`** depends on `neuron-tool` (it creates tools from MCP servers).
-- **`neuron-op-react`** depends on `neuron-turn` (for `Provider`), `neuron-tool` (for `ToolRegistry`), and `layer0` (for middleware traits).
+- **`neuron-context-engine`** depends on `neuron-turn` (for `Provider`), `neuron-tool` (for `ToolRegistry`), and `layer0` (for middleware traits).
 - **`neuron-op-single-shot`** depends on `neuron-turn` and `layer0`.
 
 ### Layer 2: Orchestration

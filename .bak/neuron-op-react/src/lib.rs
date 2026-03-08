@@ -400,7 +400,6 @@ impl<P: Provider> ReactOperator<P> {
             schemas.retain(|s| allowed.contains(&s.name));
         }
 
-
         // Add typed output tool if configured
         #[cfg(feature = "typed-output")]
         if let Some(ref validator) = self.output_validator {
@@ -425,9 +424,7 @@ impl<P: Provider> ReactOperator<P> {
                 Ok(Some(history)) => {
                     // NOTE: Stored state format changed from Vec<ProviderMessage> to Vec<Message>.
                     // Breaking change to serialized session state; acceptable per project constraints.
-                    if let Ok(history_messages) =
-                        serde_json::from_value::<Vec<Message>>(history)
-                    {
+                    if let Ok(history_messages) = serde_json::from_value::<Vec<Message>>(history) {
                         messages = history_messages;
                     }
                 }
@@ -511,7 +508,6 @@ impl<P: Provider> ReactOperator<P> {
 // LoopCtx — mutable state threaded through one execute() invocation
 // ---------------------------------------------------------------------------
 
-
 /// Mutable context for a single execute() invocation.
 ///
 /// Collects all per-loop state in one struct so helper methods can accept
@@ -581,7 +577,8 @@ impl LoopCtx {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         input.to_string().hash(&mut hasher);
         let cap = max_repeat.map(|v| v as usize).unwrap_or(0).max(10);
-        self.recent_calls.push_back((name.to_string(), hasher.finish()));
+        self.recent_calls
+            .push_back((name.to_string(), hasher.finish()));
         while self.recent_calls.len() > cap {
             self.recent_calls.pop_front();
         }
@@ -593,7 +590,6 @@ impl LoopCtx {
 // ---------------------------------------------------------------------------
 
 impl<P: Provider> ReactOperator<P> {
-
     /// Poll steering and, if messages are injected, skip remaining tools in the
     /// current batch. Returns `true` if steering interrupted the batch.
     async fn poll_steering_skip(
@@ -633,10 +629,7 @@ impl<P: Provider> ReactOperator<P> {
     /// Poll the steering source and dispatch interceptor events.
     ///
     /// Returns injected messages (after interceptor approval) and context commands.
-    async fn poll_steering(
-        &self,
-        ctx: &LoopCtx,
-    ) -> (Vec<Message>, Vec<ContextCommand>) {
+    async fn poll_steering(&self, ctx: &LoopCtx) -> (Vec<Message>, Vec<ContextCommand>) {
         let Some(s) = &self.steering else {
             return (vec![], vec![]);
         };
@@ -705,10 +698,7 @@ impl<P: Provider> ReactOperator<P> {
                 if let Some(ref sink) = self.budget_sink {
                     sink.on_budget_event(BudgetEvent::LoopDetected {
                         agent: AgentId::new("react"),
-                        operator_name: first
-                            .as_ref()
-                            .map(|(n, _)| n.clone())
-                            .unwrap_or_default(),
+                        operator_name: first.as_ref().map(|(n, _)| n.clone()).unwrap_or_default(),
                         consecutive_count: ctx.recent_calls.len() as u32,
                         max: max_rep,
                     });
@@ -813,8 +803,7 @@ impl<P: Provider> ReactOperator<P> {
         *self
             .last_compaction_removed
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) =
-            before_count.saturating_sub(after_count) as usize;
+            .unwrap_or_else(|e| e.into_inner()) = before_count.saturating_sub(after_count) as usize;
         *self
             .current_context
             .lock()
@@ -823,11 +812,7 @@ impl<P: Provider> ReactOperator<P> {
         // PostCompaction interceptor
         if let Some(ref interceptor) = self.interceptor {
             interceptor
-                .post_compaction(
-                    &ctx.state(),
-                    before_count as usize,
-                    after_count as usize,
-                )
+                .post_compaction(&ctx.state(), before_count as usize, after_count as usize)
                 .await;
         }
     }
@@ -868,8 +853,7 @@ impl<P: Provider> ReactOperator<P> {
                     for idx in 0..len {
                         // Mid-batch steering (after first tool)
                         if idx > 0 {
-                            let remaining: Vec<_> =
-                                call_group.iter().skip(idx).cloned().collect();
+                            let remaining: Vec<_> = call_group.iter().skip(idx).cloned().collect();
                             if self
                                 .poll_steering_skip(ctx, &remaining, &mut dispatch_results)
                                 .await
@@ -916,9 +900,8 @@ impl<P: Provider> ReactOperator<P> {
                                             is_error: ie,
                                         },
                                     );
-                                    ctx.dispatch_records.push(SubDispatchRecord::new(
-                                        name, d, s,
-                                    ));
+                                    ctx.dispatch_records
+                                        .push(SubDispatchRecord::new(name, d, s));
                                 }
                             }
                         }
@@ -1061,8 +1044,11 @@ impl<P: Provider> ReactOperator<P> {
                     ));
                 }
                 SubDispatchAction::Skip { reason } => {
-                    ctx.dispatch_records
-                        .push(SubDispatchRecord::new(name, DurationMs::ZERO, false));
+                    ctx.dispatch_records.push(SubDispatchRecord::new(
+                        name,
+                        DurationMs::ZERO,
+                        false,
+                    ));
                     return Ok(ToolExecResult::Done {
                         content: format!("Skipped: {reason}"),
                         is_error: false,
@@ -1315,9 +1301,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                     // Check for typed output before normal dispatch
                     #[cfg(feature = "typed-output")]
                     if let Some(ref validator) = self.output_validator
-                        && let Some(tc) = response.tool_calls.iter().find(|tc| {
-                            tc.name == neuron_turn_kit::RETURN_RESULT_TOOL
-                        })
+                        && let Some(tc) = response
+                            .tool_calls
+                            .iter()
+                            .find(|tc| tc.name == neuron_turn_kit::RETURN_RESULT_TOOL)
                     {
                         match validator.validate(&tc.input) {
                             Ok(value) => {
@@ -1345,8 +1332,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 *self
                                     .current_context
                                     .lock()
-                                    .unwrap_or_else(|e| e.into_inner()) =
-                                    ctx.messages.clone();
+                                    .unwrap_or_else(|e| e.into_inner()) = ctx.messages.clone();
                                 continue; // retry the loop
                             }
                         }
@@ -2038,7 +2024,10 @@ mod tests {
         let responses = std::sync::Arc::new(Mutex::new(responses));
         let provider = neuron_turn::test_utils::FunctionProvider::new(move |_req| {
             cc.fetch_add(1, Ordering::SeqCst);
-            let resp = responses.lock().unwrap().pop_front()
+            let resp = responses
+                .lock()
+                .unwrap()
+                .pop_front()
                 .expect("no more responses");
             Ok(resp)
         });
@@ -2208,7 +2197,10 @@ mod tests {
         let responses = std::sync::Arc::new(Mutex::new(responses));
         let counting = neuron_turn::test_utils::FunctionProvider::new(move |_req| {
             cc.fetch_add(1, Ordering::SeqCst);
-            let resp = responses.lock().unwrap().pop_front()
+            let resp = responses
+                .lock()
+                .unwrap()
+                .pop_front()
                 .expect("no more responses");
             Ok(resp)
         });
@@ -2504,11 +2496,17 @@ mod tests {
     fn recording_provider(
         responses: Vec<InferResponse>,
         models_seen: std::sync::Arc<Mutex<Vec<Option<String>>>>,
-    ) -> neuron_turn::test_utils::FunctionProvider<impl Fn(InferRequest) -> Result<InferResponse, ProviderError> + Send + Sync> {
-        let responses = std::sync::Arc::new(Mutex::new(std::collections::VecDeque::from(responses)));
+    ) -> neuron_turn::test_utils::FunctionProvider<
+        impl Fn(InferRequest) -> Result<InferResponse, ProviderError> + Send + Sync,
+    > {
+        let responses =
+            std::sync::Arc::new(Mutex::new(std::collections::VecDeque::from(responses)));
         neuron_turn::test_utils::FunctionProvider::new(move |req: InferRequest| {
             models_seen.lock().unwrap().push(req.model.clone());
-            let resp = responses.lock().unwrap().pop_front()
+            let resp = responses
+                .lock()
+                .unwrap()
+                .pop_front()
                 .expect("no more responses");
             Ok(resp)
         })
@@ -2869,10 +2867,7 @@ mod tests {
     async fn no_model_selector_model_unchanged() {
         // Regression: without model_selector, model stays as configured.
         let models_seen = std::sync::Arc::new(Mutex::new(Vec::<Option<String>>::new()));
-        let provider = recording_provider(
-            vec![simple_text_response("Hi")],
-            models_seen.clone(),
-        );
+        let provider = recording_provider(vec![simple_text_response("Hi")], models_seen.clone());
         let op = ReactOperator::new(
             provider,
             ToolRegistry::new(),
@@ -3319,17 +3314,15 @@ mod tests {
 
         #[tokio::test]
         async fn typed_output_valid_returns_complete() {
-            let provider = TestProvider::with_responses(vec![
-                return_result_response(serde_json::json!({
+            let provider =
+                TestProvider::with_responses(vec![return_result_response(serde_json::json!({
                     "result": { "name": "Tokyo", "population": 13960000_u64 }
-                })),
-            ]);
+                }))]);
             let tools = ToolRegistry::new();
             let state: Arc<dyn layer0::StateReader> = Arc::new(NullStateReader);
             let config = ReactConfig::default();
             let typed = neuron_turn_kit::TypedOutput::<CityInfo>::new();
-            let op = ReactOperator::new(provider, tools, state, config)
-                .with_output_type(typed);
+            let op = ReactOperator::new(provider, tools, state, config).with_output_type(typed);
             let input = OperatorInput::new(
                 Content::text("What is Tokyo?"),
                 layer0::operator::TriggerType::Task,
@@ -3357,8 +3350,7 @@ mod tests {
             let state: Arc<dyn layer0::StateReader> = Arc::new(NullStateReader);
             let config = ReactConfig::default();
             let typed = neuron_turn_kit::TypedOutput::<CityInfo>::new();
-            let op = ReactOperator::new(provider, tools, state, config)
-                .with_output_type(typed);
+            let op = ReactOperator::new(provider, tools, state, config).with_output_type(typed);
             let input = OperatorInput::new(
                 Content::text("What is Tokyo?"),
                 layer0::operator::TriggerType::Task,

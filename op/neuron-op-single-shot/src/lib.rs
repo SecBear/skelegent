@@ -143,7 +143,7 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
 mod tests {
     use super::*;
     use neuron_turn::infer::InferResponse;
-    use neuron_turn::test_utils::{error_provider_rate_limited, make_text_response, TestProvider};
+    use neuron_turn::test_utils::{TestProvider, error_provider_rate_limited, make_text_response};
     use neuron_turn::types::{StopReason, TokenUsage};
     use std::sync::Arc;
 
@@ -238,7 +238,9 @@ mod tests {
             SingleShotConfig::default(),
         ));
 
-        let output = Operator::execute(op.as_ref(), simple_input("Hi")).await.unwrap();
+        let output = Operator::execute(op.as_ref(), simple_input("Hi"))
+            .await
+            .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
     }
 }

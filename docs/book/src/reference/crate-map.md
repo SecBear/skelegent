@@ -19,7 +19,8 @@ All crates in the neuron workspace, organized by architectural layer.
 | `neuron-tool` | `ToolDyn` trait, `ToolRegistry`, `AliasedTool`. Object-safe tool abstraction. |
 | `neuron-context` | Conversation context assembly and compaction strategies. |
 | `neuron-mcp` | MCP (Model Context Protocol) client. Wraps MCP server tools as `ToolDyn` implementations. |
-| `neuron-op-react` | ReAct operator. Implements `Operator` with the reason-act-observe loop and tool execution. |
+| `neuron-context-engine` | Composable three-phase context engine (assembly, inference, reaction). Implements `Operator` with tool execution. |
+| `neuron-tool-macro` | Proc macro for `#[neuron_tool]` attribute. Generates `ToolDyn` implementations from async functions. |
 | `neuron-op-single-shot` | Single-shot operator. Implements `Operator` with one model call and no tools. |
 | `neuron-turn-kit` | Turn engine primitives: `DispatchPlanner`, `ConcurrencyDecider`, `BatchExecutor` (execution-only), `SteeringSource`. |
 
@@ -72,10 +73,10 @@ All crates in the neuron workspace, organized by architectural layer.
 | Layer | Crates |
 |-------|--------|
 | 0 | 1 |
-| 1 | 10 |
+| 1 | 11 |
 | 2 | 4 |
 | 3 | 2 |
 | 4 | 5 |
 | 5 | 1 |
 | Umbrella | 1 |
-| **Total** | **24** |
+| **Total** | **25** |
