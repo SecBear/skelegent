@@ -4,19 +4,20 @@
 //! Implements `layer0::Operator` by running the Reason-Act-Observe cycle:
 //! assemble context → call model → execute tools → repeat until done.
 
+mod intercept;
+pub use intercept::*;
+
 use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::duration::DurationMs;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError};
-use layer0::hook::{HookAction, HookContext, HookPayload, HookPoint};
 use layer0::id::{AgentId, WorkflowId};
 use layer0::lifecycle::{BudgetEvent, CompactionEvent};
 use layer0::operator::{
     ExitReason, Operator, OperatorInput, OperatorMetadata, OperatorOutput, SubDispatchRecord,
 };
 use layer0::orchestrator::Orchestrator;
-use neuron_hooks::HookRegistry;
 use neuron_tool::adapter::ToolRegistryOrchestrator;
 use neuron_tool::{ToolConcurrencyHint, ToolRegistry};
 
@@ -183,7 +184,7 @@ pub struct ReactOperator<P: Provider> {
     provider: P,
     tools: ToolRegistry,
     context_strategy: Box<dyn ContextStrategy>,
-    hooks: HookRegistry,
+    interceptor: Option<Arc<dyn ReactInterceptor>>,
     state_reader: Arc<dyn layer0::StateReader>,
     config: ReactConfig,
     planner: Box<dyn DispatchPlanner>,
@@ -206,7 +207,6 @@ impl<P: Provider> ReactOperator<P> {
         provider: P,
         tools: ToolRegistry,
         context_strategy: Box<dyn ContextStrategy>,
-        hooks: HookRegistry,
         state_reader: Arc<dyn layer0::StateReader>,
         config: ReactConfig,
     ) -> Self {
@@ -216,7 +216,7 @@ impl<P: Provider> ReactOperator<P> {
             provider,
             tools,
             context_strategy,
-            hooks,
+            interceptor: None,
             state_reader,
             config,
             planner: Box::new(SequentialPlanner),
@@ -246,6 +246,12 @@ impl<P: Provider> ReactOperator<P> {
         });
         self
     }
+    /// Opt-in: attach a [`ReactInterceptor`] for loop interception.
+    pub fn with_interceptor(mut self, interceptor: Arc<dyn ReactInterceptor>) -> Self {
+        self.interceptor = Some(interceptor);
+        self
+    }
+
     /// Opt-in: attach a steering source.
     pub fn with_steering(mut self, s: Arc<dyn SteeringSource>) -> Self {
         self.steering = Some(s);
@@ -491,26 +497,26 @@ impl<P: Provider> ReactOperator<P> {
         output
     }
 
-    fn build_hook_context(
+    fn build_loop_state(
         &self,
-        point: HookPoint,
         tokens_in: u64,
         tokens_out: u64,
         cost: Decimal,
         turns_completed: u32,
         elapsed: DurationMs,
-    ) -> HookContext {
-        let mut ctx = HookContext::new(point);
-        ctx.tokens_used = tokens_in + tokens_out;
-        ctx.cost = cost;
-        ctx.turns_completed = turns_completed;
-        ctx.elapsed = elapsed;
-        ctx
+    ) -> LoopState {
+        LoopState {
+            tokens_in,
+            tokens_out,
+            cost,
+            turns_completed,
+            elapsed,
+        }
     }
-    /// Poll the steering source and dispatch hook events.
+    /// Poll the steering source and dispatch interceptor events.
     ///
-    /// Returns injected messages (after hook approval) and context commands (unconditional).
-    /// Context commands bypass the `PreSteeringInject` hook — they are direct buffer manipulation.
+    /// Returns injected messages (after interceptor approval) and context commands (unconditional).
+    /// Context commands bypass the interceptor — they are direct buffer manipulation.
     async fn poll_steering(
         &self,
         ti: u64,
@@ -537,11 +543,12 @@ impl<P: Provider> ReactOperator<P> {
         if msgs_to_inject.is_empty() {
             return (vec![], ctx_cmds);
         }
-        let mut ctx =
-            self.build_hook_context(HookPoint::PreSteeringInject, ti, to, cost, turns, elapsed);
-        ctx.steering_messages = Some(msgs_to_inject.iter().map(|m| format!("{:?}", m)).collect());
-        if let HookAction::Halt { .. } = self.hooks.dispatch(&ctx).await {
-            return (vec![], ctx_cmds);
+        if let Some(ref interceptor) = self.interceptor {
+            let state = self.build_loop_state(ti, to, cost, turns, elapsed);
+            let msg_strs: Vec<String> = msgs_to_inject.iter().map(|m| format!("{:?}", m)).collect();
+            if let ReactAction::Halt { .. } = interceptor.pre_steering_inject(&state, &msg_strs).await {
+                return (vec![], ctx_cmds);
+            }
         }
         (msgs_to_inject, ctx_cmds)
     }
@@ -641,29 +648,30 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             self.state_reader.clear_transient();
             turns_used += 1;
 
-            // 1. Hook: PreInference
-            let hook_ctx = self.build_hook_context(
-                HookPoint::PreInference,
-                total_tokens_in,
-                total_tokens_out,
-                total_cost,
-                turns_used - 1,
-                DurationMs::from(start.elapsed()),
-            );
-            if let HookAction::Halt { reason } = self.hooks.dispatch(&hook_ctx).await {
-                return Ok(Self::make_output(
-                    parts_to_content(&last_content),
-                    ExitReason::ObserverHalt { reason },
-                    self.build_metadata(
-                        total_tokens_in,
-                        total_tokens_out,
-                        total_cost,
-                        turns_used,
-                        dispatch_records,
-                        DurationMs::from(start.elapsed()),
-                    ),
-                    effects,
-                ));
+            // 1. Interceptor: PreInference
+            if let Some(ref interceptor) = self.interceptor {
+                let state = self.build_loop_state(
+                    total_tokens_in,
+                    total_tokens_out,
+                    total_cost,
+                    turns_used - 1,
+                    DurationMs::from(start.elapsed()),
+                );
+                if let ReactAction::Halt { reason } = interceptor.pre_inference(&state).await {
+                    return Ok(Self::make_output(
+                        parts_to_content(&last_content),
+                        ExitReason::ObserverHalt { reason },
+                        self.build_metadata(
+                            total_tokens_in,
+                            total_tokens_out,
+                            total_cost,
+                            turns_used,
+                            dispatch_records,
+                            DurationMs::from(start.elapsed()),
+                        ),
+                        effects,
+                    ));
+                }
             }
 
             // 2. Build ProviderRequest
@@ -697,30 +705,31 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 }
             })?;
 
-            // 4. Hook: PostInference
-            let mut hook_ctx = self.build_hook_context(
-                HookPoint::PostInference,
-                total_tokens_in + response.usage.input_tokens,
-                total_tokens_out + response.usage.output_tokens,
-                total_cost + response.cost.unwrap_or(Decimal::ZERO),
-                turns_used,
-                DurationMs::from(start.elapsed()),
-            );
-            hook_ctx.model_output = Some(parts_to_content(&response.content));
-            if let HookAction::Halt { reason } = self.hooks.dispatch(&hook_ctx).await {
-                return Ok(Self::make_output(
-                    parts_to_content(&response.content),
-                    ExitReason::ObserverHalt { reason },
-                    self.build_metadata(
-                        total_tokens_in + response.usage.input_tokens,
-                        total_tokens_out + response.usage.output_tokens,
-                        total_cost + response.cost.unwrap_or(Decimal::ZERO),
-                        turns_used,
-                        dispatch_records,
-                        DurationMs::from(start.elapsed()),
-                    ),
-                    effects,
-                ));
+            // 4. Interceptor: PostInference
+            if let Some(ref interceptor) = self.interceptor {
+                let state = self.build_loop_state(
+                    total_tokens_in + response.usage.input_tokens,
+                    total_tokens_out + response.usage.output_tokens,
+                    total_cost + response.cost.unwrap_or(Decimal::ZERO),
+                    turns_used,
+                    DurationMs::from(start.elapsed()),
+                );
+                let resp_content = parts_to_content(&response.content);
+                if let ReactAction::Halt { reason } = interceptor.post_inference(&state, &resp_content).await {
+                    return Ok(Self::make_output(
+                        parts_to_content(&response.content),
+                        ExitReason::ObserverHalt { reason },
+                        self.build_metadata(
+                            total_tokens_in + response.usage.input_tokens,
+                            total_tokens_out + response.usage.output_tokens,
+                            total_cost + response.cost.unwrap_or(Decimal::ZERO),
+                            turns_used,
+                            dispatch_records,
+                            DurationMs::from(start.elapsed()),
+                        ),
+                        effects,
+                    ));
+                }
             }
 
             // 5. Aggregate tokens + cost
@@ -830,17 +839,15 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         false,
                                     ));
                                 }
-                                if !skipped_names.is_empty() {
-                                    let mut skip_ctx = self.build_hook_context(
-                                        HookPoint::PostSteeringSkip,
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        DurationMs::from(start.elapsed()),
+                                if !skipped_names.is_empty() && let Some(ref interceptor) = self.interceptor {
+                                    let state = self.build_loop_state(
+                                    total_tokens_in,
+                                    total_tokens_out,
+                                    total_cost,
+                                    turns_used,
+                                    DurationMs::from(start.elapsed()),
                                     );
-                                    skip_ctx.skipped_operators = Some(skipped_names);
-                                    self.hooks.dispatch(&skip_ctx).await;
+                                    interceptor.post_steering_skip(&state, &skipped_names).await;
                                 }
                                 _steered = true;
                                 break 'batches;
@@ -883,17 +890,15 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                             false,
                                         ));
                                     }
-                                    if !skipped_names.is_empty() {
-                                        let mut skip_ctx = self.build_hook_context(
-                                            HookPoint::PostSteeringSkip,
-                                            total_tokens_in,
-                                            total_tokens_out,
-                                            total_cost,
-                                            turns_used,
-                                            DurationMs::from(start.elapsed()),
+                                    if !skipped_names.is_empty() && let Some(ref interceptor) = self.interceptor {
+                                        let state = self.build_loop_state(
+                                        total_tokens_in,
+                                        total_tokens_out,
+                                        total_cost,
+                                        turns_used,
+                                        DurationMs::from(start.elapsed()),
                                         );
-                                        skip_ctx.skipped_operators = Some(skipped_names);
-                                        self.hooks.dispatch(&skip_ctx).await;
+                                        interceptor.post_steering_skip(&state, &skipped_names).await;
                                     }
                                     _steered = true;
                                 }
@@ -931,49 +936,49 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     }
                                 }
                             } else {
-                                // Hook: PreSubDispatch
                                 let mut actual_input = dispatch_input.clone();
-                                let mut hook_ctx = HookContext::new(HookPoint::PreSubDispatch);
-                                hook_ctx.operator_name = Some(name.clone());
-                                hook_ctx.operator_input = Some(dispatch_input.clone());
-                                hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
-                                hook_ctx.cost = total_cost;
-                                hook_ctx.turns_completed = turns_used;
-                                hook_ctx.elapsed = DurationMs::from(start.elapsed());
-                                match self.hooks.dispatch(&hook_ctx).await {
-                                    HookAction::Halt { reason } => {
-                                        return Ok(Self::make_output(
-                                            parts_to_content(&last_content),
-                                            ExitReason::ObserverHalt { reason },
-                                            self.build_metadata(
-                                                total_tokens_in,
-                                                total_tokens_out,
-                                                total_cost,
-                                                turns_used,
-                                                dispatch_records,
-                                                DurationMs::from(start.elapsed()),
-                                            ),
-                                            effects,
-                                        ));
+                                if let Some(ref interceptor) = self.interceptor {
+                                    let state = self.build_loop_state(
+                                        total_tokens_in,
+                                        total_tokens_out,
+                                        total_cost,
+                                        turns_used,
+                                        DurationMs::from(start.elapsed()),
+                                    );
+                                    match interceptor.pre_sub_dispatch(&state, &name, &dispatch_input).await {
+                                        SubDispatchAction::Halt { reason } => {
+                                            return Ok(Self::make_output(
+                                                parts_to_content(&last_content),
+                                                ExitReason::ObserverHalt { reason },
+                                                self.build_metadata(
+                                                    total_tokens_in,
+                                                    total_tokens_out,
+                                                    total_cost,
+                                                    turns_used,
+                                                    dispatch_records,
+                                                    DurationMs::from(start.elapsed()),
+                                                ),
+                                                effects,
+                                            ));
+                                        }
+                                        SubDispatchAction::Skip { reason } => {
+                                            dispatch_results.push(ContentPart::ToolResult {
+                                                tool_use_id: id,
+                                                content: format!("Skipped: {reason}"),
+                                                is_error: false,
+                                            });
+                                            dispatch_records.push(SubDispatchRecord::new(
+                                                &name,
+                                                DurationMs::ZERO,
+                                                false,
+                                            ));
+                                            continue;
+                                        }
+                                        SubDispatchAction::ModifyInput { new_input } => {
+                                            actual_input = new_input;
+                                        }
+                                        SubDispatchAction::Continue => {}
                                     }
-                                    HookAction::SkipDispatch { reason } => {
-                                        dispatch_results.push(ContentPart::ToolResult {
-                                            tool_use_id: id,
-                                            content: format!("Skipped: {reason}"),
-                                            is_error: false,
-                                        });
-                                        dispatch_records.push(SubDispatchRecord::new(
-                                            &name,
-                                            DurationMs::ZERO,
-                                            false,
-                                        ));
-                                        continue;
-                                    }
-                                    HookAction::ModifyDispatchInput { new_input } => {
-                                        actual_input = new_input;
-                                    }
-                                    HookAction::Continue => {}
-                                    _ => {}
                                 }
                                 // Execute via orchestrator dispatch
                                 let tool_start = Instant::now();
@@ -1015,34 +1020,35 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                         ),
                                     }
                                 };
-                                // PostSubDispatch hook
-                                let mut hook_ctx = HookContext::new(HookPoint::PostSubDispatch);
-                                hook_ctx.operator_name = Some(name.clone());
-                                hook_ctx.operator_result = Some(result_content.clone());
-                                hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
-                                hook_ctx.cost = total_cost;
-                                hook_ctx.turns_completed = turns_used;
-                                hook_ctx.elapsed = DurationMs::from(start.elapsed());
-                                match self.hooks.dispatch(&hook_ctx).await {
-                                    HookAction::Halt { reason } => {
-                                        return Ok(Self::make_output(
-                                            parts_to_content(&last_content),
-                                            ExitReason::ObserverHalt { reason },
-                                            self.build_metadata(
-                                                total_tokens_in,
-                                                total_tokens_out,
-                                                total_cost,
-                                                turns_used,
-                                                dispatch_records,
-                                                DurationMs::from(start.elapsed()),
-                                            ),
-                                            effects,
-                                        ));
+                                if let Some(ref interceptor) = self.interceptor {
+                                    let state = self.build_loop_state(
+                                        total_tokens_in,
+                                        total_tokens_out,
+                                        total_cost,
+                                        turns_used,
+                                        DurationMs::from(start.elapsed()),
+                                    );
+                                    match interceptor.post_sub_dispatch(&state, &name, &result_content).await {
+                                        SubDispatchResult::Halt { reason } => {
+                                            return Ok(Self::make_output(
+                                                parts_to_content(&last_content),
+                                                ExitReason::ObserverHalt { reason },
+                                                self.build_metadata(
+                                                    total_tokens_in,
+                                                    total_tokens_out,
+                                                    total_cost,
+                                                    turns_used,
+                                                    dispatch_records,
+                                                    DurationMs::from(start.elapsed()),
+                                                ),
+                                                effects,
+                                            ));
+                                        }
+                                        SubDispatchResult::ModifyOutput { new_output } => {
+                                            result_content = new_output;
+                                        }
+                                        SubDispatchResult::Continue => {}
                                     }
-                                    HookAction::ModifyDispatchOutput { new_output } => {
-                                        result_content = new_output.to_string();
-                                    }
-                                    _ => {}
                                 }
                                 dispatch_results.push(ContentPart::ToolResult {
                                     tool_use_id: id,
@@ -1105,17 +1111,15 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                                 false,
                                             ));
                                         }
-                                        if !skipped_names.is_empty() {
-                                            let mut skip_ctx = self.build_hook_context(
-                                                HookPoint::PostSteeringSkip,
-                                                total_tokens_in,
-                                                total_tokens_out,
-                                                total_cost,
-                                                turns_used,
-                                                DurationMs::from(start.elapsed()),
+                                        if !skipped_names.is_empty() && let Some(ref interceptor) = self.interceptor {
+                                            let state = self.build_loop_state(
+                                            total_tokens_in,
+                                            total_tokens_out,
+                                            total_cost,
+                                            turns_used,
+                                            DurationMs::from(start.elapsed()),
                                             );
-                                            skip_ctx.skipped_operators = Some(skipped_names);
-                                            self.hooks.dispatch(&skip_ctx).await;
+                                            interceptor.post_steering_skip(&state, &skipped_names).await;
                                         }
                                         break 'batches;
                                     }
@@ -1167,16 +1171,16 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     DurationMs::ZERO,
                                     false,
                                 ));
-                                let mut skip_ctx = self.build_hook_context(
-                                    HookPoint::PostSteeringSkip,
-                                    total_tokens_in,
-                                    total_tokens_out,
-                                    total_cost,
-                                    turns_used,
-                                    DurationMs::from(start.elapsed()),
-                                );
-                                skip_ctx.skipped_operators = Some(skipped_names);
-                                self.hooks.dispatch(&skip_ctx).await;
+                                if let Some(ref interceptor) = self.interceptor {
+                                    let state = self.build_loop_state(
+                                        total_tokens_in,
+                                        total_tokens_out,
+                                        total_cost,
+                                        turns_used,
+                                        DurationMs::from(start.elapsed()),
+                                    );
+                                    interceptor.post_steering_skip(&state, &skipped_names).await;
+                                }
                                 _steered = true;
                                 break 'batches;
                             }
@@ -1213,47 +1217,48 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             continue;
                         }
                         let mut actual_input = dispatch_input.clone();
-                        let mut hook_ctx = HookContext::new(HookPoint::PreSubDispatch);
-                        hook_ctx.operator_name = Some(name.clone());
-                        hook_ctx.operator_input = Some(dispatch_input.clone());
-                        hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
-                        hook_ctx.cost = total_cost;
-                        hook_ctx.turns_completed = turns_used;
-                        hook_ctx.elapsed = DurationMs::from(start.elapsed());
-                        match self.hooks.dispatch(&hook_ctx).await {
-                            HookAction::Halt { reason } => {
-                                return Ok(Self::make_output(
-                                    parts_to_content(&last_content),
-                                    ExitReason::ObserverHalt { reason },
-                                    self.build_metadata(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        dispatch_records,
-                                        DurationMs::from(start.elapsed()),
-                                    ),
-                                    effects,
-                                ));
+                        if let Some(ref interceptor) = self.interceptor {
+                            let state = self.build_loop_state(
+                                total_tokens_in,
+                                total_tokens_out,
+                                total_cost,
+                                turns_used,
+                                DurationMs::from(start.elapsed()),
+                            );
+                            match interceptor.pre_sub_dispatch(&state, &name, &dispatch_input).await {
+                                SubDispatchAction::Halt { reason } => {
+                                    return Ok(Self::make_output(
+                                        parts_to_content(&last_content),
+                                        ExitReason::ObserverHalt { reason },
+                                        self.build_metadata(
+                                            total_tokens_in,
+                                            total_tokens_out,
+                                            total_cost,
+                                            turns_used,
+                                            dispatch_records,
+                                            DurationMs::from(start.elapsed()),
+                                        ),
+                                        effects,
+                                    ));
+                                }
+                                SubDispatchAction::Skip { reason } => {
+                                    dispatch_results.push(ContentPart::ToolResult {
+                                        tool_use_id: id,
+                                        content: format!("Skipped: {reason}"),
+                                        is_error: false,
+                                    });
+                                    dispatch_records.push(SubDispatchRecord::new(
+                                        &name,
+                                        DurationMs::ZERO,
+                                        false,
+                                    ));
+                                    continue;
+                                }
+                                SubDispatchAction::ModifyInput { new_input } => {
+                                    actual_input = new_input;
+                                }
+                                SubDispatchAction::Continue => {}
                             }
-                            HookAction::SkipDispatch { reason } => {
-                                dispatch_results.push(ContentPart::ToolResult {
-                                    tool_use_id: id,
-                                    content: format!("Skipped: {reason}"),
-                                    is_error: false,
-                                });
-                                dispatch_records.push(SubDispatchRecord::new(
-                                    &name,
-                                    DurationMs::ZERO,
-                                    false,
-                                ));
-                                continue;
-                            }
-                            HookAction::ModifyDispatchInput { new_input } => {
-                                actual_input = new_input;
-                            }
-                            HookAction::Continue => {}
-                            _ => {}
                         }
                         let tool_start = Instant::now();
                         // Execute via orchestrator dispatch
@@ -1286,33 +1291,35 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 ),
                             }
                         };
-                        let mut hook_ctx = HookContext::new(HookPoint::PostSubDispatch);
-                        hook_ctx.operator_name = Some(name.clone());
-                        hook_ctx.operator_result = Some(result_content.clone());
-                        hook_ctx.tokens_used = total_tokens_in + total_tokens_out;
-                        hook_ctx.cost = total_cost;
-                        hook_ctx.turns_completed = turns_used;
-                        hook_ctx.elapsed = DurationMs::from(start.elapsed());
-                        match self.hooks.dispatch(&hook_ctx).await {
-                            HookAction::Halt { reason } => {
-                                return Ok(Self::make_output(
-                                    parts_to_content(&last_content),
-                                    ExitReason::ObserverHalt { reason },
-                                    self.build_metadata(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        dispatch_records,
-                                        DurationMs::from(start.elapsed()),
-                                    ),
-                                    effects,
-                                ));
+                        if let Some(ref interceptor) = self.interceptor {
+                            let state = self.build_loop_state(
+                                total_tokens_in,
+                                total_tokens_out,
+                                total_cost,
+                                turns_used,
+                                DurationMs::from(start.elapsed()),
+                            );
+                            match interceptor.post_sub_dispatch(&state, &name, &result_content).await {
+                                SubDispatchResult::Halt { reason } => {
+                                    return Ok(Self::make_output(
+                                        parts_to_content(&last_content),
+                                        ExitReason::ObserverHalt { reason },
+                                        self.build_metadata(
+                                            total_tokens_in,
+                                            total_tokens_out,
+                                            total_cost,
+                                            turns_used,
+                                            dispatch_records,
+                                            DurationMs::from(start.elapsed()),
+                                        ),
+                                        effects,
+                                    ));
+                                }
+                                SubDispatchResult::ModifyOutput { new_output } => {
+                                    result_content = new_output;
+                                }
+                                SubDispatchResult::Continue => {}
                             }
-                            HookAction::ModifyDispatchOutput { new_output } => {
-                                result_content = new_output.to_string();
-                            }
-                            _ => {}
                         }
                         dispatch_results.push(ContentPart::ToolResult {
                             tool_use_id: id,
@@ -1369,29 +1376,30 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = messages.clone();
 
-            // 8. Hook: ExitCheck — safety halt must fire before any limit checks
-            let hook_ctx = self.build_hook_context(
-                HookPoint::ExitCheck,
-                total_tokens_in,
-                total_tokens_out,
-                total_cost,
-                turns_used,
-                DurationMs::from(start.elapsed()),
-            );
-            if let HookAction::Halt { reason } = self.hooks.dispatch(&hook_ctx).await {
-                return Ok(Self::make_output(
-                    parts_to_content(&last_content),
-                    ExitReason::ObserverHalt { reason },
-                    self.build_metadata(
-                        total_tokens_in,
-                        total_tokens_out,
-                        total_cost,
-                        turns_used,
-                        dispatch_records,
-                        DurationMs::from(start.elapsed()),
-                    ),
-                    effects,
-                ));
+            // 8. Interceptor: ExitCheck — safety halt fires before any limit checks
+            if let Some(ref interceptor) = self.interceptor {
+                let state = self.build_loop_state(
+                    total_tokens_in,
+                    total_tokens_out,
+                    total_cost,
+                    turns_used,
+                    DurationMs::from(start.elapsed()),
+                );
+                if let ReactAction::Halt { reason } = interceptor.exit_check(&state).await {
+                    return Ok(Self::make_output(
+                        parts_to_content(&last_content),
+                        ExitReason::ObserverHalt { reason },
+                        self.build_metadata(
+                            total_tokens_in,
+                            total_tokens_out,
+                            total_cost,
+                            turns_used,
+                            dispatch_records,
+                            DurationMs::from(start.elapsed()),
+                        ),
+                        effects,
+                    ));
+                }
             }
 
             // 9. Check limits
@@ -1549,21 +1557,25 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 .context_strategy
                 .should_compact(&messages, effective_limit)
             {
-                // Fire PreCompaction hook
-                let pre_compact_ctx = {
-                    let mut ctx = HookContext::new(HookPoint::PreCompaction);
-                    ctx.payload = Some(HookPayload::Compaction {
-                        message_count_before: messages.len(),
-                        message_count_after: None,
-                    });
-                    ctx
+                // Interceptor: PreCompaction
+                let should_compact = if let Some(ref interceptor) = self.interceptor {
+                    let state = self.build_loop_state(
+                        total_tokens_in,
+                        total_tokens_out,
+                        total_cost,
+                        turns_used,
+                        DurationMs::from(start.elapsed()),
+                    );
+                    matches!(interceptor.pre_compaction(&state, messages.len()).await, ReactAction::Continue)
+                } else {
+                    true
                 };
-                if let HookAction::Halt { reason } = self.hooks.dispatch(&pre_compact_ctx).await {
-                    // Hook blocked compaction — skip it
+                if !should_compact {
+                    // Interceptor blocked compaction — skip it
                     if let Some(ref sink) = self.compaction_sink {
                         sink.on_compaction_event(CompactionEvent::CompactionSkipped {
                             agent: AgentId::new("react"),
-                            reason: format!("blocked by hook: {reason}"),
+                            reason: "blocked by interceptor".into(),
                         });
                     }
                 } else {
@@ -1593,16 +1605,17 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 .current_context
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner()) = messages.clone();
-                            // Fire PostCompaction hook
-                            let post_compact_ctx = {
-                                let mut ctx = HookContext::new(HookPoint::PostCompaction);
-                                ctx.payload = Some(HookPayload::Compaction {
-                                    message_count_before: before_count as usize,
-                                    message_count_after: Some(after_count as usize),
-                                });
-                                ctx
-                            };
-                            self.hooks.dispatch(&post_compact_ctx).await;
+                            // Interceptor: PostCompaction
+                            if let Some(ref interceptor) = self.interceptor {
+                                let state = self.build_loop_state(
+                                    total_tokens_in,
+                                    total_tokens_out,
+                                    total_cost,
+                                    turns_used,
+                                    DurationMs::from(start.elapsed()),
+                                );
+                                interceptor.post_compaction(&state, before_count as usize, after_count as usize).await;
+                            }
                         }
                         Err(e) => {
                             if let Some(ref sink) = self.compaction_sink {
@@ -1708,7 +1721,6 @@ fn parse_scope(s: &str) -> Scope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neuron_hooks::HookRegistry;
     use neuron_tool::ToolRegistry;
     use neuron_turn::context::NoCompaction;
     use neuron_turn::provider::ProviderError;
@@ -1855,7 +1867,6 @@ mod tests {
             provider,
             ToolRegistry::new(),
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig::default(),
         )
@@ -1866,7 +1877,6 @@ mod tests {
             provider,
             tools,
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig::default(),
         )
@@ -1942,7 +1952,6 @@ mod tests {
             provider,
             tools,
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_turns: 2,
@@ -1964,7 +1973,6 @@ mod tests {
                 t
             },
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_turns: 2,
@@ -1990,7 +1998,6 @@ mod tests {
             provider,
             tools,
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig::default(),
         );
@@ -2272,7 +2279,6 @@ mod tests {
             provider,
             ToolRegistry::new(),
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig::default(),
         ));
@@ -2299,7 +2305,6 @@ mod tests {
             ErrorProvider,
             ToolRegistry::new(),
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig::default(),
         );
@@ -2534,7 +2539,6 @@ mod tests {
             counting,
             tools,
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig::default(),
         )
@@ -2635,33 +2639,19 @@ mod tests {
         }
     }
 
-    struct CollectHook {
-        points: Vec<HookPoint>,
-        chunks: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    struct CollectInterceptor {
         finals: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
     #[async_trait]
-    impl layer0::hook::Hook for CollectHook {
-        fn points(&self) -> &[HookPoint] {
-            &self.points
-        }
-        async fn on_event(
+    impl ReactInterceptor for CollectInterceptor {
+        async fn post_sub_dispatch(
             &self,
-            ctx: &HookContext,
-        ) -> Result<HookAction, layer0::error::HookError> {
-            if ctx.point == HookPoint::SubDispatchUpdate {
-                if let Some(c) = &ctx.operator_chunk {
-                    self.chunks.lock().unwrap().push(c.clone());
-                }
-                Ok(HookAction::Continue)
-            } else if ctx.point == HookPoint::PostSubDispatch {
-                if let Some(r) = &ctx.operator_result {
-                    self.finals.lock().unwrap().push(r.clone());
-                }
-                Ok(HookAction::Continue)
-            } else {
-                Ok(HookAction::Continue)
-            }
+            _state: &LoopState,
+            _tool_name: &str,
+            result: &str,
+        ) -> SubDispatchResult {
+            self.finals.lock().unwrap().push(result.to_string());
+            SubDispatchResult::Continue
         }
     }
 
@@ -2675,12 +2665,9 @@ mod tests {
         tools.register(Arc::new(StreamEcho));
         let chunks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let finals = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let mut hooks = HookRegistry::new();
-        hooks.add_observer(Arc::new(CollectHook {
-            points: vec![HookPoint::SubDispatchUpdate, HookPoint::PostSubDispatch],
-            chunks: chunks.clone(),
+        let interceptor: Arc<dyn ReactInterceptor> = Arc::new(CollectInterceptor {
             finals: finals.clone(),
-        }));
+        });
         let op = ReactOperator::new(
             MockProvider::new(vec![
                 tool_use_response("tu_s", "stream_echo", json!({})),
@@ -2688,10 +2675,10 @@ mod tests {
             ]),
             tools,
             Box::new(NoCompaction),
-            hooks,
             Arc::new(NullStateReader),
             ReactConfig::default(),
-        );
+        )
+        .with_interceptor(interceptor);
         let _ = op.execute(simple_input("run")).await.unwrap();
         // No streaming chunks — orchestrator dispatch is request-response only
         let got_chunks = chunks.lock().unwrap().clone();
@@ -2788,43 +2775,42 @@ mod tests {
     // ── mock structures ──────────────────────────────────────────────
 
     /// A hook that always returns Halt when it fires at one of its points.
-    struct HaltHook {
-        points: Vec<HookPoint>,
+    struct ExitCheckInterceptor {
         reason: String,
     }
     #[async_trait]
-    impl layer0::hook::Hook for HaltHook {
-        fn points(&self) -> &[HookPoint] {
-            &self.points
-        }
-        async fn on_event(
-            &self,
-            _ctx: &HookContext,
-        ) -> Result<HookAction, layer0::error::HookError> {
-            Ok(HookAction::Halt {
+    impl ReactInterceptor for ExitCheckInterceptor {
+        async fn exit_check(&self, _state: &LoopState) -> ReactAction {
+            ReactAction::Halt {
                 reason: self.reason.clone(),
-            })
+            }
         }
     }
 
-    /// An observer hook that records tool names from PostSteeringSkip events.
-    struct RecordSkippedHook {
+    struct SteeringBlockInterceptor {
+        reason: String,
+    }
+    #[async_trait]
+    impl ReactInterceptor for SteeringBlockInterceptor {
+        async fn pre_steering_inject(
+            &self,
+            _state: &LoopState,
+            _messages: &[String],
+        ) -> ReactAction {
+            ReactAction::Halt {
+                reason: self.reason.clone(),
+            }
+        }
+    }
+
+    struct RecordSkipInterceptor {
         recorded: std::sync::Arc<Mutex<Vec<String>>>,
     }
     #[async_trait]
-    impl layer0::hook::Hook for RecordSkippedHook {
-        fn points(&self) -> &[HookPoint] {
-            &[HookPoint::PostSteeringSkip]
-        }
-        async fn on_event(
-            &self,
-            ctx: &HookContext,
-        ) -> Result<HookAction, layer0::error::HookError> {
-            if let Some(tools) = &ctx.skipped_operators {
-                let mut v = self.recorded.lock().unwrap();
-                v.extend_from_slice(tools);
-            }
-            Ok(HookAction::Continue)
+    impl ReactInterceptor for RecordSkipInterceptor {
+        async fn post_steering_skip(&self, _state: &LoopState, skipped: &[String]) {
+            let mut v = self.recorded.lock().unwrap();
+            v.extend_from_slice(skipped);
         }
     }
 
@@ -2881,22 +2867,20 @@ mod tests {
         ]);
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        let mut hooks = HookRegistry::new();
-        hooks.add_guardrail(Arc::new(HaltHook {
-            points: vec![HookPoint::ExitCheck],
+        let interceptor: Arc<dyn ReactInterceptor> = Arc::new(ExitCheckInterceptor {
             reason: "observer_halt_test".into(),
-        }));
+        });
         let op = ReactOperator::new(
             provider,
             tools,
             Box::new(neuron_turn::context::NoCompaction),
-            hooks,
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_turns: 1,
                 ..Default::default()
             },
-        );
+        )
+        .with_interceptor(interceptor);
         let output = op.execute(simple_input("run")).await.unwrap();
         // Must be ObserverHalt, not MaxTurns
         match &output.exit_reason {
@@ -2935,20 +2919,17 @@ mod tests {
         tools.register(Arc::new(CountingEchoTool::new(hits.clone())));
         // Steering always returns a message
         let steering = Arc::new(MockSteering::new(vec![vec![user_msg("blocked steering")]]));
-        let mut hooks = HookRegistry::new();
-        // Guardrail blocks injection at PreSteeringInject
-        hooks.add_guardrail(Arc::new(HaltHook {
-            points: vec![HookPoint::PreSteeringInject],
+        let interceptor: Arc<dyn ReactInterceptor> = Arc::new(SteeringBlockInterceptor {
             reason: "injection_blocked".into(),
-        }));
+        });
         let op = ReactOperator::new(
             provider,
             tools,
             Box::new(neuron_turn::context::NoCompaction),
-            hooks,
             Arc::new(NullStateReader),
             ReactConfig::default(),
         )
+        .with_interceptor(interceptor)
         .with_steering(steering);
         let output = op.execute(simple_input("run")).await.unwrap();
         // Tool still executed (injection was blocked → tool ran)
@@ -2982,18 +2963,17 @@ mod tests {
         // Steering fires immediately to skip the tool
         let steering = Arc::new(MockSteering::new(vec![vec![user_msg("STEER NOW")]]));
         let recorded = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
-        let mut hooks = HookRegistry::new();
-        hooks.add_observer(Arc::new(RecordSkippedHook {
+        let interceptor: Arc<dyn ReactInterceptor> = Arc::new(RecordSkipInterceptor {
             recorded: recorded.clone(),
-        }));
+        });
         let op = ReactOperator::new(
             provider,
             tools,
             Box::new(neuron_turn::context::NoCompaction),
-            hooks,
             Arc::new(NullStateReader),
             ReactConfig::default(),
         )
+        .with_interceptor(interceptor)
         .with_steering(steering);
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
@@ -3063,7 +3043,6 @@ mod tests {
             Box::new(ThresholdCompaction {
                 last_limit: last_limit.clone(),
             }),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_tokens: 100,
@@ -3100,7 +3079,6 @@ mod tests {
             provider,
             tools,
             Box::new(neuron_turn::context::NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_turns: 10,
@@ -3129,7 +3107,6 @@ mod tests {
             provider,
             tools,
             Box::new(neuron_turn::context::NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_turns: 10,
@@ -3158,7 +3135,6 @@ mod tests {
             provider,
             tools,
             Box::new(neuron_turn::context::NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_turns: 10,
@@ -3186,7 +3162,6 @@ mod tests {
             provider,
             tools,
             Box::new(neuron_turn::context::NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 max_tool_calls: None,
@@ -3219,7 +3194,6 @@ mod tests {
             provider,
             tools,
             Box::new(neuron_turn::context::NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_model: "default-model".into(),
@@ -3254,7 +3228,6 @@ mod tests {
             provider,
             ToolRegistry::new(),
             Box::new(neuron_turn::context::NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_model: "my-model".into(),
@@ -3294,7 +3267,6 @@ mod tests {
             provider,
             tools,
             Box::new(NoCompaction),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_turns: 10,
@@ -3344,7 +3316,6 @@ mod tests {
             provider,
             tools,
             Box::new(ThresholdCompaction { last_limit }),
-            HookRegistry::new(),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_tokens: 1,

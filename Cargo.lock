@@ -939,7 +939,6 @@ dependencies = [
  "async-trait",
  "futures-util",
  "layer0",
- "neuron-hooks",
  "neuron-tool",
  "neuron-turn",
  "neuron-turn-kit",
@@ -996,7 +995,6 @@ dependencies = [
  "layer0",
  "neuron-auth",
  "neuron-context",
- "neuron-hooks",
  "neuron-op-react",
  "neuron-state-memory",
  "neuron-tool",
@@ -1015,7 +1013,6 @@ version = "0.4.0"
 dependencies = [
  "layer0",
  "neuron-context",
- "neuron-hooks",
  "neuron-op-react",
  "neuron-state-memory",
  "neuron-tool",
@@ -1035,7 +1032,6 @@ version = "0.4.0"
 dependencies = [
  "layer0",
  "neuron-context",
- "neuron-hooks",
  "neuron-op-react",
  "neuron-state-memory",
  "neuron-tool",

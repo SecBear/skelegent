@@ -18,7 +18,6 @@ use layer0::orchestrator::Orchestrator;
 use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
 use neuron_context::SlidingWindow;
-use neuron_hooks::HookRegistry;
 use neuron_op_react::{ReactConfig, ReactOperator};
 use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use neuron_orch_local::LocalOrch;
@@ -124,7 +123,6 @@ fn make_react_operator(provider: MockProvider) -> ReactOperator<MockProvider> {
         provider,
         ToolRegistry::new(),
         Box::new(SlidingWindow::new()),
-        HookRegistry::new(),
         Arc::new(NullStateReader),
         react_config(),
     )
@@ -174,32 +172,28 @@ impl Provider for MockProviderB {
 
 #[tokio::test]
 async fn provider_swap_same_config_different_backend() {
-    // The SAME ReactConfig, ToolRegistry, HookRegistry, and context strategy.
+    // The SAME ReactConfig, ToolRegistry, and context strategy.
     // Only the generic type parameter P (the provider) changes.
     let config = react_config();
     let tools = ToolRegistry::new();
-    let hooks = HookRegistry::new();
 
     // Provider A: returns "Hello from A"
     let op_a: ReactOperator<MockProvider> = ReactOperator::new(
         MockProvider::text("Hello from provider A"),
         tools,
         Box::new(SlidingWindow::new()),
-        hooks,
         Arc::new(NullStateReader),
         config,
     );
 
     let config_b = react_config();
     let tools_b = ToolRegistry::new();
-    let hooks_b = HookRegistry::new();
 
     // Provider B: returns "Hello from B" with different token counts
     let op_b: ReactOperator<MockProviderB> = ReactOperator::new(
         MockProviderB::text("Hello from provider B"),
         tools_b,
         Box::new(SlidingWindow::new()),
-        hooks_b,
         Arc::new(NullStateReader),
         config_b,
     );
@@ -229,7 +223,6 @@ async fn provider_swap_same_config_different_backend() {
         MockProviderB::text("dyn B"),
         ToolRegistry::new(),
         Box::new(SlidingWindow::new()),
-        HookRegistry::new(),
         Arc::new(NullStateReader),
         react_config(),
     ));

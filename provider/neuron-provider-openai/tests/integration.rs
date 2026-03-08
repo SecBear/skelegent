@@ -3,7 +3,6 @@
 use layer0::content::Content;
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
 use neuron_context::SlidingWindow;
-use neuron_hooks::HookRegistry;
 use neuron_op_react::{ReactConfig, ReactOperator};
 use neuron_provider_openai::OpenAIProvider;
 use neuron_tool::ToolRegistry;
@@ -17,7 +16,6 @@ async fn real_gpt4o_mini_simple_completion() {
     let provider = OpenAIProvider::new(api_key);
     let tools = ToolRegistry::new();
     let strategy = Box::new(SlidingWindow::new());
-    let hooks = HookRegistry::new();
     let store = Arc::new(neuron_state_memory::MemoryStore::new()) as Arc<dyn layer0::StateReader>;
 
     let config = ReactConfig {
@@ -28,7 +26,7 @@ async fn real_gpt4o_mini_simple_completion() {
         ..ReactConfig::default()
     };
 
-    let op = ReactOperator::new(provider, tools, strategy, hooks, store, config);
+    let op = ReactOperator::new(provider, tools, strategy, store, config);
 
     let input = OperatorInput::new(
         Content::text("Say hello in exactly 3 words."),
@@ -56,7 +54,6 @@ async fn openai_provider_is_object_safe_as_arc_dyn_operator() {
     let provider = OpenAIProvider::new(api_key);
     let tools = ToolRegistry::new();
     let strategy = Box::new(SlidingWindow::new());
-    let hooks = HookRegistry::new();
     let store = Arc::new(neuron_state_memory::MemoryStore::new()) as Arc<dyn layer0::StateReader>;
 
     let config = ReactConfig {
@@ -69,7 +66,7 @@ async fn openai_provider_is_object_safe_as_arc_dyn_operator() {
 
     // Prove ReactOperator<P> can be used as Arc<dyn Operator>
     let op: Arc<dyn Operator> = Arc::new(ReactOperator::new(
-        provider, tools, strategy, hooks, store, config,
+        provider, tools, strategy, store, config,
     ));
 
     let input = OperatorInput::new(Content::text("Say hi."), TriggerType::User);
