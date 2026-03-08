@@ -27,7 +27,6 @@ All termination reasons are surfaced in the `OperatorOutput` via `ExitReason`.
 neuron-op-react = "0.4"
 neuron-turn = "0.4"
 neuron-tool = "0.4"
-neuron-hooks = "0.4"
 ```
 
 ```rust
@@ -38,7 +37,6 @@ use std::sync::Arc;
 let operator = ReactOperator::new(
     Arc::new(my_provider),
     Arc::new(tool_registry),
-    Arc::new(hook_registry),
 );
 
 let output = operator.invoke(input, &env).await?;

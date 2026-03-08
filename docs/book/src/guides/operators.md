@@ -34,7 +34,6 @@ The ReAct operator implements the Reason-Act-Observe cycle:
 use std::sync::Arc;
 use neuron_op_react::{ReactConfig, ReactOperator};
 use neuron_provider_anthropic::AnthropicProvider;
-use neuron_hooks::HookRegistry;
 use neuron_tool::ToolRegistry;
 use neuron_turn::NoCompaction;
 use neuron_state_memory::MemoryStore;
@@ -48,14 +47,12 @@ let config = ReactConfig {
 
 let provider = AnthropicProvider::new("sk-ant-...");
 let tools = ToolRegistry::new();   // add tools as needed
-let hooks = HookRegistry::new();   // add hooks as needed
 let state = Arc::new(MemoryStore::new());
 
 let operator = ReactOperator::new(
     provider,
     tools,
     Box::new(NoCompaction),
-    hooks,
     state,
     config,
 );
@@ -99,7 +96,7 @@ The ReAct loop stops when:
 - **`MaxTurns`** -- The `max_turns` limit was reached.
 - **`BudgetExhausted`** -- Accumulated cost exceeded `max_cost`.
 - **`Timeout`** -- Wall-clock time exceeded `max_duration`.
-- **`ObserverHalt`** -- A hook returned `HookAction::Halt`.
+- **`InterceptorHalt`** -- A `ReactInterceptor` returned `ReactAction::Halt`.
 - **`CircuitBreaker`** -- Too many consecutive failures (provider errors or tool errors).
 - **`Error`** -- An unrecoverable error occurred.
 
@@ -178,8 +175,8 @@ For detailed guidance on composing `ReactOperator` with `BarrierPlanner`, `Steer
 
 That guide covers:
 - The three-primitive wiring pattern (`with_planner`, `with_steering`, `with_budget_sink`)
-- Implementing and registering `HookKind`-aware hooks (guardrails, transformers, observers)
-- Implementing `SteeringSource` and making steering observable via hooks
+- Implementing `ReactInterceptor` for loop interception
+- Implementing `SteeringSource` and making steering observable via interceptors
 
 The brief example skeleton below shows the shape of a custom operator that uses `ReactOperator` as its foundation. For a runnable version see the `custom-operator-barrier` example crate.
 
@@ -187,11 +184,10 @@ The brief example skeleton below shows the shape of a custom operator that uses 
 use std::sync::Arc;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, ExitReason};
 use neuron_op_react::{ReactConfig, ReactOperator, BarrierPlanner};
-use neuron_hooks::HookRegistry;
 use neuron_tool::ToolRegistry;
 
 // Build a ReactOperator with barrier scheduling:
-// let op = ReactOperator::new(provider, tools, context_strategy, hooks, state_reader, config)
+// let op = ReactOperator::new(provider, tools, context_strategy, state_reader, config)
 //     .with_planner(Box::new(BarrierPlanner))
 //     .with_concurrency_decider(Box::new(my_decider));
 ```

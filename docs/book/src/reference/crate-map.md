@@ -6,7 +6,7 @@ All crates in the neuron workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `layer0` | Protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`, `Hook`), message types, and error types. The stability contract. |
+| `layer0` | Protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`), middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`), message types, and error types. The stability contract. |
 
 ## Layer 1 -- Operator Implementations
 
@@ -53,8 +53,7 @@ All crates in the neuron workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-hooks` | `HookRegistry` for ordered hook pipeline dispatch. Collects and dispatches `Hook` events. |
-| `neuron-hook-security` | Security-focused hooks: guardrails, policy enforcement, secret redaction. |
+| `neuron-hook-security` | Security middleware: `RedactionMiddleware` (pattern-based content redaction) and `ExfilGuardMiddleware` (data-loss-prevention guardrails). |
 
 ## Umbrella
 
@@ -77,6 +76,6 @@ All crates in the neuron workspace, organized by architectural layer.
 | 2 | 4 |
 | 3 | 2 |
 | 4 | 5 |
-| 5 | 2 |
+| 5 | 1 |
 | Umbrella | 1 |
-| **Total** | **25** |
+| **Total** | **24** |

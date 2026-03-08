@@ -76,19 +76,6 @@ pub enum EnvError {
 
 Like `OrchError`, `OperatorError` propagates into `EnvError` via `From`.
 
-### HookError
-
-Errors from hook execution (Layer 0, `layer0::error::HookError`):
-
-```rust
-pub enum HookError {
-    Failed(String),         // Hook execution failed
-    Other(Box<dyn Error>),  // Catch-all
-}
-```
-
-Hook errors are **not** fatal. The hook registry logs them and continues with `HookAction::Continue`. To halt execution, a hook should return `Ok(HookAction::Halt { reason })`, not `Err(...)`.
-
 ### ProviderError
 
 Errors from LLM providers (Layer 1, `neuron_turn::provider::ProviderError`):

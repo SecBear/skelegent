@@ -15,9 +15,9 @@ dependency entry point for the most common combination of crates, controlled by 
 The framework is built on a **6-layer protocol model** where each layer is a Rust trait:
 
 ```
-layer0: Operator | StateStore | Environment | Orchestrator | Hook | Observable
-         ↓           ↓             ↓               ↓          ↓        ↓
-      operators   state        credentials    workflows   middleware  events
+layer0: Operator | StateStore | Environment | Orchestrator | Observable
+         ↓           ↓             ↓               ↓          ↓
+      operators   state        credentials    workflows   events
 ```
 
 Every layer is independently replaceable. You can use the Anthropic provider with the OpenAI
@@ -42,7 +42,6 @@ async fn main() -> anyhow::Result<()> {
     let operator = ReactOperator::new(
         Arc::new(provider),
         Arc::new(ToolRegistry::new()),
-        Arc::new(HookRegistry::new()),
     );
     let env = LocalEnv::new(Arc::new(EnvResolver));
 
@@ -58,9 +57,8 @@ async fn main() -> anyhow::Result<()> {
 | Flag | Includes | Description |
 |------|----------|-------------|
 | `core` (default) | `layer0`, `neuron-context`, `neuron-tool`, `neuron-turn` | Protocol + wiring |
-| `hooks` (default) | `core` + `neuron-hooks` | Hook middleware |
-| `op-react` | `hooks` + `neuron-op-react` | ReAct loop operator |
-| `op-single-shot` | `hooks` + `neuron-op-single-shot` | Single-turn operator |
+| `op-react` | `core` + `neuron-op-react` | ReAct loop operator |
+| `op-single-shot` | `core` + `neuron-op-single-shot` | Single-turn operator |
 | `mcp` | `core` + `neuron-mcp` | MCP bridge |
 | `orch-kit` | `core` + `neuron-orch-kit` | Orchestration wiring |
 | `orch-local` | `orch-kit` + `neuron-orch-local` | In-process orchestrator |
@@ -95,9 +93,8 @@ The workspace is split into focused crates you can depend on individually:
 - [`neuron-orch-kit`](https://crates.io/crates/neuron-orch-kit) — wiring kit
 - [`neuron-orch-local`](https://crates.io/crates/neuron-orch-local) — in-process orchestrator
 
-### Hooks & security
-- [`neuron-hooks`](https://crates.io/crates/neuron-hooks) — hook registry and middleware
-- [`neuron-hook-security`](https://crates.io/crates/neuron-hook-security) — redaction + DLP hooks
+### Middleware & security
+- [`neuron-hook-security`](https://crates.io/crates/neuron-hook-security) — security middleware (redaction + DLP)
 
 ### State
 - [`neuron-state-memory`](https://crates.io/crates/neuron-state-memory) — in-memory store

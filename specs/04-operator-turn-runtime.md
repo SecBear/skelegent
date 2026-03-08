@@ -26,13 +26,13 @@ Operators compose three independent primitives:
 
 ```rust
 let operator = ReactOperator::new(
-    provider, tools, context_strategy, hooks, state_reader, config,
+    provider, tools, context_strategy, middleware, state_reader, config,
 )
     .with_steering(source)       // external control flow (optional)
     .with_planner(barrier);      // execution strategy (optional)
 ```
 
-Hooks, operators registered with `ToolMetadata` (`tools`), context strategy, and state reader are required constructor parameters. Steering and planner are optional builder methods; the planner type is `DispatchPlanner` (renamed from `ToolExecutionPlanner`). Default: no steering, sequential planner. See `ARCHITECTURE.md` §Three-Primitive and `specs/09-hooks-lifecycle-and-governance.md` for full architectural position.
+Middleware stacks, operators registered with `ToolMetadata` (`tools`), context strategy, and state reader are required constructor parameters. Steering and planner are optional builder methods; the planner type is `DispatchPlanner` (renamed from `ToolExecutionPlanner`). Default: no steering, sequential planner. See `ARCHITECTURE.md` §Three-Primitive and `specs/09-hooks-lifecycle-and-governance.md` for full architectural position.
 
 ## Exit Reasons
 
@@ -47,7 +47,7 @@ Exit reasons are explicit and stable. Orchestrators use them to decide what happ
 | `BudgetExhausted` | Cost limit or total sub-dispatch count (`max_sub_dispatches`) reached | — | No (without budget change) |
 | `CircuitBreaker` | Consecutive failure counter trips | — | Possibly (with backoff) |
 | `Timeout` | Wall-clock elapsed ≥ `max_duration` | — | Yes (new invocation) |
-| `ObserverHalt { reason }` | ExitCheck hook returned `HookAction::Halt` | — | No |
+| `MiddlewareHalt { reason }` | ExitCheck middleware returned halt | — | No |
 | `Custom("stuck_detected")` | Identical consecutive sub-dispatches exceed `max_repeat_dispatches` | — | No (without context change) |
 | `Error` | Unrecoverable execution failure | — | Depends |
 
@@ -68,9 +68,9 @@ Provider mapping: Anthropic `refusal`, OpenAI `content_filter`, Google `SAFETY` 
 
 ### Exit Priority Ordering
 
-Priority is highest-first. ExitCheck hook fires before all limit checks:
+Priority is highest-first. ExitCheck middleware fires before all limit checks:
 
-1. Hook halts (PreInference, PostInference, ExitCheck) — `ObserverHalt`
+1. Middleware halts (PreInference, PostInference, ExitCheck) — `MiddlewareHalt`
 2. Step/loop limits:
    - `max_sub_dispatches` reached → `BudgetExhausted` (also emits `BudgetEvent::StepLimitReached`)
    - `max_repeat_dispatches` exceeded → `Custom("stuck_detected")` (also emits `BudgetEvent::LoopDetected`)
@@ -82,14 +82,14 @@ Note: `BudgetExhausted` appears at both priority 2 and 4. Orchestrators that nee
 distinguish step exhaustion from cost exhaustion should inspect the `BudgetEvent` sink
 events rather than relying on `ExitReason` alone.
 
-See `specs/09` for full hook dispatch semantics.
+See `specs/09` for full middleware dispatch semantics.
 
 ## Steering Observability
 
-Steering (`SteeringSource`) is polled at defined boundaries. Hooks observe steering without owning it:
+Steering (`SteeringSource`) is polled at defined boundaries. Middleware observes steering without owning it:
 
-- `PreSteeringInject`: fires after drain returns messages, before they enter context. Guardrails can reject.
-- `PostSteeringSkip`: fires after tools are skipped due to steering. Observers can log.
+- `PreSteeringInject`: fires after drain returns messages, before they enter context. Guardrail middleware can reject.
+- `PostSteeringSkip`: fires after tools are skipped due to steering. Observer middleware can log.
 
 Steering poll-and-dispatch logic is extracted into a helper (`poll_steering`) shared across the ~6 polling sites in the main loop.
 
@@ -192,8 +192,8 @@ Implemented:
 - `neuron-op-single-shot` — functional.
 - `neuron-op-react` — full ReAct loop; emits effects.
 - Steering integrated with boundary polling and skip semantics.
-- Hook dispatch at PreInference, PostInference, PreSubDispatch, PostSubDispatch, ExitCheck, SubDispatchUpdate.
-- ExitCheck hook fires before all limit checks.
+- Middleware dispatch at PreInference, PostInference, PreSubDispatch, PostSubDispatch, ExitCheck, SubDispatchUpdate.
+- ExitCheck middleware fires before all limit checks.
 - Compaction reserve enforcement via `compaction_reserve_pct`.
 - Step/loop limits (`max_sub_dispatches`, `max_repeat_dispatches`) with BudgetEvent emission.
 - Model selector callback.

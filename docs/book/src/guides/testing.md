@@ -41,8 +41,8 @@ fn environment_is_object_safe_and_send_sync() {
 }
 
 #[test]
-fn hook_is_object_safe_and_send_sync() {
-    _assert_send_sync::<Box<dyn layer0::Hook>>();
+fn dispatch_middleware_is_object_safe_and_send_sync() {
+    _assert_send_sync::<Box<dyn layer0::DispatchMiddleware>>();
 }
 ```
 
@@ -103,7 +103,6 @@ Then construct an operator with the mock provider:
 
 ```rust,no_run
 use neuron_op_react::{ReactConfig, ReactOperator};
-use neuron_hooks::HookRegistry;
 use neuron_tool::ToolRegistry;
 use neuron_turn_kit::FullContext;
 use neuron_state_memory::MemoryStore;
@@ -113,7 +112,6 @@ let operator = ReactOperator::new(
     mock_provider,
     ToolRegistry::new(),
     Box::new(FullContext),
-    HookRegistry::new(),
     Arc::new(MemoryStore::new()),
     ReactConfig::default(),
 );

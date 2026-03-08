@@ -47,11 +47,11 @@ For each protocol trait, the philosophy is captured in this checklist. Implement
 - [ ] Credential injection MUST be mediated by the environment, never by the operator itself.
 - [ ] Error messages MUST NOT contain secret material.
 
-#### Hook
+#### Middleware
 
-- [ ] Hooks MUST NOT change control flow (that's Steering's job). Hooks observe and intervene at defined points.
-- [ ] `HookAction::Continue` MUST be the default. Hooks that fail MUST be treated as Continue (logged, not fatal).
-- [ ] Observer hooks MUST all run. Guardrail hooks MUST short-circuit on Halt. Transformer hooks MUST chain.
+- [ ] Middleware MUST NOT change control flow outside its boundary (that's Steering's job). Middleware intercepts at defined boundaries (dispatch, store, exec).
+- [ ] Middleware that fails MUST be treated as a pass-through (logged, not fatal).
+- [ ] Observer middleware MUST all run. Guardrail middleware MUST short-circuit on rejection. Transformer middleware MUST chain.
 
 ## When adding new default methods to a protocol trait
 

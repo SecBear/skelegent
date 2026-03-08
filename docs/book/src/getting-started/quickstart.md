@@ -7,7 +7,6 @@ This example creates an Anthropic provider, registers a tool, builds a ReAct ope
 ```rust,no_run
 use layer0::content::Content;
 use layer0::operator::{Operator, OperatorInput, TriggerType};
-use neuron_hooks::HookRegistry;
 use neuron_op_react::{ReactConfig, ReactOperator};
 use neuron_provider_anthropic::AnthropicProvider;
 use neuron_tool::{ToolDyn, ToolError, ToolRegistry};
@@ -79,7 +78,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         provider,
         tools,
         context_strategy,
-        HookRegistry::new(),
         state_reader,
         config,
     );

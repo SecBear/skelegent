@@ -75,7 +75,7 @@ pub enum ExitReason {
     BudgetExhausted,            // Hit cost budget
     CircuitBreaker,             // Consecutive failures
     Timeout,                    // Wall-clock timeout
-    ObserverHalt { reason },    // Hook halted execution
+    MiddlewareHalt { reason },    // Middleware halted execution
     Error,                      // Unrecoverable error
     Custom(String),             // Extension point
 }
@@ -219,43 +219,60 @@ pub struct EnvironmentSpec {
 }
 ```
 
-## Interface 5: Hook
+## Interface 5: Per-Boundary Middleware
 
-**Crate:** `layer0::hook`
+**Crate:** `layer0::middleware`
 
-Observation and intervention in the operator's inner loop.
+Observation and intervention at protocol boundaries. Three traits cover the three boundaries where cross-cutting logic is needed:
 
 ```rust
 #[async_trait]
-pub trait Hook: Send + Sync {
-    fn points(&self) -> &[HookPoint];
-    async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError>;
+pub trait DispatchMiddleware: Send + Sync {
+    async fn on_dispatch(
+        &self,
+        agent: &AgentId,
+        input: OperatorInput,
+        next: DispatchNext<'_>,
+    ) -> Result<OperatorOutput, OrchError>;
+}
+
+#[async_trait]
+pub trait StoreMiddleware: Send + Sync {
+    async fn on_read(
+        &self,
+        scope: &Scope,
+        key: &str,
+        next: StoreNext<'_>,
+    ) -> Result<Option<serde_json::Value>, StateError>;
+
+    async fn on_write(
+        &self,
+        scope: &Scope,
+        key: &str,
+        value: serde_json::Value,
+        next: StoreNext<'_>,
+    ) -> Result<(), StateError>;
+}
+
+#[async_trait]
+pub trait ExecMiddleware: Send + Sync {
+    async fn on_exec(
+        &self,
+        input: OperatorInput,
+        next: ExecNext<'_>,
+    ) -> Result<OperatorOutput, OperatorError>;
 }
 ```
 
-Hooks fire at five defined points:
+Each middleware wraps the next layer in the stack. The `next` parameter is a callback that invokes the rest of the middleware chain (and ultimately the real implementation). Middleware can inspect/modify inputs before calling `next`, inspect/modify outputs after, or short-circuit by returning early without calling `next`.
 
-| HookPoint | When |
-|-----------|------|
-| `PreInference` | Before each model call |
-| `PostInference` | After model responds, before tool execution |
-| `PreSubDispatch` | Before each sub-operator dispatch |
-| `PostSubDispatch` | After each sub-operator dispatch completes |
-| `ExitCheck` | At each exit-condition check |
+Middleware is composed into stacks:
 
-`HookContext` provides read-only access to the current state: operator name/input/result, model output, running token count, running cost, turns completed, elapsed time.
+- **`DispatchStack`** -- wraps orchestrator dispatch (budget enforcement, logging, routing)
+- **`StoreStack`** -- wraps state store access (redaction, audit logging)
+- **`ExecStack`** -- wraps operator execution (security guardrails, telemetry)
 
-`HookAction` determines what happens next:
-
-| Action | Effect |
-|--------|--------|
-| `Continue` | Proceed normally |
-| `Halt { reason }` | Stop the operator with `ExitReason::ObserverHalt` |
-| `SkipDispatch { reason }` | Skip this sub-dispatch (PreSubDispatch only) |
-| `ModifyDispatchInput { new_input }` | Replace dispatch input before execution (PreSubDispatch only) |
-| `ModifyDispatchOutput { new_output }` | Replace dispatch output (PostSubDispatch only) |
-
-Hook errors are logged but do **not** halt execution. Use `HookAction::Halt` to halt.
+The `ReactInterceptor` trait (in `neuron-op-react::intercept`) provides typed interception within the ReAct loop specifically, for use cases like tool-call filtering that are operator-internal rather than cross-cutting.
 
 ## Interface 6: Lifecycle Events
 

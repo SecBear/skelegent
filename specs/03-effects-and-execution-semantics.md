@@ -210,7 +210,7 @@ Two executors in this workspace demonstrate the pattern:
 
 - **`LocalEffectExecutor`** (`neuron-effects-local`) — standalone executor implementing
   the `EffectExecutor` trait. Constructs `StoreOptions` from all five advisory fields,
-  fires the optional `PreMemoryWrite` hook (which may halt or modify the value), then
+  runs the `StoreMiddleware` chain (which may halt or modify the value), then
   calls `write_hinted()`.
 
 - **`LocalEffectInterpreter`** (`neuron-orch-kit`) — per-effect interpreter used by
@@ -221,6 +221,6 @@ Both follow the same pattern. New executors for durable or remote backends must 
 same — construct `StoreOptions` and call `write_hinted()`, leaving backend-specific
 interpretation of the hints to the backend.
 
-### Hook Integration
+### Middleware Integration
 
-Before calling `write_hinted()`, executors with a `HookRegistry` fire the `PreMemoryWrite` hook point. See `specs/09-hooks-lifecycle-and-governance.md` for hook dispatch semantics and actions.
+Before calling `write_hinted()`, executors with a `StoreStack` run the `StoreMiddleware` chain. See `specs/09-hooks-lifecycle-and-governance.md` for middleware dispatch semantics.

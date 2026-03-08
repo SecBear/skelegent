@@ -8,7 +8,7 @@ neuron organizes its crates into six layers plus an umbrella crate. Each layer h
  │         Feature-gated re-exports of all layers    │
  ├──────────────────────────────────────────────────┤
  │  LAYER 5 — Cross-Cutting                         │
- │  Hook registry, security hooks, lifecycle coord.  │
+ │  Security middleware, lifecycle coordination       │
  ├──────────────────────────────────────────────────┤
  │  LAYER 4 — Environment                           │
  │  Isolation, credentials, secret backends,         │
@@ -33,7 +33,7 @@ neuron organizes its crates into six layers plus an umbrella crate. Each layer h
 
 **Crate:** `layer0`
 
-Layer 0 is the stability contract. It defines the four protocol traits (`Operator`, `Orchestrator`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (`Hook`, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs).
+Layer 0 is the stability contract. It defines the four protocol traits (`Operator`, `Orchestrator`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (per-boundary middleware traits, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs).
 
 **Dependencies:** `serde`, `async-trait`, `thiserror`, `rust_decimal`, `serde_json`. Nothing else. No runtime, no HTTP, no provider-specific types.
 
@@ -91,10 +91,9 @@ Layer 4 implements `layer0::Environment` and provides the credential infrastruct
 ## Layer 5 -- Cross-Cutting
 
 **Crates:**
-- `neuron-hooks` -- `HookRegistry` for ordered hook pipeline dispatch
-- `neuron-hook-security` -- Security-focused hooks (guardrails, policy enforcement)
+- `neuron-hook-security` -- Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware`)
 
-Layer 5 provides the hook registry that operators use to dispatch hook events. The `HookRegistry` collects `Arc<dyn Hook>` implementations into an ordered pipeline. At each hook point, hooks fire in registration order. The pipeline short-circuits on `Halt`, `SkipDispatch`, or `ModifyDispatchInput`.
+Layer 5 provides security middleware that wraps operator dispatch, store access, and execution boundaries. The per-boundary middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`) are defined in Layer 0 and composed into stacks (`DispatchStack`, `StoreStack`, `ExecStack`). Layer 5 crates supply concrete middleware implementations — for example, `RedactionMiddleware` scrubs sensitive data from model outputs, and `ExfilGuardMiddleware` blocks unauthorized data exfiltration through tool calls.
 
 ## The umbrella crate
 

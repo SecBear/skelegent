@@ -79,30 +79,27 @@ The `EnvironmentSpec` declares isolation boundaries (process, container, VM, Was
 
 ## The two interfaces
 
-### Hook -- Observation and intervention
+### Middleware -- Observation and intervention
 
-Hooks fire at defined points inside the operator's inner loop: before/after inference, before/after tool use, and at exit-condition checks.
+Per-boundary middleware traits wrap each protocol's operations using the continuation pattern. Three traits — one per protocol boundary — live in `layer0::middleware`:
 
-```rust
-#[async_trait]
-pub trait Hook: Send + Sync {
-    fn points(&self) -> &[HookPoint];
-    async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError>;
-}
-```
+- **`DispatchMiddleware`** wraps `Orchestrator::dispatch`. Code before `next.dispatch()` = pre-processing; code after = post-processing; not calling `next` = short-circuit.
+- **`StoreMiddleware`** wraps `StateStore` read/write. Use for encryption-at-rest, audit trails, caching, access control.
+- **`ExecMiddleware`** wraps `Environment::run`. Use for resource metering, credential injection, sandboxing.
 
-A hook can observe (logging, telemetry), intervene (halt execution, skip a sub-dispatch), or modify (sanitize dispatch input, redact dispatch output). Hook errors are logged but do not halt execution -- use `HookAction::Halt` to halt.
+Middleware composes via `DispatchStack`, `StoreStack`, and `ExecStack` builders that organize layers into observer → transformer → guard ordering.
 
+For operator-local interception (before/after inference, before/after tool use), `ReactInterceptor` (in `neuron-op-react`) provides typed per-hook-point methods with default no-op implementations.
 ### Lifecycle -- Cross-layer coordination
 
-Lifecycle events (`BudgetEvent`, `CompactionEvent`) coordinate concerns that span multiple protocols. A budget event might originate from a hook (observing cost) and propagate to the orchestrator (to cancel the workflow). A compaction event coordinates between the operator and the state store.
+Lifecycle events (`BudgetEvent`, `CompactionEvent`) coordinate concerns that span multiple protocols. A budget event might originate from a middleware (observing cost) and propagate to the orchestrator (to cancel the workflow). A compaction event coordinates between the operator and the state store.
 
 ## How layers compose
 
 The six layers form a strict dependency hierarchy:
 
 ```
-Layer 5  Cross-Cutting    (hooks, lifecycle)
+Layer 5  Cross-Cutting    (middleware, lifecycle)
 Layer 4  Environment      (isolation, credentials)
 Layer 3  State            (persistence)
 Layer 2  Orchestration    (multi-agent composition)
@@ -119,7 +116,8 @@ This means you can replace any layer's implementation without touching other lay
 A typical application composes the layers like this:
 
 ```
-Operator   = ReactOperator<AnthropicProvider> + ToolRegistry + HookRegistry
+Operator   = ReactOperator<AnthropicProvider> + ToolRegistry
+Middleware = DispatchStack { RedactionMiddleware, ExfilGuardMiddleware }
 State      = FsStore (filesystem persistence)
 Env        = LocalEnv (no isolation, dev mode)
 Orchestr.  = LocalOrch { agent_a -> Operator, agent_b -> Operator }

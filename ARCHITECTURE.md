@@ -95,7 +95,7 @@ Exit conditions are enumerated, not emergent. Execution strategies are declared,
 not inferred. Steering boundaries are defined, not discovered. Lifecycle
 coordination flows through observable events, not hidden state.
 
-Every exit reason has a name. Every hook point is documented. Every effect
+Every exit reason has a name. Every middleware boundary is documented. Every effect
 variant is in the enum. If behavior exists, it's in a type that can be
 inspected, logged, and tested.
 
@@ -204,9 +204,9 @@ is a distinct pattern from delegation.
 distributed orchestration. Shared state and event streams require explicit
 ordering and conflict resolution.
 
-**Observation**: Mediated by hooks, attached by orchestration. Three forms:
+**Observation**: Mediated by middleware, attached by orchestration. Three forms:
 oracle (pull, advisory), guardrail (checkpoint, can halt), observer agent
-(continuous, full intervention). Hook handlers must not block indefinitely.
+(continuous, full intervention). Middleware handlers must not block indefinitely.
 
 **Antipattern — no Workflow trait**: There is no Workflow trait. Workflows are
 application-layer code — typed functions or LLM-backed orchestrating operators —
@@ -249,30 +249,27 @@ debugging.
 
 ---
 
-> **MIGRATION IN PROGRESS:** The hook-based composition described below is being
-> replaced by per-boundary middleware (`DispatchStack`, `StoreStack`, `ExecStack`).
-> See `docs/plans/MIDDLEWARE-REDESIGN-BRIEFING.md` for the new design.
-
 ## Three-Primitive Operator Composition
 
-Operators compose three independent primitives: **hooks** (observation +
-intervention, always wired — constructor parameter, may be an empty registry),
+Operators compose three independent primitives: **middleware** (observation +
+intervention via per-boundary stacks — `DispatchMiddleware`, `StoreMiddleware`,
+`ExecMiddleware` — composed into `DispatchStack`, `StoreStack`, `ExecStack`),
 **steering** (opt-in via builder, external control flow), and **planner**
 (opt-in via builder, execution strategy). These are structurally different
 and must not be unified:
 
-- Hooks are event-driven, return actions, compose by kind
-  (guardrail/transformer/observer).
+- Middleware is per-boundary, composes via stacks, returns transformed
+  requests/responses or short-circuits with errors.
 - Steering is poll-driven, returns messages, composes by concatenation.
 - Planner is declarative, returns batch plans, composes by delegation.
 
-Hooks observe steering (via PreSteeringInject/PostSteeringSkip) without
-replacing it. This provides security visibility into steering without
-conflating two architecturally distinct primitives.
+Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware` from
+`neuron-hook-security`) provides visibility into steering and dispatch
+without conflating architecturally distinct primitives.
 
-Hook composition varies by `HookKind`: guardrails short-circuit on Halt;
-transformers chain modifications; observers run unconditionally. Dispatch
-order: observers, then transformers, then guardrails. For exit priority ordering,
+Middleware composition varies by boundary: dispatch middleware wraps sub-operator
+dispatch, store middleware wraps state access, exec middleware wraps operator
+execution. For exit priority ordering,
 see `specs/04-operator-turn-runtime.md §Exit Priority Ordering`.
 
 The planner primitive is `DispatchPlanner` (renamed from `ToolExecutionPlanner`).

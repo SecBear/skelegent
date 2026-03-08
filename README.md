@@ -43,10 +43,9 @@ Effects (`effects/`):
 - `neuron-effects-core` — effect executor trait
 - `neuron-effects-local` — local effect interpreter
 
-Hooks (`hooks/`):
+Middleware (`hooks/`):
 
-- `neuron-hooks` — hook registry + lifecycle hooks
-- `neuron-hook-security` — security-oriented hooks
+- `neuron-hook-security` — security middleware (RedactionMiddleware, ExfilGuardMiddleware)
 
 State (`state/`):
 

@@ -22,7 +22,7 @@ Internal traits like `Provider` are never used behind `dyn` -- they are used as 
 
 ## Why `rust_decimal::Decimal` for cost tracking
 
-**Decision:** All monetary values (`OperatorMetadata.cost`, `OperatorConfig.max_cost`, `HookContext.cost`) use `rust_decimal::Decimal`.
+**Decision:** All monetary values (`OperatorMetadata.cost`, `OperatorConfig.max_cost`) use `rust_decimal::Decimal`.
 
 **Reasoning:** Floating-point accumulation errors are real when tracking spend across thousands of LLM calls. `f64` introduces rounding errors that compound over time. A system that runs 10,000 model calls per day, each costing fractions of a cent, needs exact arithmetic to produce accurate cost reports and enforce budgets precisely.
 
@@ -30,7 +30,7 @@ Internal traits like `Provider` are never used behind `dyn` -- they are used as 
 
 ## Why four protocols plus two interfaces
 
-**Decision:** The architecture has four protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`) and two cross-cutting interfaces (`Hook`, lifecycle events).
+**Decision:** The architecture has four protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`) and two cross-cutting interfaces (per-boundary middleware, lifecycle events).
 
 **Reasoning:** The four protocols are orthogonal concerns that compose independently:
 
@@ -41,7 +41,7 @@ Internal traits like `Provider` are never used behind `dyn` -- they are used as 
 
 These were derived from analyzing 23 architectural decisions that every agentic system must make. The four protocols cover all 23 decisions without overlap. Reducing to three protocols (by merging state into environment, or orchestration into operator) creates coupling where orthogonal concerns should be independent. Expanding to five or more protocols creates distinctions without meaningful boundaries.
 
-The two interfaces (hooks and lifecycle events) are *cross-cutting* -- they span multiple protocols and cannot be owned by any single one. A budget event involves the operator (which tracks cost), the hook (which observes it), and the orchestrator (which reacts to it). Making this a method on any single trait would couple unrelated protocols.
+The two interfaces (middleware and lifecycle events) are *cross-cutting* -- they span multiple protocols and cannot be owned by any single one. A budget event involves the operator (which tracks cost), the middleware (which observes it), and the orchestrator (which reacts to it). Making this a method on any single trait would couple unrelated protocols.
 
 ## Why edition 2024
 
@@ -51,7 +51,7 @@ The two interfaces (hooks and lifecycle events) are *cross-cutting* -- they span
 
 ## Why `#[non_exhaustive]` on all enums and structs
 
-**Decision:** All public enums (`ExitReason`, `TriggerType`, `HookPoint`, `HookAction`, etc.) and structs (`OperatorInput`, `OperatorOutput`, `OperatorConfig`, etc.) in Layer 0 are marked `#[non_exhaustive]`.
+**Decision:** All public enums (`ExitReason`, `TriggerType`, etc.) and structs (`OperatorInput`, `OperatorOutput`, `OperatorConfig`, etc.) in Layer 0 are marked `#[non_exhaustive]`.
 
 **Reasoning:** Layer 0 is the stability contract. Adding a variant to an enum or a field to a struct should not be a breaking change. `#[non_exhaustive]` forces downstream code to handle unknown variants (with `_ =>` arms) and prevents struct literal construction (forcing use of constructors or builder methods). This gives Layer 0 the freedom to evolve without breaking every implementation.
 

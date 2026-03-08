@@ -1,30 +1,32 @@
 # Building a custom operator
 
-`ReactOperator` ships with conservative defaults: every tool runs sequentially, nothing is injected between turns, and no budget events are forwarded. Three independent primitives let you layer in exactly the behaviour you need without rebuilding the loop from scratch.
+`ReactOperator` ships with conservative defaults: every tool runs sequentially, nothing is injected between turns, and no budget events are forwarded. Four independent primitives let you layer in exactly the behaviour you need without rebuilding the loop from scratch.
 
-## The three-primitive wiring pattern
+## The four-primitive wiring pattern
 
 Each primitive is opt-in and composes independently:
 
 - **`with_planner`** — execution strategy: how sub-dispatches are batched and sequenced.
 - **`with_steering`** — external control flow: inject messages mid-loop at batch boundaries.
 - **`with_budget_sink`** — lifecycle events: receive step-limit, loop-detection, and timeout notifications.
+- **`with_interceptor`** — loop interception: observe or intervene at each hook point inside the ReAct loop.
 
-A full builder chain wiring all three:
+A full builder chain wiring all four:
 
 ```rust,no_run
 use std::sync::Arc;
 use neuron_op_react::{ReactOperator, ReactConfig, BarrierPlanner, BudgetEventSink};
 use neuron_op_react::SteeringSource;
-use neuron_hooks::HookRegistry;
+use neuron_op_react::intercept::ReactInterceptor;
 use neuron_tool::ToolRegistry;
 use neuron_turn::context::ContextStrategy;
 
-// (provider, tools, context_strategy, hooks, state_reader, config come from your setup)
-let op = ReactOperator::new(provider, tools, context_strategy, hooks, state_reader, config)
+// (provider, tools, context_strategy, state_reader, config come from your setup)
+let op = ReactOperator::new(provider, tools, context_strategy, state_reader, config)
     .with_planner(Box::new(BarrierPlanner))
     .with_steering(Arc::new(my_steering_source))
-    .with_budget_sink(Arc::new(my_budget_sink));
+    .with_budget_sink(Arc::new(my_budget_sink))
+    .with_interceptor(Arc::new(my_interceptor));
 ```
 
 Each builder method is independent. Use only what you need.
@@ -53,109 +55,113 @@ let op = ReactOperator::new(/* ... */)
 
 If your tools carry `ToolConcurrencyHint` metadata, use `.with_metadata_concurrency()` instead of writing a custom decider — it reads that hint directly from the `ToolRegistry`.
 
-## Implementing a HookKind-aware hook
+## Implementing a ReactInterceptor
 
-Hooks attach to the turn's inner loop at typed `HookPoint`s. `HookKind` controls how a hook's action composes with others at the same point (see [Hooks guide](hooks.md) for dispatch rules).
+`ReactInterceptor` provides typed per-hook-point methods for observing and intervening in the ReAct loop. Every method has a default no-op implementation — override only what you need. See the [Middleware & Interception](hooks.md) guide for the full trait definition.
 
 ### Guardrail: deny a tool by name
 
-A guardrail short-circuits on `Halt` or `SkipDispatch`. Register one when you want hard policy enforcement:
+Return `SubDispatchAction::Halt` or `SubDispatchAction::Skip` from `pre_sub_dispatch` to block a tool call:
 
 ```rust,no_run
 use async_trait::async_trait;
-use layer0::hook::{Hook, HookAction, HookContext, HookPoint};
-use layer0::error::HookError;
-use std::sync::Arc;
+use neuron_op_react::intercept::{ReactInterceptor, SubDispatchAction, LoopState};
+use serde_json::Value;
 
-struct DenyToolHook {
+struct DenyToolInterceptor {
     denied: String,
 }
 
 #[async_trait]
-impl Hook for DenyToolHook {
-    fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreSubDispatch]
-    }
-
-    async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-        if ctx.operator_name.as_deref() == Some(&self.denied) {
-            Ok(HookAction::Halt {
+impl ReactInterceptor for DenyToolInterceptor {
+    async fn pre_sub_dispatch(
+        &self,
+        _state: &LoopState,
+        tool_name: &str,
+        _input: &Value,
+    ) -> SubDispatchAction {
+        if tool_name == self.denied {
+            SubDispatchAction::Halt {
                 reason: format!("tool {} is denied by policy", self.denied),
-            })
+            }
         } else {
-            Ok(HookAction::Continue)
+            SubDispatchAction::Continue
         }
     }
 }
-
-// Register as a guardrail so it short-circuits on Halt:
-// registry.add_guardrail(Arc::new(DenyToolHook { denied: "rm".into() }));
 ```
 
-Use `HookAction::SkipDispatch` instead of `Halt` if you want the agent to continue after skipping — `SkipDispatch` replaces the tool result with a synthetic "skipped by policy" message and lets the loop proceed.
+Use `SubDispatchAction::Skip` instead of `Halt` if you want the agent to continue after skipping — `Skip` replaces the tool result with a synthetic "skipped by policy" message and lets the loop proceed.
 
 ### Transformer: sanitize dispatch input
 
-A transformer sees the context mutated by the previous transformer in the chain. Register one when you need to rewrite data before it reaches the tool:
+Return `SubDispatchAction::ModifyInput` from `pre_sub_dispatch` to rewrite tool input before it reaches the tool:
 
 ```rust,no_run
 use async_trait::async_trait;
-use layer0::hook::{Hook, HookAction, HookContext, HookPoint};
-use layer0::error::HookError;
+use neuron_op_react::intercept::{ReactInterceptor, SubDispatchAction, LoopState};
+use serde_json::Value;
 
-struct StripSecretTransformer;
+struct StripSecretInterceptor;
 
 #[async_trait]
-impl Hook for StripSecretTransformer {
-    fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreSubDispatch]
-    }
-
-    async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-        if let Some(mut input) = ctx.operator_input.clone() {
-            if let Some(obj) = input.as_object_mut() {
-                obj.remove("api_key");
+impl ReactInterceptor for StripSecretInterceptor {
+    async fn pre_sub_dispatch(
+        &self,
+        _state: &LoopState,
+        _tool_name: &str,
+        input: &Value,
+    ) -> SubDispatchAction {
+        if let Some(obj) = input.as_object() {
+            if obj.contains_key("api_key") {
+                let mut cleaned = obj.clone();
+                cleaned.remove("api_key");
+                return SubDispatchAction::ModifyInput {
+                    new_input: Value::Object(cleaned),
+                };
             }
-            return Ok(HookAction::ModifyDispatchInput { new_input: input });
         }
-        Ok(HookAction::Continue)
+        SubDispatchAction::Continue
     }
 }
-
-// Register as a transformer so subsequent transformers see the sanitized input:
-// registry.add_transformer(Arc::new(StripSecretTransformer));
 ```
 
 ### Observer: telemetry without side effects
 
-An observer runs regardless of other hooks' actions, and its return value is discarded. Register one for logging, metrics, and tracing:
+Override `post_inference` or `post_sub_dispatch` to log metrics. Since these methods return `Continue`, the loop proceeds normally:
 
 ```rust,no_run
 use async_trait::async_trait;
-use layer0::hook::{Hook, HookAction, HookContext, HookPoint};
-use layer0::error::HookError;
+use neuron_op_react::intercept::{ReactInterceptor, ReactAction, SubDispatchResult, LoopState};
+use layer0::content::Content;
 
-struct MetricsHook;
+struct MetricsInterceptor;
 
 #[async_trait]
-impl Hook for MetricsHook {
-    fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreSubDispatch, HookPoint::PostSubDispatch]
+impl ReactInterceptor for MetricsInterceptor {
+    async fn post_inference(&self, state: &LoopState, _response: &Content) -> ReactAction {
+        tracing::info!(
+            turns = state.turns_completed,
+            cost = %state.cost,
+            "inference complete"
+        );
+        ReactAction::Continue
     }
 
-    async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
+    async fn post_sub_dispatch(
+        &self,
+        state: &LoopState,
+        tool_name: &str,
+        _result: &str,
+    ) -> SubDispatchResult {
         tracing::info!(
-            tool = ?ctx.operator_name,
-            point = ?ctx.point,
-            cost = %ctx.cost,
-            "hook fired"
+            tool = tool_name,
+            cost = %state.cost,
+            "tool dispatch complete"
         );
-        Ok(HookAction::Continue)
+        SubDispatchResult::Continue
     }
 }
-
-// Register as an observer — actions are discarded, errors are logged, never halt:
-// registry.add_observer(Arc::new(MetricsHook));
 ```
 
 ## Implementing a SteeringSource
@@ -183,7 +189,7 @@ impl SteeringSource for ChannelSteering {
 
 **Thread safety:** `drain` is called from the operator's async executor. Use a `Mutex` or `Arc<Mutex<_>>` for the internal queue. For lock-free variants, an `AtomicBool` flag plus `Mutex` draining works well.
 
-**Empty is cheap:** returning an empty `Vec` from `drain` is the common case. The operator checks `is_empty()` before dispatching hooks.
+**Empty is cheap:** returning an empty `Vec` from `drain` is the common case. The operator checks `is_empty()` before proceeding.
 
 Attach the source:
 
@@ -196,70 +202,43 @@ let op = ReactOperator::new(/* ... */)
 
 ## Making steering observable
 
-Steering and hooks are separate concerns with different control flows. You can observe (and optionally block) steering injection via two hook points.
+Steering and interception are separate concerns. You can observe (and optionally block) steering injection via the interceptor.
 
 ### PreSteeringInject: log or block injection
 
-Fires after `drain()` returns non-empty, before the messages enter context. Guardrails can return `Halt` to block the injection entirely.
-
-`ctx.steering_messages` contains the messages as debug-formatted strings — one entry per `ProviderMessage` that `drain()` returned.
+`pre_steering_inject` is called after `drain()` returns non-empty, before the messages enter context. Return `ReactAction::Halt` to block the injection entirely.
 
 ```rust,no_run
 use async_trait::async_trait;
-use layer0::hook::{Hook, HookAction, HookContext, HookPoint};
-use layer0::error::HookError;
+use neuron_op_react::intercept::{ReactInterceptor, ReactAction, LoopState};
 
 struct SteeringLogger;
 
 #[async_trait]
-impl Hook for SteeringLogger {
-    fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PreSteeringInject]
-    }
-
-    async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-        if let Some(msgs) = &ctx.steering_messages {
-            for msg in msgs {
-                tracing::info!(steering_message = %msg, "steering inject");
-            }
+impl ReactInterceptor for SteeringLogger {
+    async fn pre_steering_inject(&self, _state: &LoopState, messages: &[String]) -> ReactAction {
+        for msg in messages {
+            tracing::info!(steering_message = %msg, "steering inject");
         }
-        Ok(HookAction::Continue) // return Halt to block injection
+        ReactAction::Continue // return Halt to block injection
     }
 }
-
-// As an observer (logging only, cannot block):
-// registry.add_observer(Arc::new(SteeringLogger));
-//
-// As a guardrail (can return Halt to block injection):
-// registry.add_guardrail(Arc::new(SteeringLogger));
 ```
 
 ### PostSteeringSkip: observe skipped operators
 
-Fires after tools are skipped because steering injected messages. `ctx.skipped_operators` contains the names of the operators that were skipped.
+`post_steering_skip` is called after tools are skipped because steering injected messages. This is observation-only — the skip already happened.
 
 ```rust,no_run
 use async_trait::async_trait;
-use layer0::hook::{Hook, HookAction, HookContext, HookPoint};
-use layer0::error::HookError;
+use neuron_op_react::intercept::{ReactInterceptor, LoopState};
 
 struct SkipAuditor;
 
 #[async_trait]
-impl Hook for SkipAuditor {
-    fn points(&self) -> &[HookPoint] {
-        &[HookPoint::PostSteeringSkip]
-    }
-
-    async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError> {
-        if let Some(skipped) = &ctx.skipped_operators {
-            tracing::warn!(tools = ?skipped, "tools skipped by steering");
-        }
-        Ok(HookAction::Continue)
+impl ReactInterceptor for SkipAuditor {
+    async fn post_steering_skip(&self, _state: &LoopState, skipped: &[String]) {
+        tracing::warn!(tools = ?skipped, "tools skipped by steering");
     }
 }
-
-// register.add_observer(Arc::new(SkipAuditor));
 ```
-
-`PostSteeringSkip` is observation-only by design: returning `Halt` at this point halts the turn, but it does not un-skip the tools — the skip already happened.

@@ -108,7 +108,6 @@ Providers are not used directly in most application code. Instead, you pass a pr
 ```rust,no_run
 use neuron_op_react::{ReactConfig, ReactOperator};
 use neuron_provider_anthropic::AnthropicProvider;
-use neuron_hooks::HookRegistry;
 use neuron_tool::ToolRegistry;
 
 let provider = AnthropicProvider::new("sk-ant-...");
@@ -123,7 +122,6 @@ let operator = ReactOperator::new(
     provider,
     ToolRegistry::new(),
     Box::new(neuron_turn_kit::FullContext),
-    HookRegistry::new(),
     Arc::new(neuron_state_memory::MemoryStore::new()),
     config,
 );

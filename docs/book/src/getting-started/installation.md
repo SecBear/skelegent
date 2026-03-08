@@ -31,7 +31,6 @@ The umbrella crate uses feature flags to control which implementations are compi
 | Feature | What it enables |
 |---------|----------------|
 | `core` | Layer 0 protocols + `neuron-turn` + `neuron-context` + `neuron-tool` (included in default) |
-| `hooks` | Hook registry (`neuron-hooks`) (included in default) |
 | `op-react` | ReAct operator (`neuron-op-react`) |
 | `op-single-shot` | Single-shot operator (`neuron-op-single-shot`) |
 | `provider-anthropic` | Anthropic Claude provider |
@@ -56,7 +55,6 @@ neuron-turn = "0.4"
 neuron-tool = "0.4"
 neuron-op-react = "0.4"
 neuron-provider-anthropic = "0.4"
-neuron-hooks = "0.4"
 ```
 
 ## Verifying your setup
