@@ -472,65 +472,138 @@ impl<P: Provider> ReactOperator<P> {
             _ => None,
         }
     }
+}
 
-    fn build_metadata(
-        &self,
-        tokens_in: u64,
-        tokens_out: u64,
-        cost: Decimal,
-        turns_used: u32,
-        sub_dispatches: Vec<SubDispatchRecord>,
-        duration: DurationMs,
-    ) -> OperatorMetadata {
+// ---------------------------------------------------------------------------
+// LoopCtx — mutable state threaded through one execute() invocation
+// ---------------------------------------------------------------------------
+
+
+/// Mutable context for a single execute() invocation.
+///
+/// Collects all per-loop state in one struct so helper methods can accept
+/// `&mut LoopCtx` instead of 8+ separate `&mut` borrows.
+struct LoopCtx {
+    messages: Vec<Message>,
+    tokens_in: u64,
+    tokens_out: u64,
+    cost: Decimal,
+    turns_used: u32,
+    dispatch_records: Vec<SubDispatchRecord>,
+    effects: Vec<Effect>,
+    last_content: Content,
+    total_sub_dispatches: u32,
+    recent_calls: std::collections::VecDeque<(String, u64)>,
+    start: Instant,
+}
+
+impl LoopCtx {
+    fn new(messages: Vec<Message>, start: Instant) -> Self {
+        Self {
+            messages,
+            tokens_in: 0,
+            tokens_out: 0,
+            cost: Decimal::ZERO,
+            turns_used: 0,
+            dispatch_records: vec![],
+            effects: vec![],
+            last_content: Content::text(""),
+            total_sub_dispatches: 0,
+            recent_calls: std::collections::VecDeque::new(),
+            start,
+        }
+    }
+
+    fn state(&self) -> LoopState {
+        LoopState {
+            tokens_in: self.tokens_in,
+            tokens_out: self.tokens_out,
+            cost: self.cost,
+            turns_completed: self.turns_used,
+            elapsed: DurationMs::from(self.start.elapsed()),
+        }
+    }
+
+    fn metadata(&self) -> OperatorMetadata {
         let mut meta = OperatorMetadata::default();
-        meta.tokens_in = tokens_in;
-        meta.tokens_out = tokens_out;
-        meta.cost = cost;
-        meta.turns_used = turns_used;
-        meta.sub_dispatches = sub_dispatches;
-        meta.duration = duration;
+        meta.tokens_in = self.tokens_in;
+        meta.tokens_out = self.tokens_out;
+        meta.cost = self.cost;
+        meta.turns_used = self.turns_used;
+        meta.sub_dispatches = self.dispatch_records.clone();
+        meta.duration = DurationMs::from(self.start.elapsed());
         meta
     }
 
-    fn make_output(
-        message: Content,
-        exit_reason: ExitReason,
-        metadata: OperatorMetadata,
-        effects: Vec<Effect>,
-    ) -> OperatorOutput {
-        let mut output = OperatorOutput::new(message, exit_reason);
-        output.metadata = metadata;
-        output.effects = effects;
+    fn output(&self, exit_reason: ExitReason) -> OperatorOutput {
+        let mut output = OperatorOutput::new(self.last_content.clone(), exit_reason);
+        output.metadata = self.metadata();
+        output.effects = self.effects.clone();
         output
     }
 
-    fn build_loop_state(
-        &self,
-        tokens_in: u64,
-        tokens_out: u64,
-        cost: Decimal,
-        turns_completed: u32,
-        elapsed: DurationMs,
-    ) -> LoopState {
-        LoopState {
-            tokens_in,
-            tokens_out,
-            cost,
-            turns_completed,
-            elapsed,
+    fn track_call(&mut self, name: &str, input: &serde_json::Value, max_repeat: Option<u32>) {
+        self.total_sub_dispatches += 1;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        input.to_string().hash(&mut hasher);
+        let cap = max_repeat.map(|v| v as usize).unwrap_or(0).max(10);
+        self.recent_calls.push_back((name.to_string(), hasher.finish()));
+        while self.recent_calls.len() > cap {
+            self.recent_calls.pop_front();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tool dispatch — unified for Shared and Exclusive paths
+// ---------------------------------------------------------------------------
+
+impl<P: Provider> ReactOperator<P> {
+
+    /// Poll steering and, if messages are injected, skip remaining tools in the
+    /// current batch. Returns `true` if steering interrupted the batch.
+    async fn poll_steering_skip(
+        &self,
+        ctx: &mut LoopCtx,
+        remaining: &[(String, String, serde_json::Value)],
+        dispatch_results: &mut Vec<layer0::content::ContentBlock>,
+    ) -> bool {
+        let (injected, ctx_cmds) = self.poll_steering(ctx).await;
+        apply_context_commands(&mut ctx.messages, ctx_cmds);
+        if injected.is_empty() {
+            return false;
+        }
+        ctx.messages
+            .extend(injected.into_iter().map(Message::from));
+
+        // Skip remaining tools with placeholders
+        let skipped_names: Vec<String> = remaining.iter().map(|(_, n, _)| n.clone()).collect();
+        for (id, name, _input) in remaining.iter().cloned() {
+            dispatch_results.push(layer0::content::ContentBlock::ToolResult {
+                tool_use_id: id,
+                content: "Skipped due to steering".into(),
+                is_error: false,
+            });
+            ctx.dispatch_records
+                .push(SubDispatchRecord::new(&name, DurationMs::ZERO, false));
+        }
+        if !skipped_names.is_empty()
+            && let Some(ref interceptor) = self.interceptor
+        {
+            interceptor
+                .post_steering_skip(&ctx.state(), &skipped_names)
+                .await;
+        }
+        true
+    }
+
     /// Poll the steering source and dispatch interceptor events.
     ///
-    /// Returns injected messages (after interceptor approval) and context commands (unconditional).
-    /// Context commands bypass the interceptor — they are direct buffer manipulation.
+    /// Returns injected messages (after interceptor approval) and context commands.
     async fn poll_steering(
         &self,
-        ti: u64,
-        to: u64,
-        cost: Decimal,
-        turns: u32,
-        elapsed: DurationMs,
+        ctx: &LoopCtx,
     ) -> (Vec<ProviderMessage>, Vec<ContextCommand>) {
         let Some(s) = &self.steering else {
             return (vec![], vec![]);
@@ -551,16 +624,504 @@ impl<P: Provider> ReactOperator<P> {
             return (vec![], ctx_cmds);
         }
         if let Some(ref interceptor) = self.interceptor {
-            let state = self.build_loop_state(ti, to, cost, turns, elapsed);
             let msg_strs: Vec<String> = msgs_to_inject.iter().map(|m| format!("{:?}", m)).collect();
-            if let ReactAction::Halt { .. } =
-                interceptor.pre_steering_inject(&state, &msg_strs).await
+            if let ReactAction::Halt { .. } = interceptor
+                .pre_steering_inject(&ctx.state(), &msg_strs)
+                .await
             {
                 return (vec![], ctx_cmds);
             }
         }
         (msgs_to_inject, ctx_cmds)
     }
+
+    /// Check budget limits. Returns `Some(output)` if a limit is reached.
+    fn check_limits(&self, ctx: &LoopCtx, config: &ResolvedConfig) -> Option<OperatorOutput> {
+        // Step limit approaching / reached
+        if let Some(max_tc) = self.config.max_tool_calls {
+            let threshold = (max_tc as f32 * 0.80) as u32;
+            if ctx.total_sub_dispatches >= threshold
+                && ctx.total_sub_dispatches < max_tc
+                && let Some(ref sink) = self.budget_sink
+            {
+                sink.on_budget_event(BudgetEvent::StepLimitApproaching {
+                    agent: AgentId::new("react"),
+                    current: ctx.total_sub_dispatches,
+                    max: max_tc,
+                });
+            }
+        }
+        if let Some(max_tc) = self.config.max_tool_calls
+            && ctx.total_sub_dispatches >= max_tc
+        {
+            if let Some(ref sink) = self.budget_sink {
+                sink.on_budget_event(BudgetEvent::StepLimitReached {
+                    agent: AgentId::new("react"),
+                    total_sub_dispatches: ctx.total_sub_dispatches,
+                });
+            }
+            return Some(ctx.output(ExitReason::BudgetExhausted));
+        }
+
+        // Stuck detection
+        if let Some(max_rep) = self.config.max_repeat_calls
+            && max_rep > 0
+            && ctx.recent_calls.len() >= max_rep as usize
+        {
+            let first = ctx.recent_calls.front().cloned();
+            if ctx.recent_calls.iter().all(|c| Some(c) == first.as_ref()) {
+                if let Some(ref sink) = self.budget_sink {
+                    sink.on_budget_event(BudgetEvent::LoopDetected {
+                        agent: AgentId::new("react"),
+                        operator_name: first
+                            .as_ref()
+                            .map(|(n, _)| n.clone())
+                            .unwrap_or_default(),
+                        consecutive_count: ctx.recent_calls.len() as u32,
+                        max: max_rep,
+                    });
+                }
+                return Some(ctx.output(ExitReason::Custom("stuck_detected".into())));
+            }
+        }
+
+        // MaxTurns
+        if ctx.turns_used >= config.max_turns {
+            return Some(ctx.output(ExitReason::MaxTurns));
+        }
+
+        // MaxCost
+        if let Some(max_cost) = &config.max_cost
+            && ctx.cost >= *max_cost
+        {
+            return Some(ctx.output(ExitReason::BudgetExhausted));
+        }
+
+        // Timeout approaching
+        if let Some(max_duration) = &config.max_duration {
+            let threshold = max_duration.to_std().mul_f32(0.80);
+            if ctx.start.elapsed() >= threshold
+                && ctx.start.elapsed() < max_duration.to_std()
+                && let Some(ref sink) = self.budget_sink
+            {
+                sink.on_budget_event(BudgetEvent::TimeoutApproaching {
+                    agent: AgentId::new("react"),
+                    elapsed: DurationMs::from(ctx.start.elapsed()),
+                    max_duration: *max_duration,
+                });
+            }
+        }
+
+        // Timeout reached
+        if let Some(max_duration) = &config.max_duration
+            && ctx.start.elapsed() >= max_duration.to_std()
+        {
+            if let Some(ref sink) = self.budget_sink {
+                sink.on_budget_event(BudgetEvent::TimeoutReached {
+                    agent: AgentId::new("react"),
+                    elapsed: DurationMs::from(ctx.start.elapsed()),
+                });
+            }
+            return Some(ctx.output(ExitReason::Timeout));
+        }
+
+        None
+    }
+
+    /// Try context compaction if over the effective limit.
+    async fn try_compact(&self, ctx: &mut LoopCtx, max_tokens: u32) {
+        let effective_limit =
+            (max_tokens as f32 * 4.0 * (1.0 - self.config.compaction_reserve_pct)) as usize;
+        let total_estimated: usize = ctx.messages.iter().map(|m| m.estimated_tokens()).sum();
+        if total_estimated <= effective_limit {
+            return;
+        }
+        let Some(ref compactor) = self.compactor else {
+            return;
+        };
+
+        // PreCompaction interceptor
+        let should_compact = if let Some(ref interceptor) = self.interceptor {
+            matches!(
+                interceptor
+                    .pre_compaction(&ctx.state(), ctx.messages.len())
+                    .await,
+                ReactAction::Continue
+            )
+        } else {
+            true
+        };
+
+        if !should_compact {
+            if let Some(ref sink) = self.compaction_sink {
+                sink.on_compaction_event(CompactionEvent::CompactionSkipped {
+                    agent: AgentId::new("react"),
+                    reason: "blocked by interceptor".into(),
+                });
+            }
+            return;
+        }
+
+        let before_count = ctx.messages.len() as u32;
+        let before_tokens = total_estimated as u64;
+        let compacted = compactor(&ctx.messages);
+        let after_count = compacted.len() as u32;
+        let after_tokens: u64 = compacted.iter().map(|m| m.estimated_tokens() as u64).sum();
+
+        if let Some(ref sink) = self.compaction_sink {
+            sink.on_compaction_event(CompactionEvent::CompactionQuality {
+                agent: AgentId::new("react"),
+                tokens_before: before_tokens,
+                tokens_after: after_tokens,
+                items_preserved: after_count,
+                items_lost: before_count.saturating_sub(after_count),
+            });
+        }
+        ctx.messages = compacted;
+        *self
+            .last_compaction_removed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            before_count.saturating_sub(after_count) as usize;
+        *self
+            .current_context
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = ctx.messages.clone();
+
+        // PostCompaction interceptor
+        if let Some(ref interceptor) = self.interceptor {
+            interceptor
+                .post_compaction(
+                    &ctx.state(),
+                    before_count as usize,
+                    after_count as usize,
+                )
+                .await;
+        }
+    }
+
+    /// Dispatch all tool calls for a single turn, handling batching, steering,
+    /// effects, and interceptors. Returns tool result blocks and whether
+    /// steering interrupted the batch.
+    async fn dispatch_tools(
+        &self,
+        ctx: &mut LoopCtx,
+        response: &neuron_turn::infer::InferResponse,
+    ) -> Result<DispatchOutcome, OperatorError> {
+        let mut dispatch_results: Vec<layer0::content::ContentBlock> = Vec::new();
+        let mut _steered = false;
+
+        let planned = {
+            let calls: Vec<(String, String, serde_json::Value)> = response
+                .tool_calls
+                .iter()
+                .map(|tc| (tc.id.clone(), tc.name.clone(), tc.input.clone()))
+                .collect();
+            self.planner.plan(&calls, self.decider.as_ref())
+        };
+
+        'batches: for batch in planned {
+            match batch {
+                BatchItem::Shared(call_group) => {
+                    // Pre-batch steering
+                    if self
+                        .poll_steering_skip(ctx, &call_group, &mut dispatch_results)
+                        .await
+                    {
+                        _steered = true;
+                        break 'batches;
+                    }
+
+                    let len = call_group.len();
+                    for idx in 0..len {
+                        // Mid-batch steering (after first tool)
+                        if idx > 0 {
+                            let remaining: Vec<_> =
+                                call_group.iter().skip(idx).cloned().collect();
+                            if self
+                                .poll_steering_skip(ctx, &remaining, &mut dispatch_results)
+                                .await
+                            {
+                                _steered = true;
+                                break 'batches;
+                            }
+                        }
+
+                        let (id, name, dispatch_input) = call_group[idx].clone();
+
+                        // Check if effect
+                        if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
+                            ctx.effects.push(effect);
+                            dispatch_results.push(layer0::content::ContentBlock::ToolResult {
+                                tool_use_id: id,
+                                content: format!("{name} effect recorded."),
+                                is_error: false,
+                            });
+                            ctx.dispatch_records.push(SubDispatchRecord::new(
+                                &name,
+                                DurationMs::ZERO,
+                                true,
+                            ));
+                            ctx.track_call(&name, &dispatch_input, self.config.max_repeat_calls);
+                        } else {
+                            match self
+                                .execute_tool_via_orchestrator(ctx, &name, &dispatch_input)
+                                .await?
+                            {
+                                ToolExecResult::Halted(output) => {
+                                    return Ok(DispatchOutcome::Halted(output));
+                                }
+                                ToolExecResult::Done {
+                                    content,
+                                    is_error: ie,
+                                    success: s,
+                                    duration: d,
+                                } => {
+                                    dispatch_results.push(
+                                        layer0::content::ContentBlock::ToolResult {
+                                            tool_use_id: id,
+                                            content,
+                                            is_error: ie,
+                                        },
+                                    );
+                                    ctx.dispatch_records.push(SubDispatchRecord::new(
+                                        name, d, s,
+                                    ));
+                                }
+                            }
+                        }
+
+                        // Post-tool steering (skip remaining in batch)
+                        if idx + 1 < len {
+                            let remaining: Vec<_> =
+                                call_group.iter().skip(idx + 1).cloned().collect();
+                            let (injected, ctx_cmds) = self.poll_steering(ctx).await;
+                            apply_context_commands(&mut ctx.messages, ctx_cmds);
+                            if !injected.is_empty() {
+                                ctx.messages
+                                    .extend(injected.into_iter().map(Message::from));
+                                let skipped_names: Vec<String> =
+                                    remaining.iter().map(|(_, n, _)| n.clone()).collect();
+                                for (rid, rname, _) in remaining {
+                                    dispatch_results.push(
+                                        layer0::content::ContentBlock::ToolResult {
+                                            tool_use_id: rid,
+                                            content: "Skipped due to steering".into(),
+                                            is_error: false,
+                                        },
+                                    );
+                                    ctx.dispatch_records.push(SubDispatchRecord::new(
+                                        &rname,
+                                        DurationMs::ZERO,
+                                        false,
+                                    ));
+                                }
+                                if !skipped_names.is_empty()
+                                    && let Some(ref interceptor) = self.interceptor
+                                {
+                                    interceptor
+                                        .post_steering_skip(&ctx.state(), &skipped_names)
+                                        .await;
+                                }
+                                _steered = true;
+                                break 'batches;
+                            }
+                        }
+                    }
+
+                    // Post-batch steering
+                    {
+                        let (injected, ctx_cmds) = self.poll_steering(ctx).await;
+                        apply_context_commands(&mut ctx.messages, ctx_cmds);
+                        if !injected.is_empty() {
+                            ctx.messages
+                                .extend(injected.into_iter().map(Message::from));
+                            _steered = true;
+                            break 'batches;
+                        }
+                    }
+                }
+                BatchItem::Exclusive((id, name, dispatch_input)) => {
+                    // Pre-exclusive steering
+                    {
+                        let remaining = vec![(id.clone(), name.clone(), dispatch_input.clone())];
+                        if self
+                            .poll_steering_skip(ctx, &remaining, &mut dispatch_results)
+                            .await
+                        {
+                            _steered = true;
+                            break 'batches;
+                        }
+                    }
+
+                    if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
+                        ctx.effects.push(effect);
+                        dispatch_results.push(layer0::content::ContentBlock::ToolResult {
+                            tool_use_id: id,
+                            content: format!("{name} effect recorded."),
+                            is_error: false,
+                        });
+                        ctx.dispatch_records.push(SubDispatchRecord::new(
+                            &name,
+                            DurationMs::ZERO,
+                            true,
+                        ));
+                        ctx.track_call(&name, &dispatch_input, self.config.max_repeat_calls);
+                        continue;
+                    }
+
+                    match self
+                        .execute_tool_via_orchestrator(ctx, &name, &dispatch_input)
+                        .await?
+                    {
+                        ToolExecResult::Halted(output) => {
+                            return Ok(DispatchOutcome::Halted(output));
+                        }
+                        ToolExecResult::Done {
+                            content,
+                            is_error,
+                            success,
+                            duration,
+                        } => {
+                            dispatch_results.push(layer0::content::ContentBlock::ToolResult {
+                                tool_use_id: id,
+                                content,
+                                is_error,
+                            });
+                            ctx.dispatch_records
+                                .push(SubDispatchRecord::new(name, duration, success));
+                        }
+                    }
+
+                    // Post-exclusive steering
+                    {
+                        let (injected, ctx_cmds) = self.poll_steering(ctx).await;
+                        apply_context_commands(&mut ctx.messages, ctx_cmds);
+                        if !injected.is_empty() {
+                            ctx.messages
+                                .extend(injected.into_iter().map(Message::from));
+                            _steered = true;
+                            break 'batches;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(DispatchOutcome::Completed(dispatch_results))
+    }
+
+    /// Execute a tool call through the orchestrator with pre/post interceptors.
+    async fn execute_tool_via_orchestrator(
+        &self,
+        ctx: &mut LoopCtx,
+        name: &str,
+        dispatch_input: &serde_json::Value,
+    ) -> Result<ToolExecResult, OperatorError> {
+        let mut actual_input = dispatch_input.clone();
+
+        // Pre-dispatch interceptor
+        if let Some(ref interceptor) = self.interceptor {
+            match interceptor
+                .pre_sub_dispatch(&ctx.state(), name, dispatch_input)
+                .await
+            {
+                SubDispatchAction::Halt { reason } => {
+                    return Ok(ToolExecResult::Halted(
+                        ctx.output(ExitReason::InterceptorHalt { reason }),
+                    ));
+                }
+                SubDispatchAction::Skip { reason } => {
+                    ctx.dispatch_records
+                        .push(SubDispatchRecord::new(name, DurationMs::ZERO, false));
+                    return Ok(ToolExecResult::Done {
+                        content: format!("Skipped: {reason}"),
+                        is_error: false,
+                        success: false,
+                        duration: DurationMs::ZERO,
+                    });
+                }
+                SubDispatchAction::ModifyInput { new_input } => {
+                    actual_input = new_input;
+                }
+                SubDispatchAction::Continue => {}
+            }
+        }
+
+        // Execute via orchestrator
+        let tool_start = Instant::now();
+        let (mut result_content, is_error, success) = {
+            let orch_input = OperatorInput::new(
+                Content::text(actual_input.to_string()),
+                layer0::operator::TriggerType::Task,
+            );
+            match self
+                .orchestrator
+                .dispatch(&AgentId::new(name), orch_input)
+                .await
+            {
+                Ok(output) => {
+                    let text = output.message.as_text().unwrap_or("null").to_string();
+                    (text, false, true)
+                }
+                Err(OrchError::AgentNotFound(_)) => (
+                    neuron_tool::ToolError::NotFound(name.to_string()).to_string(),
+                    true,
+                    false,
+                ),
+                Err(e) => (e.to_string(), true, false),
+            }
+        };
+        let duration = DurationMs::from(tool_start.elapsed());
+
+        // Post-dispatch interceptor
+        if let Some(ref interceptor) = self.interceptor {
+            match interceptor
+                .post_sub_dispatch(&ctx.state(), name, &result_content)
+                .await
+            {
+                SubDispatchResult::Halt { reason } => {
+                    return Ok(ToolExecResult::Halted(
+                        ctx.output(ExitReason::InterceptorHalt { reason }),
+                    ));
+                }
+                SubDispatchResult::ModifyOutput { new_output } => {
+                    result_content = new_output;
+                }
+                SubDispatchResult::Continue => {}
+            }
+        }
+
+        ctx.track_call(name, &actual_input, self.config.max_repeat_calls);
+
+        Ok(ToolExecResult::Done {
+            content: result_content,
+            is_error,
+            success,
+            duration,
+        })
+    }
+}
+
+/// Outcome of dispatching all tool calls for a turn.
+enum DispatchOutcome {
+    /// All tools dispatched; results + steered flag.
+    Completed(Vec<layer0::content::ContentBlock>),
+    /// An interceptor halted execution mid-dispatch.
+    Halted(OperatorOutput),
+}
+
+/// Result of executing a single tool through the orchestrator.
+enum ToolExecResult {
+    /// Interceptor halted execution.
+    Halted(OperatorOutput),
+    /// Tool completed normally.
+    Done {
+        content: String,
+        is_error: bool,
+        success: bool,
+        duration: DurationMs,
+    },
 }
 
 /// Apply a list of context manipulation commands to the message buffer.
@@ -623,6 +1184,10 @@ pub(crate) fn apply_context_commands(messages: &mut Vec<Message>, cmds: Vec<Cont
     }
 }
 
+// ---------------------------------------------------------------------------
+// Operator trait implementation
+// ---------------------------------------------------------------------------
+
 #[async_trait]
 impl<P: Provider + 'static> Operator for ReactOperator<P> {
     #[tracing::instrument(skip_all, fields(trigger = ?input.trigger))]
@@ -630,58 +1195,31 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
         let start = Instant::now();
         tracing::info!("react loop starting");
         let config = self.resolve_config(&input);
-        let mut messages = self.assemble_context(&input).await?;
+        let messages = self.assemble_context(&input).await?;
+        let tools = self.build_tool_schemas(&config);
+
+        let mut ctx = LoopCtx::new(messages, start);
         *self
             .current_context
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = messages.clone();
-        let tools = self.build_tool_schemas(&config);
-
-        let mut total_tokens_in: u64 = 0;
-        let mut total_tokens_out: u64 = 0;
-        let mut total_cost = Decimal::ZERO;
-        let mut turns_used: u32 = 0;
-        let mut dispatch_records: Vec<SubDispatchRecord> = vec![];
-        let mut effects: Vec<Effect> = vec![];
-        let mut last_content: Content = Content::text("");
-        let mut total_sub_dispatches: u32 = 0;
-        let mut recent_calls: std::collections::VecDeque<(String, u64)> =
-            std::collections::VecDeque::new();
+            .unwrap_or_else(|e| e.into_inner()) = ctx.messages.clone();
 
         loop {
             self.state_reader.clear_transient();
-            turns_used += 1;
+            ctx.turns_used += 1;
 
-            // 1. Interceptor: PreInference
+            // 1. PreInference interceptor
             if let Some(ref interceptor) = self.interceptor {
-                let state = self.build_loop_state(
-                    total_tokens_in,
-                    total_tokens_out,
-                    total_cost,
-                    turns_used - 1,
-                    DurationMs::from(start.elapsed()),
-                );
+                let state = ctx.state();
                 if let ReactAction::Halt { reason } = interceptor.pre_inference(&state).await {
-                    return Ok(Self::make_output(
-                        last_content.clone(),
-                        ExitReason::InterceptorHalt { reason },
-                        self.build_metadata(
-                            total_tokens_in,
-                            total_tokens_out,
-                            total_cost,
-                            turns_used,
-                            dispatch_records,
-                            DurationMs::from(start.elapsed()),
-                        ),
-                        effects,
-                    ));
+                    return Ok(ctx.output(ExitReason::InterceptorHalt { reason }));
                 }
             }
 
             // 2. Build InferRequest
-            let request = InferRequest {
+            let mut request = InferRequest {
                 model: config.model.clone(),
-                messages: messages.clone(),
+                messages: ctx.messages.clone(),
                 tools: tools.clone(),
                 max_tokens: Some(config.max_tokens),
                 temperature: None,
@@ -689,16 +1227,12 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 extra: input.metadata.clone(),
             };
 
-            // Apply model selector if configured
-            let request = if let Some(sel) = &self.config.model_selector {
-                let mut req = request;
-                if let Some(model) = sel(&req) {
-                    req.model = Some(model);
-                }
-                req
-            } else {
-                request
-            };
+            // Apply model selector
+            if let Some(sel) = &self.config.model_selector
+                && let Some(model) = sel(&request)
+            {
+                request.model = Some(model);
+            }
 
             // 3. Call provider
             let response = self.provider.infer(request).await.map_err(|e| {
@@ -709,42 +1243,31 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                 }
             })?;
 
-            // 4. Interceptor: PostInference
+            // 4. PostInference interceptor
             if let Some(ref interceptor) = self.interceptor {
-                let state = self.build_loop_state(
-                    total_tokens_in + response.usage.input_tokens,
-                    total_tokens_out + response.usage.output_tokens,
-                    total_cost + response.cost.unwrap_or(Decimal::ZERO),
-                    turns_used,
-                    DurationMs::from(start.elapsed()),
-                );
+                let mut state = ctx.state();
+                state.tokens_in += response.usage.input_tokens;
+                state.tokens_out += response.usage.output_tokens;
+                state.cost += response.cost.unwrap_or(Decimal::ZERO);
                 if let ReactAction::Halt { reason } =
                     interceptor.post_inference(&state, &response.content).await
                 {
-                    return Ok(Self::make_output(
-                        response.content.clone(),
-                        ExitReason::InterceptorHalt { reason },
-                        self.build_metadata(
-                            total_tokens_in + response.usage.input_tokens,
-                            total_tokens_out + response.usage.output_tokens,
-                            total_cost + response.cost.unwrap_or(Decimal::ZERO),
-                            turns_used,
-                            dispatch_records,
-                            DurationMs::from(start.elapsed()),
-                        ),
-                        effects,
-                    ));
+                    ctx.tokens_in += response.usage.input_tokens;
+                    ctx.tokens_out += response.usage.output_tokens;
+                    if let Some(cost) = response.cost {
+                        ctx.cost += cost;
+                    }
+                    return Ok(ctx.output(ExitReason::InterceptorHalt { reason }));
                 }
             }
 
             // 5. Aggregate tokens + cost
-            total_tokens_in += response.usage.input_tokens;
-            total_tokens_out += response.usage.output_tokens;
+            ctx.tokens_in += response.usage.input_tokens;
+            ctx.tokens_out += response.usage.output_tokens;
             if let Some(cost) = response.cost {
-                total_cost += cost;
+                ctx.cost += cost;
             }
-
-            last_content = response.content.clone();
+            ctx.last_content = response.content.clone();
 
             // 6. Check StopReason
             match response.stop_reason {
@@ -752,874 +1275,47 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                     return Err(OperatorError::Model("output truncated (max_tokens)".into()));
                 }
                 StopReason::ContentFilter => {
-                    return Ok(Self::make_output(
-                        response.content.clone(),
-                        ExitReason::SafetyStop {
-                            reason: "content_filter".into(),
-                        },
-                        self.build_metadata(
-                            total_tokens_in,
-                            total_tokens_out,
-                            total_cost,
-                            turns_used,
-                            dispatch_records,
-                            DurationMs::from(start.elapsed()),
-                        ),
-                        effects,
-                    ));
+                    return Ok(ctx.output(ExitReason::SafetyStop {
+                        reason: "content_filter".into(),
+                    }));
                 }
                 StopReason::EndTurn => {
-                    return Ok(Self::make_output(
-                        response.content.clone(),
-                        ExitReason::Complete,
-                        self.build_metadata(
-                            total_tokens_in,
-                            total_tokens_out,
-                            total_cost,
-                            turns_used,
-                            dispatch_records,
-                            DurationMs::from(start.elapsed()),
-                        ),
-                        effects,
-                    ));
+                    return Ok(ctx.output(ExitReason::Complete));
                 }
                 StopReason::ToolUse => {
-                    // Continue to tool execution below
+                    // Continue to tool execution
                 }
             }
 
             // 7. Tool execution
-            // Add assistant message to context
-            messages.push(response.to_message());
-
-            let mut dispatch_results: Vec<layer0::content::ContentBlock> = Vec::new();
-            // Use planner to decide batches. Build (id,name,input) vector first.
-            let planned = {
-                let calls: Vec<(String, String, serde_json::Value)> = response
-                    .tool_calls
-                    .iter()
-                    .map(|tc| (tc.id.clone(), tc.name.clone(), tc.input.clone()))
-                    .collect();
-                self.planner.plan(&calls, self.decider.as_ref())
+            ctx.messages.push(response.to_message());
+            let dispatch_results = match self.dispatch_tools(&mut ctx, &response).await? {
+                DispatchOutcome::Completed(results) => results,
+                DispatchOutcome::Halted(output) => return Ok(output),
             };
-
-            let mut _steered = false;
-            'batches: for batch in planned {
-                match batch {
-                    BatchItem::Shared(call_group) => {
-                        // Pre-batch steering poll
-                        {
-                            let (injected, ctx_cmds) = self
-                                .poll_steering(
-                                    total_tokens_in,
-                                    total_tokens_out,
-                                    total_cost,
-                                    turns_used,
-                                    DurationMs::from(start.elapsed()),
-                                )
-                                .await;
-                            apply_context_commands(&mut messages, ctx_cmds);
-                            if !injected.is_empty() {
-                                messages.extend(injected.into_iter().map(Message::from));
-                                // All tools in this batch are skipped with placeholders
-                                let skipped_names: Vec<String> =
-                                    call_group.iter().map(|(_, n, _)| n.clone()).collect();
-                                for (id, name, _input) in call_group.into_iter() {
-                                    dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
-                                    content: "Skipped due to steering".into(),
-                                    is_error: false, });
-                                    dispatch_records.push(SubDispatchRecord::new(
-                                        &name,
-                                        DurationMs::ZERO,
-                                        false,
-                                    ));
-                                }
-                                if !skipped_names.is_empty()
-                                    && let Some(ref interceptor) = self.interceptor
-                                {
-                                    let state = self.build_loop_state(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        DurationMs::from(start.elapsed()),
-                                    );
-                                    interceptor.post_steering_skip(&state, &skipped_names).await;
-                                }
-                                _steered = true;
-                                break 'batches;
-                            }
-                        }
-                        // Execute shared tools sequentially to allow steering to interrupt mid-batch
-                        let len = call_group.len();
-                        for idx in 0..len {
-                            // Pre-next-tool steering poll (after some tools completed)
-                            if idx > 0 {
-                                let (injected, ctx_cmds) = self
-                                    .poll_steering(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        DurationMs::from(start.elapsed()),
-                                    )
-                                    .await;
-                                apply_context_commands(&mut messages, ctx_cmds);
-                                if !injected.is_empty() {
-                                    messages.extend(injected.into_iter().map(Message::from));
-                                    let skipped_names: Vec<String> = call_group
-                                        .iter()
-                                        .skip(idx)
-                                        .map(|(_, n, _)| n.clone())
-                                        .collect();
-                                    for (rid, rname, _rinput) in
-                                        call_group.iter().skip(idx).cloned()
-                                    {
-                                        dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: rid,
-                                        content: "Skipped due to steering".into(),
-                                        is_error: false, });
-                                        dispatch_records.push(SubDispatchRecord::new(
-                                            &rname,
-                                            DurationMs::ZERO,
-                                            false,
-                                        ));
-                                    }
-                                    if !skipped_names.is_empty()
-                                        && let Some(ref interceptor) = self.interceptor
-                                    {
-                                        let state = self.build_loop_state(
-                                            total_tokens_in,
-                                            total_tokens_out,
-                                            total_cost,
-                                            turns_used,
-                                            DurationMs::from(start.elapsed()),
-                                        );
-                                        interceptor
-                                            .post_steering_skip(&state, &skipped_names)
-                                            .await;
-                                    }
-                                    _steered = true;
-                                }
-                            }
-                            let (id, name, dispatch_input) = call_group[idx].clone();
-                            // Effects handled immediately
-                            if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
-                                effects.push(effect);
-                                dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
-                                content: format!("{name} effect recorded."),
-                                is_error: false, });
-                                dispatch_records.push(SubDispatchRecord::new(
-                                    &name,
-                                    DurationMs::ZERO,
-                                    true,
-                                ));
-                                // track effect tool call
-                                total_sub_dispatches += 1;
-                                {
-                                    use std::hash::{Hash, Hasher};
-                                    let mut hasher =
-                                        std::collections::hash_map::DefaultHasher::new();
-                                    dispatch_input.to_string().hash(&mut hasher);
-                                    let cap = self
-                                        .config
-                                        .max_repeat_calls
-                                        .map(|v| v as usize)
-                                        .unwrap_or(0)
-                                        .max(10);
-                                    recent_calls.push_back((name.to_string(), hasher.finish()));
-                                    while recent_calls.len() > cap {
-                                        recent_calls.pop_front();
-                                    }
-                                }
-                            } else {
-                                let mut actual_input = dispatch_input.clone();
-                                if let Some(ref interceptor) = self.interceptor {
-                                    let state = self.build_loop_state(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        DurationMs::from(start.elapsed()),
-                                    );
-                                    match interceptor
-                                        .pre_sub_dispatch(&state, &name, &dispatch_input)
-                                        .await
-                                    {
-                                        SubDispatchAction::Halt { reason } => {
-                                            return Ok(Self::make_output(
-                                                last_content.clone(),
-                                                ExitReason::InterceptorHalt { reason },
-                                                self.build_metadata(
-                                                    total_tokens_in,
-                                                    total_tokens_out,
-                                                    total_cost,
-                                                    turns_used,
-                                                    dispatch_records,
-                                                    DurationMs::from(start.elapsed()),
-                                                ),
-                                                effects,
-                                            ));
-                                        }
-                                        SubDispatchAction::Skip { reason } => {
-                                            dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
-                                            content: format!("Skipped: {reason}"),
-                                            is_error: false, });
-                                            dispatch_records.push(SubDispatchRecord::new(
-                                                &name,
-                                                DurationMs::ZERO,
-                                                false,
-                                            ));
-                                            continue;
-                                        }
-                                        SubDispatchAction::ModifyInput { new_input } => {
-                                            actual_input = new_input;
-                                        }
-                                        SubDispatchAction::Continue => {}
-                                    }
-                                }
-                                // Execute via orchestrator dispatch
-                                let tool_start = Instant::now();
-                                let (mut result_content, is_error, success, duration) = {
-                                    let orch_input = OperatorInput::new(
-                                        Content::text(actual_input.to_string()),
-                                        layer0::operator::TriggerType::Task,
-                                    );
-                                    match self
-                                        .orchestrator
-                                        .dispatch(&AgentId::new(&name), orch_input)
-                                        .await
-                                    {
-                                        Ok(output) => {
-                                            let text = output
-                                                .message
-                                                .as_text()
-                                                .unwrap_or("null")
-                                                .to_string();
-                                            (
-                                                text,
-                                                false,
-                                                true,
-                                                DurationMs::from(tool_start.elapsed()),
-                                            )
-                                        }
-                                        Err(OrchError::AgentNotFound(_)) => (
-                                            neuron_tool::ToolError::NotFound(name.clone())
-                                                .to_string(),
-                                            true,
-                                            false,
-                                            DurationMs::from(tool_start.elapsed()),
-                                        ),
-                                        Err(e) => (
-                                            e.to_string(),
-                                            true,
-                                            false,
-                                            DurationMs::from(tool_start.elapsed()),
-                                        ),
-                                    }
-                                };
-                                if let Some(ref interceptor) = self.interceptor {
-                                    let state = self.build_loop_state(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        DurationMs::from(start.elapsed()),
-                                    );
-                                    match interceptor
-                                        .post_sub_dispatch(&state, &name, &result_content)
-                                        .await
-                                    {
-                                        SubDispatchResult::Halt { reason } => {
-                                            return Ok(Self::make_output(
-                                                last_content.clone(),
-                                                ExitReason::InterceptorHalt { reason },
-                                                self.build_metadata(
-                                                    total_tokens_in,
-                                                    total_tokens_out,
-                                                    total_cost,
-                                                    turns_used,
-                                                    dispatch_records,
-                                                    DurationMs::from(start.elapsed()),
-                                                ),
-                                                effects,
-                                            ));
-                                        }
-                                        SubDispatchResult::ModifyOutput { new_output } => {
-                                            result_content = new_output;
-                                        }
-                                        SubDispatchResult::Continue => {}
-                                    }
-                                }
-                                dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
-                                content: result_content,
-                                is_error, });
-                                // track regular tool call
-                                total_sub_dispatches += 1;
-                                {
-                                    use std::hash::{Hash, Hasher};
-                                    let mut hasher =
-                                        std::collections::hash_map::DefaultHasher::new();
-                                    actual_input.to_string().hash(&mut hasher);
-                                    let cap = self
-                                        .config
-                                        .max_repeat_calls
-                                        .map(|v| v as usize)
-                                        .unwrap_or(0)
-                                        .max(10);
-                                    recent_calls.push_back((name.clone(), hasher.finish()));
-                                    while recent_calls.len() > cap {
-                                        recent_calls.pop_front();
-                                    }
-                                }
-                                dispatch_records
-                                    .push(SubDispatchRecord::new(name, duration, success));
-                            }
-                            // Mid-batch steering poll — skip remaining tools in this batch
-                            {
-                                let (injected, ctx_cmds) = self
-                                    .poll_steering(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        DurationMs::from(start.elapsed()),
-                                    )
-                                    .await;
-                                apply_context_commands(&mut messages, ctx_cmds);
-                                if !injected.is_empty() {
-                                    messages.extend(injected.into_iter().map(Message::from));
-                                    if idx + 1 < len {
-                                        let skipped_names: Vec<String> = call_group
-                                            .iter()
-                                            .skip(idx + 1)
-                                            .map(|(_, n, _)| n.clone())
-                                            .collect();
-                                        for (rid, rname, _rinput) in
-                                            call_group.iter().skip(idx + 1).cloned()
-                                        {
-                                            dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: rid,
-                                            content: "Skipped due to steering".into(),
-                                            is_error: false, });
-                                            dispatch_records.push(SubDispatchRecord::new(
-                                                &rname,
-                                                DurationMs::ZERO,
-                                                false,
-                                            ));
-                                        }
-                                        if !skipped_names.is_empty()
-                                            && let Some(ref interceptor) = self.interceptor
-                                        {
-                                            let state = self.build_loop_state(
-                                                total_tokens_in,
-                                                total_tokens_out,
-                                                total_cost,
-                                                turns_used,
-                                                DurationMs::from(start.elapsed()),
-                                            );
-                                            interceptor
-                                                .post_steering_skip(&state, &skipped_names)
-                                                .await;
-                                        }
-                                        break 'batches;
-                                    }
-                                }
-                            }
-                        }
-                        // Post-batch steering poll
-                        {
-                            let (injected, ctx_cmds) = self
-                                .poll_steering(
-                                    total_tokens_in,
-                                    total_tokens_out,
-                                    total_cost,
-                                    turns_used,
-                                    DurationMs::from(start.elapsed()),
-                                )
-                                .await;
-                            apply_context_commands(&mut messages, ctx_cmds);
-                            if !injected.is_empty() {
-                                messages.extend(injected.into_iter().map(Message::from));
-                                _steered = true;
-                                break 'batches;
-                            }
-                        }
-                    }
-                    BatchItem::Exclusive((id, name, dispatch_input)) => {
-                        // Pre-exclusive steering poll
-                        {
-                            let (injected, ctx_cmds) = self
-                                .poll_steering(
-                                    total_tokens_in,
-                                    total_tokens_out,
-                                    total_cost,
-                                    turns_used,
-                                    DurationMs::from(start.elapsed()),
-                                )
-                                .await;
-                            apply_context_commands(&mut messages, ctx_cmds);
-                            if !injected.is_empty() {
-                                messages.extend(injected.into_iter().map(Message::from));
-                                let skipped_names = vec![name.clone()];
-                                dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
-                                content: "Skipped due to steering".into(),
-                                is_error: false, });
-                                dispatch_records.push(SubDispatchRecord::new(
-                                    &name,
-                                    DurationMs::ZERO,
-                                    false,
-                                ));
-                                if let Some(ref interceptor) = self.interceptor {
-                                    let state = self.build_loop_state(
-                                        total_tokens_in,
-                                        total_tokens_out,
-                                        total_cost,
-                                        turns_used,
-                                        DurationMs::from(start.elapsed()),
-                                    );
-                                    interceptor.post_steering_skip(&state, &skipped_names).await;
-                                }
-                                _steered = true;
-                                break 'batches;
-                            }
-                        }
-                        if let Some(effect) = self.try_as_effect(&name, &dispatch_input) {
-                            effects.push(effect);
-                            dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
-                            content: format!("{name} effect recorded."),
-                            is_error: false, });
-                            dispatch_records.push(SubDispatchRecord::new(
-                                &name,
-                                DurationMs::ZERO,
-                                true,
-                            ));
-                            // track effect tool call
-                            total_sub_dispatches += 1;
-                            {
-                                use std::hash::{Hash, Hasher};
-                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                                dispatch_input.to_string().hash(&mut hasher);
-                                let cap = self
-                                    .config
-                                    .max_repeat_calls
-                                    .map(|v| v as usize)
-                                    .unwrap_or(0)
-                                    .max(10);
-                                recent_calls.push_back((name.to_string(), hasher.finish()));
-                                while recent_calls.len() > cap {
-                                    recent_calls.pop_front();
-                                }
-                            }
-                            continue;
-                        }
-                        let mut actual_input = dispatch_input.clone();
-                        if let Some(ref interceptor) = self.interceptor {
-                            let state = self.build_loop_state(
-                                total_tokens_in,
-                                total_tokens_out,
-                                total_cost,
-                                turns_used,
-                                DurationMs::from(start.elapsed()),
-                            );
-                            match interceptor
-                                .pre_sub_dispatch(&state, &name, &dispatch_input)
-                                .await
-                            {
-                                SubDispatchAction::Halt { reason } => {
-                                    return Ok(Self::make_output(
-                                        last_content.clone(),
-                                        ExitReason::InterceptorHalt { reason },
-                                        self.build_metadata(
-                                            total_tokens_in,
-                                            total_tokens_out,
-                                            total_cost,
-                                            turns_used,
-                                            dispatch_records,
-                                            DurationMs::from(start.elapsed()),
-                                        ),
-                                        effects,
-                                    ));
-                                }
-                                SubDispatchAction::Skip { reason } => {
-                                    dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
-                                    content: format!("Skipped: {reason}"),
-                                    is_error: false, });
-                                    dispatch_records.push(SubDispatchRecord::new(
-                                        &name,
-                                        DurationMs::ZERO,
-                                        false,
-                                    ));
-                                    continue;
-                                }
-                                SubDispatchAction::ModifyInput { new_input } => {
-                                    actual_input = new_input;
-                                }
-                                SubDispatchAction::Continue => {}
-                            }
-                        }
-                        let tool_start = Instant::now();
-                        // Execute via orchestrator dispatch
-                        let (mut result_content, is_error, success, tool_duration) = {
-                            let orch_input = OperatorInput::new(
-                                Content::text(actual_input.to_string()),
-                                layer0::operator::TriggerType::Task,
-                            );
-                            match self
-                                .orchestrator
-                                .dispatch(&AgentId::new(&name), orch_input)
-                                .await
-                            {
-                                Ok(output) => {
-                                    let text =
-                                        output.message.as_text().unwrap_or("null").to_string();
-                                    (text, false, true, DurationMs::from(tool_start.elapsed()))
-                                }
-                                Err(OrchError::AgentNotFound(_)) => (
-                                    neuron_tool::ToolError::NotFound(name.clone()).to_string(),
-                                    true,
-                                    false,
-                                    DurationMs::from(tool_start.elapsed()),
-                                ),
-                                Err(e) => (
-                                    e.to_string(),
-                                    true,
-                                    false,
-                                    DurationMs::from(tool_start.elapsed()),
-                                ),
-                            }
-                        };
-                        if let Some(ref interceptor) = self.interceptor {
-                            let state = self.build_loop_state(
-                                total_tokens_in,
-                                total_tokens_out,
-                                total_cost,
-                                turns_used,
-                                DurationMs::from(start.elapsed()),
-                            );
-                            match interceptor
-                                .post_sub_dispatch(&state, &name, &result_content)
-                                .await
-                            {
-                                SubDispatchResult::Halt { reason } => {
-                                    return Ok(Self::make_output(
-                                        last_content.clone(),
-                                        ExitReason::InterceptorHalt { reason },
-                                        self.build_metadata(
-                                            total_tokens_in,
-                                            total_tokens_out,
-                                            total_cost,
-                                            turns_used,
-                                            dispatch_records,
-                                            DurationMs::from(start.elapsed()),
-                                        ),
-                                        effects,
-                                    ));
-                                }
-                                SubDispatchResult::ModifyOutput { new_output } => {
-                                    result_content = new_output;
-                                }
-                                SubDispatchResult::Continue => {}
-                            }
-                        }
-                        dispatch_results.push(layer0::content::ContentBlock::ToolResult { tool_use_id: id,
-                        content: result_content,
-                        is_error, });
-                        // track tool call
-                        total_sub_dispatches += 1;
-                        {
-                            use std::hash::{Hash, Hasher};
-                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                            actual_input.to_string().hash(&mut hasher);
-                            let cap = self
-                                .config
-                                .max_repeat_calls
-                                .map(|v| v as usize)
-                                .unwrap_or(0)
-                                .max(10);
-                            recent_calls.push_back((name.clone(), hasher.finish()));
-                            while recent_calls.len() > cap {
-                                recent_calls.pop_front();
-                            }
-                        }
-                        dispatch_records.push(SubDispatchRecord::new(name, tool_duration, success));
-                        // Post-exclusive steering poll
-                        {
-                            let (injected, ctx_cmds) = self
-                                .poll_steering(
-                                    total_tokens_in,
-                                    total_tokens_out,
-                                    total_cost,
-                                    turns_used,
-                                    DurationMs::from(start.elapsed()),
-                                )
-                                .await;
-                            apply_context_commands(&mut messages, ctx_cmds);
-                            if !injected.is_empty() {
-                                messages.extend(injected.into_iter().map(Message::from));
-                                _steered = true;
-                                break 'batches;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Add tool results as user message
-            messages.push(Message::new(
+            ctx.messages.push(Message::new(
                 L0Role::User,
                 Content::Blocks(dispatch_results),
             ));
             *self
                 .current_context
                 .lock()
-                .unwrap_or_else(|e| e.into_inner()) = messages.clone();
+                .unwrap_or_else(|e| e.into_inner()) = ctx.messages.clone();
 
-            // 8. Interceptor: ExitCheck — safety halt fires before any limit checks
-            if let Some(ref interceptor) = self.interceptor {
-                let state = self.build_loop_state(
-                    total_tokens_in,
-                    total_tokens_out,
-                    total_cost,
-                    turns_used,
-                    DurationMs::from(start.elapsed()),
-                );
-                if let ReactAction::Halt { reason } = interceptor.exit_check(&state).await {
-                    return Ok(Self::make_output(
-                        last_content.clone(),
-                        ExitReason::InterceptorHalt { reason },
-                        self.build_metadata(
-                            total_tokens_in,
-                            total_tokens_out,
-                            total_cost,
-                            turns_used,
-                            dispatch_records,
-                            DurationMs::from(start.elapsed()),
-                        ),
-                        effects,
-                    ));
-                }
+            // 8. ExitCheck interceptor
+            if let Some(ref interceptor) = self.interceptor
+                && let ReactAction::Halt { reason } = interceptor.exit_check(&ctx.state()).await
+            {
+                return Ok(ctx.output(ExitReason::InterceptorHalt { reason }));
             }
 
             // 9. Check limits
-            // 9a. Step/loop limits
-            if let Some(max_tc) = self.config.max_tool_calls {
-                let threshold = (max_tc as f32 * 0.80) as u32;
-                if total_sub_dispatches >= threshold
-                    && total_sub_dispatches < max_tc
-                    && let Some(ref sink) = self.budget_sink
-                {
-                    sink.on_budget_event(BudgetEvent::StepLimitApproaching {
-                        agent: AgentId::new("react"),
-                        current: total_sub_dispatches,
-                        max: max_tc,
-                    });
-                }
-            }
-
-            if let Some(max_tc) = self.config.max_tool_calls
-                && total_sub_dispatches >= max_tc
-            {
-                if let Some(ref sink) = self.budget_sink {
-                    sink.on_budget_event(BudgetEvent::StepLimitReached {
-                        agent: AgentId::new("react"),
-                        total_sub_dispatches,
-                    });
-                }
-
-                return Ok(Self::make_output(
-                    last_content.clone(),
-                    ExitReason::BudgetExhausted,
-                    self.build_metadata(
-                        total_tokens_in,
-                        total_tokens_out,
-                        total_cost,
-                        turns_used,
-                        dispatch_records,
-                        DurationMs::from(start.elapsed()),
-                    ),
-                    effects,
-                ));
-            }
-            if let Some(max_rep) = self.config.max_repeat_calls
-                && max_rep > 0
-                && recent_calls.len() >= max_rep as usize
-            {
-                let first = recent_calls.front().cloned();
-                if recent_calls.iter().all(|c| Some(c) == first.as_ref()) {
-                    if let Some(ref sink) = self.budget_sink {
-                        sink.on_budget_event(BudgetEvent::LoopDetected {
-                            agent: AgentId::new("react"),
-                            operator_name: first
-                                .as_ref()
-                                .map(|(n, _)| n.clone())
-                                .unwrap_or_default(),
-                            consecutive_count: recent_calls.len() as u32,
-                            max: max_rep,
-                        });
-                    }
-
-                    return Ok(Self::make_output(
-                        last_content.clone(),
-                        ExitReason::Custom("stuck_detected".into()),
-                        self.build_metadata(
-                            total_tokens_in,
-                            total_tokens_out,
-                            total_cost,
-                            turns_used,
-                            dispatch_records,
-                            DurationMs::from(start.elapsed()),
-                        ),
-                        effects,
-                    ));
-                }
-            }
-            // 9b. MaxTurns
-            if turns_used >= config.max_turns {
-                return Ok(Self::make_output(
-                    last_content.clone(),
-                    ExitReason::MaxTurns,
-                    self.build_metadata(
-                        total_tokens_in,
-                        total_tokens_out,
-                        total_cost,
-                        turns_used,
-                        dispatch_records,
-                        DurationMs::from(start.elapsed()),
-                    ),
-                    effects,
-                ));
-            }
-
-            if let Some(max_cost) = &config.max_cost
-                && total_cost >= *max_cost
-            {
-                return Ok(Self::make_output(
-                    last_content.clone(),
-                    ExitReason::BudgetExhausted,
-                    self.build_metadata(
-                        total_tokens_in,
-                        total_tokens_out,
-                        total_cost,
-                        turns_used,
-                        dispatch_records,
-                        DurationMs::from(start.elapsed()),
-                    ),
-                    effects,
-                ));
-            }
-
-            if let Some(max_duration) = &config.max_duration {
-                let threshold = max_duration.to_std().mul_f32(0.80);
-                if start.elapsed() >= threshold
-                    && start.elapsed() < max_duration.to_std()
-                    && let Some(ref sink) = self.budget_sink
-                {
-                    sink.on_budget_event(BudgetEvent::TimeoutApproaching {
-                        agent: AgentId::new("react"),
-                        elapsed: DurationMs::from(start.elapsed()),
-                        max_duration: *max_duration,
-                    });
-                }
-            }
-
-            if let Some(max_duration) = &config.max_duration
-                && start.elapsed() >= max_duration.to_std()
-            {
-                if let Some(ref sink) = self.budget_sink {
-                    sink.on_budget_event(BudgetEvent::TimeoutReached {
-                        agent: AgentId::new("react"),
-                        elapsed: DurationMs::from(start.elapsed()),
-                    });
-                }
-
-                return Ok(Self::make_output(
-                    last_content.clone(),
-                    ExitReason::Timeout,
-                    self.build_metadata(
-                        total_tokens_in,
-                        total_tokens_out,
-                        total_cost,
-                        turns_used,
-                        dispatch_records,
-                        DurationMs::from(start.elapsed()),
-                    ),
-                    effects,
-                ));
+            if let Some(output) = self.check_limits(&ctx, &config) {
+                return Ok(output);
             }
 
             // 10. Context compaction
-            let effective_limit =
-                (config.max_tokens as f32 * 4.0 * (1.0 - self.config.compaction_reserve_pct))
-                    as usize;
-            let total_estimated: usize = messages.iter().map(|m| m.estimated_tokens()).sum();
-            if total_estimated > effective_limit
-                && let Some(ref compactor) = self.compactor
-            {
-                // Interceptor: PreCompaction
-                let should_compact = if let Some(ref interceptor) = self.interceptor {
-                    let state = self.build_loop_state(
-                        total_tokens_in,
-                        total_tokens_out,
-                        total_cost,
-                        turns_used,
-                        DurationMs::from(start.elapsed()),
-                    );
-                    matches!(
-                        interceptor.pre_compaction(&state, messages.len()).await,
-                        ReactAction::Continue
-                    )
-                } else {
-                    true
-                };
-                if !should_compact {
-                    if let Some(ref sink) = self.compaction_sink {
-                        sink.on_compaction_event(CompactionEvent::CompactionSkipped {
-                            agent: AgentId::new("react"),
-                            reason: "blocked by interceptor".into(),
-                        });
-                    }
-                } else {
-                    let before_count = messages.len() as u32;
-                    let before_tokens = total_estimated as u64;
-                    let compacted = compactor(&messages);
-                    let after_count = compacted.len() as u32;
-                    let after_tokens: u64 =
-                        compacted.iter().map(|m| m.estimated_tokens() as u64).sum();
-                    if let Some(ref sink) = self.compaction_sink {
-                        sink.on_compaction_event(CompactionEvent::CompactionQuality {
-                            agent: AgentId::new("react"),
-                            tokens_before: before_tokens,
-                            tokens_after: after_tokens,
-                            items_preserved: after_count,
-                            items_lost: before_count.saturating_sub(after_count),
-                        });
-                    }
-                    messages = compacted;
-                    *self
-                        .last_compaction_removed
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner()) =
-                        before_count.saturating_sub(after_count) as usize;
-                    *self
-                        .current_context
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner()) = messages.clone();
-                    // Interceptor: PostCompaction
-                    if let Some(ref interceptor) = self.interceptor {
-                        let state = self.build_loop_state(
-                            total_tokens_in,
-                            total_tokens_out,
-                            total_cost,
-                            turns_used,
-                            DurationMs::from(start.elapsed()),
-                        );
-                        interceptor
-                            .post_compaction(&state, before_count as usize, after_count as usize)
-                            .await;
-                    }
-                }
-            }
-
-            // 11. Loop repeats
+            self.try_compact(&mut ctx, config.max_tokens).await;
         }
     }
 }
