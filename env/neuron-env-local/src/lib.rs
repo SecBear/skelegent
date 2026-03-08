@@ -200,7 +200,6 @@ impl LocalEnv {
         event.trace_id = correlation.trace_id.clone();
         sink.emit_secret_access(event);
     }
-
 }
 
 #[async_trait]
@@ -211,9 +210,7 @@ impl Environment for LocalEnv {
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
         let correlation = CorrelationContext::from_metadata(&input.metadata);
-        let cleanup = self
-            .resolve_and_inject(spec, &correlation)
-            .await?;
+        let cleanup = self.resolve_and_inject(spec, &correlation).await?;
 
         let result = self
             .op

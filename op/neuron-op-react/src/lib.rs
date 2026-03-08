@@ -384,10 +384,7 @@ impl<P: Provider> ReactOperator<P> {
         schemas
     }
 
-    async fn assemble_context(
-        &self,
-        input: &OperatorInput,
-    ) -> Result<Vec<Message>, OperatorError> {
+    async fn assemble_context(&self, input: &OperatorInput) -> Result<Vec<Message>, OperatorError> {
         let mut messages = Vec::new();
 
         // Read history from state if session is present
@@ -398,10 +395,7 @@ impl<P: Provider> ReactOperator<P> {
                     if let Ok(history_messages) =
                         serde_json::from_value::<Vec<ProviderMessage>>(history)
                     {
-                        messages = history_messages
-                            .into_iter()
-                            .map(Message::from)
-                            .collect();
+                        messages = history_messages.into_iter().map(Message::from).collect();
                     }
                 }
                 Ok(None) => {} // No history yet
@@ -572,10 +566,7 @@ impl<P: Provider> ReactOperator<P> {
 /// Apply a list of context manipulation commands to the message buffer.
 ///
 /// Commands execute unconditionally — they bypass the `PreSteeringInject` hook.
-pub(crate) fn apply_context_commands(
-    messages: &mut Vec<Message>,
-    cmds: Vec<ContextCommand>,
-) {
+pub(crate) fn apply_context_commands(messages: &mut Vec<Message>, cmds: Vec<ContextCommand>) {
     for cmd in cmds {
         match cmd {
             ContextCommand::Pin { message_index } => {
@@ -611,19 +602,17 @@ pub(crate) fn apply_context_commands(
                 Err(e) => eprintln!("[steering] SaveSnapshot serialization failed: {}", e),
             },
             ContextCommand::LoadSnapshot { path } => match std::fs::read(&path) {
-                Ok(data) => {
-                    match serde_json::from_slice::<Vec<Message>>(&data) {
-                        Ok(loaded) => {
-                            messages.clear();
-                            messages.extend(loaded);
-                        }
-                        Err(e) => eprintln!(
-                            "[steering] LoadSnapshot deserialization failed: path={}, error={}",
-                            path.display(),
-                            e
-                        ),
+                Ok(data) => match serde_json::from_slice::<Vec<Message>>(&data) {
+                    Ok(loaded) => {
+                        messages.clear();
+                        messages.extend(loaded);
                     }
-                }
+                    Err(e) => eprintln!(
+                        "[steering] LoadSnapshot deserialization failed: path={}, error={}",
+                        path.display(),
+                        e
+                    ),
+                },
                 Err(e) => eprintln!(
                     "[steering] LoadSnapshot read failed: path={}, error={}",
                     path.display(),
@@ -802,7 +791,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
 
             // 7. Tool execution
             // Add assistant message to context
-            messages.push(Message::new(L0Role::Assistant, parts_to_content(&response.content)));
+            messages.push(Message::new(
+                L0Role::Assistant,
+                parts_to_content(&response.content),
+            ));
 
             let mut dispatch_results: Vec<ContentPart> = Vec::new();
             // Use planner to decide batches. Build (id,name,input) vector first.
@@ -1401,7 +1393,10 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             }
 
             // Add tool results as user message
-            messages.push(Message::new(L0Role::User, parts_to_content(&dispatch_results)));
+            messages.push(Message::new(
+                L0Role::User,
+                parts_to_content(&dispatch_results),
+            ));
             *self
                 .current_context
                 .lock()
@@ -1588,8 +1583,57 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             if total_estimated > effective_limit
                 && let Some(ref compactor) = self.compactor
             {
-                    // Interceptor: PreCompaction
-                    let should_compact = if let Some(ref interceptor) = self.interceptor {
+                // Interceptor: PreCompaction
+                let should_compact = if let Some(ref interceptor) = self.interceptor {
+                    let state = self.build_loop_state(
+                        total_tokens_in,
+                        total_tokens_out,
+                        total_cost,
+                        turns_used,
+                        DurationMs::from(start.elapsed()),
+                    );
+                    matches!(
+                        interceptor.pre_compaction(&state, messages.len()).await,
+                        ReactAction::Continue
+                    )
+                } else {
+                    true
+                };
+                if !should_compact {
+                    if let Some(ref sink) = self.compaction_sink {
+                        sink.on_compaction_event(CompactionEvent::CompactionSkipped {
+                            agent: AgentId::new("react"),
+                            reason: "blocked by interceptor".into(),
+                        });
+                    }
+                } else {
+                    let before_count = messages.len() as u32;
+                    let before_tokens = total_estimated as u64;
+                    let compacted = compactor(&messages);
+                    let after_count = compacted.len() as u32;
+                    let after_tokens: u64 =
+                        compacted.iter().map(|m| m.estimated_tokens() as u64).sum();
+                    if let Some(ref sink) = self.compaction_sink {
+                        sink.on_compaction_event(CompactionEvent::CompactionQuality {
+                            agent: AgentId::new("react"),
+                            tokens_before: before_tokens,
+                            tokens_after: after_tokens,
+                            items_preserved: after_count,
+                            items_lost: before_count.saturating_sub(after_count),
+                        });
+                    }
+                    messages = compacted;
+                    *self
+                        .last_compaction_removed
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) =
+                        before_count.saturating_sub(after_count) as usize;
+                    *self
+                        .current_context
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = messages.clone();
+                    // Interceptor: PostCompaction
+                    if let Some(ref interceptor) = self.interceptor {
                         let state = self.build_loop_state(
                             total_tokens_in,
                             total_tokens_out,
@@ -1597,64 +1641,12 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                             turns_used,
                             DurationMs::from(start.elapsed()),
                         );
-                        matches!(
-                            interceptor.pre_compaction(&state, messages.len()).await,
-                            ReactAction::Continue
-                        )
-                    } else {
-                        true
-                    };
-                    if !should_compact {
-                        if let Some(ref sink) = self.compaction_sink {
-                            sink.on_compaction_event(CompactionEvent::CompactionSkipped {
-                                agent: AgentId::new("react"),
-                                reason: "blocked by interceptor".into(),
-                            });
-                        }
-                    } else {
-                        let before_count = messages.len() as u32;
-                        let before_tokens = total_estimated as u64;
-                        let compacted = compactor(&messages);
-                        let after_count = compacted.len() as u32;
-                        let after_tokens: u64 = compacted.iter().map(|m| m.estimated_tokens() as u64).sum();
-                        if let Some(ref sink) = self.compaction_sink {
-                            sink.on_compaction_event(CompactionEvent::CompactionQuality {
-                                agent: AgentId::new("react"),
-                                tokens_before: before_tokens,
-                                tokens_after: after_tokens,
-                                items_preserved: after_count,
-                                items_lost: before_count.saturating_sub(after_count),
-                            });
-                        }
-                        messages = compacted;
-                        *self
-                            .last_compaction_removed
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner()) =
-                            before_count.saturating_sub(after_count) as usize;
-                        *self
-                            .current_context
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner()) = messages.clone();
-                        // Interceptor: PostCompaction
-                        if let Some(ref interceptor) = self.interceptor {
-                            let state = self.build_loop_state(
-                                total_tokens_in,
-                                total_tokens_out,
-                                total_cost,
-                                turns_used,
-                                DurationMs::from(start.elapsed()),
-                            );
-                            interceptor
-                                .post_compaction(
-                                    &state,
-                                    before_count as usize,
-                                    after_count as usize,
-                                )
-                                .await;
-                        }
+                        interceptor
+                            .post_compaction(&state, before_count as usize, after_count as usize)
+                            .await;
                     }
                 }
+            }
 
             // 11. Loop repeats
         }
@@ -1971,34 +1963,34 @@ mod tests {
         tools.register(Arc::new(EchoTool));
 
         let mut op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_max_turns: 2,
-                        ..Default::default()
-                    },
-                );
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_max_turns: 2,
+                ..Default::default()
+            },
+        );
         // Avoid unused warning
         let _ = &mut op;
 
         let op = ReactOperator::new(
-                    MockProvider::new(vec![
-                        tool_use_response("tu_1", "echo", json!({})),
-                        tool_use_response("tu_2", "echo", json!({})),
-                        simple_text_response("never reached"),
-                    ]),
-                    {
-                        let mut t = ToolRegistry::new();
-                        t.register(Arc::new(EchoTool));
-                        t
-                    },
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_max_turns: 2,
-                        ..Default::default()
-                    },
-                );
+            MockProvider::new(vec![
+                tool_use_response("tu_1", "echo", json!({})),
+                tool_use_response("tu_2", "echo", json!({})),
+                simple_text_response("never reached"),
+            ]),
+            {
+                let mut t = ToolRegistry::new();
+                t.register(Arc::new(EchoTool));
+                t
+            },
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_max_turns: 2,
+                ..Default::default()
+            },
+        );
 
         let output = op.execute(simple_input("loop")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::MaxTurns);
@@ -2015,11 +2007,11 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig::default(),
-                );
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        );
 
         let mut input = simple_input("spend");
         let mut tc = layer0::operator::OperatorConfig::default();
@@ -2295,11 +2287,11 @@ mod tests {
         // ReactOperator<P> can be used as Arc<dyn Operator>
         let provider = MockProvider::new(vec![simple_text_response("Hello!")]);
         let op: Arc<dyn Operator> = Arc::new(ReactOperator::new(
-                    provider,
-                    ToolRegistry::new(),
-                    Arc::new(NullStateReader),
-                    ReactConfig::default(),
-                ));
+            provider,
+            ToolRegistry::new(),
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        ));
 
         let output = op.execute(simple_input("Hi")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
@@ -2320,11 +2312,11 @@ mod tests {
         }
 
         let op = ReactOperator::new(
-                    ErrorProvider,
-                    ToolRegistry::new(),
-                    Arc::new(NullStateReader),
-                    ReactConfig::default(),
-                );
+            ErrorProvider,
+            ToolRegistry::new(),
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        );
 
         let result = op.execute(simple_input("test")).await;
         assert!(matches!(result, Err(OperatorError::Retryable(_))));
@@ -2553,11 +2545,11 @@ mod tests {
             vec![user_msg("STEER")], // pre-exclusive: trigger
         ]));
         let op = ReactOperator::new(
-                    counting,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig::default(),
-                )
+            counting,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        )
         .with_steering(steering);
         let output = op.execute(simple_input("run"));
         let output = output.await.unwrap();
@@ -2685,14 +2677,14 @@ mod tests {
             finals: finals.clone(),
         });
         let op = ReactOperator::new(
-                    MockProvider::new(vec![
-                        tool_use_response("tu_s", "stream_echo", json!({})),
-                        simple_text_response("OK"),
-                    ]),
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig::default(),
-                )
+            MockProvider::new(vec![
+                tool_use_response("tu_s", "stream_echo", json!({})),
+                simple_text_response("OK"),
+            ]),
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        )
         .with_interceptor(interceptor);
         let _ = op.execute(simple_input("run")).await.unwrap();
         // No streaming chunks — orchestrator dispatch is request-response only
@@ -2829,7 +2821,6 @@ mod tests {
         }
     }
 
-
     /// A provider that records the model field it receives.
     struct RecordingProvider {
         inner: MockProvider,
@@ -2865,14 +2856,14 @@ mod tests {
             reason: "observer_halt_test".into(),
         });
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_max_turns: 1,
-                        ..Default::default()
-                    },
-                )
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_max_turns: 1,
+                ..Default::default()
+            },
+        )
         .with_interceptor(interceptor);
         let output = op.execute(simple_input("run")).await.unwrap();
         // Must be InterceptorHalt, not MaxTurns
@@ -2916,11 +2907,11 @@ mod tests {
             reason: "injection_blocked".into(),
         });
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig::default(),
-                )
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        )
         .with_interceptor(interceptor)
         .with_steering(steering);
         let output = op.execute(simple_input("run")).await.unwrap();
@@ -2959,11 +2950,11 @@ mod tests {
             recorded: recorded.clone(),
         });
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig::default(),
-                )
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig::default(),
+        )
         .with_interceptor(interceptor)
         .with_steering(steering);
         let output = op.execute(simple_input("run")).await.unwrap();
@@ -3040,7 +3031,10 @@ mod tests {
             msgs.to_vec()
         });
         op.execute(simple_input("Hi")).await.unwrap();
-        assert!(*compacted.lock().unwrap(), "compactor should have been called");
+        assert!(
+            *compacted.lock().unwrap(),
+            "compactor should have been called"
+        );
     }
 
     // ── tests ─────────────────────────────────────────────────────────
@@ -3058,15 +3052,15 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_max_turns: 10,
-                        max_tool_calls: Some(3),
-                        ..Default::default()
-                    },
-                );
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_max_turns: 10,
+                max_tool_calls: Some(3),
+                ..Default::default()
+            },
+        );
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::BudgetExhausted);
         // 3 tool calls were made
@@ -3085,15 +3079,15 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_max_turns: 10,
-                        max_repeat_calls: Some(2),
-                        ..Default::default()
-                    },
-                );
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_max_turns: 10,
+                max_repeat_calls: Some(2),
+                ..Default::default()
+            },
+        );
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(
             output.exit_reason,
@@ -3112,15 +3106,15 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_max_turns: 10,
-                        max_repeat_calls: Some(2),
-                        ..Default::default()
-                    },
-                );
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_max_turns: 10,
+                max_repeat_calls: Some(2),
+                ..Default::default()
+            },
+        );
         let output = op.execute(simple_input("run")).await.unwrap();
         // No stuck detection — completes normally
         assert_eq!(output.exit_reason, ExitReason::Complete);
@@ -3138,15 +3132,15 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        max_tool_calls: None,
-                        max_repeat_calls: None,
-                        ..Default::default()
-                    },
-                );
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig {
+                max_tool_calls: None,
+                max_repeat_calls: None,
+                ..Default::default()
+            },
+        );
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.metadata.sub_dispatches.len(), 2);
@@ -3169,14 +3163,14 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_model: "default-model".into(),
-                        ..Default::default()
-                    },
-                )
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_model: "default-model".into(),
+                ..Default::default()
+            },
+        )
         .with_model_selector(|req: &ProviderRequest| {
             if req.messages.len() > 1 {
                 Some("big-model".to_string())
@@ -3202,14 +3196,14 @@ mod tests {
             models_seen: models_seen.clone(),
         };
         let op = ReactOperator::new(
-                    provider,
-                    ToolRegistry::new(),
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_model: "my-model".into(),
-                        ..Default::default()
-                    },
-                );
+            provider,
+            ToolRegistry::new(),
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_model: "my-model".into(),
+                ..Default::default()
+            },
+        );
         op.execute(simple_input("Hi")).await.unwrap();
         let seen = models_seen.lock().unwrap().clone();
         assert_eq!(seen, vec![Some("my-model".to_string())]);
@@ -3240,15 +3234,15 @@ mod tests {
             events: events.clone(),
         });
         let op = ReactOperator::new(
-                    provider,
-                    tools,
-                    Arc::new(NullStateReader),
-                    ReactConfig {
-                        default_max_turns: 10,
-                        max_tool_calls: Some(2),
-                        ..Default::default()
-                    },
-                )
+            provider,
+            tools,
+            Arc::new(NullStateReader),
+            ReactConfig {
+                default_max_turns: 10,
+                max_tool_calls: Some(2),
+                ..Default::default()
+            },
+        )
         .with_budget_sink(sink);
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::BudgetExhausted);

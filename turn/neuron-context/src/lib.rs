@@ -77,7 +77,9 @@ pub struct TieredConfig {
 
 impl Default for TieredConfig {
     fn default() -> Self {
-        Self { active_zone_size: 10 }
+        Self {
+            active_zone_size: 10,
+        }
     }
 }
 

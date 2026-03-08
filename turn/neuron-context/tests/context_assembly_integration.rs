@@ -131,7 +131,10 @@ async fn assemble_full_pipeline() {
         CompactionPolicy::Pinned,
         "system prompt should be pinned"
     );
-    let text = messages[0].content.as_text().expect("expected text content");
+    let text = messages[0]
+        .content
+        .as_text()
+        .expect("expected text content");
     assert!(
         text.contains("research sweep agent"),
         "system prompt text mismatch"
@@ -156,7 +159,10 @@ async fn assemble_full_pipeline() {
     }
 
     // Deltas should be ordered by recency (most recent first = highest salience)
-    let delta_saliences: Vec<f64> = messages[2..5].iter().map(|m| m.meta.salience.unwrap()).collect();
+    let delta_saliences: Vec<f64> = messages[2..5]
+        .iter()
+        .map(|m| m.meta.salience.unwrap())
+        .collect();
 }
 
 #[tokio::test]

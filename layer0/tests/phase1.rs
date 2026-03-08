@@ -285,7 +285,9 @@ fn exit_reason_custom_round_trip() {
 
 #[test]
 fn exit_reason_observer_halt_round_trip() {
-    let e = ExitReason::InterceptorHalt { reason: "budget exceeded".into(), };
+    let e = ExitReason::InterceptorHalt {
+        reason: "budget exceeded".into(),
+    };
     let json = serde_json::to_string(&e).unwrap();
     let back: ExitReason = serde_json::from_str(&json).unwrap();
     assert_eq!(e, back);
@@ -515,7 +517,6 @@ fn compaction_event_round_trip() {
     let json2 = serde_json::to_string(&back).unwrap();
     assert_eq!(json, json2);
 }
-
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Orchestrator QueryPayload round-trip
@@ -1111,7 +1112,6 @@ fn credential_injection_variants_round_trip() {
         assert_eq!(json, json2);
     }
 }
-
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Compaction event variants

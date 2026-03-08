@@ -62,8 +62,7 @@ async fn openai_provider_is_object_safe_as_arc_dyn_operator() {
     };
 
     // Prove ReactOperator<P> can be used as Arc<dyn Operator>
-    let op: Arc<dyn Operator> =
-        Arc::new(ReactOperator::new(provider, tools, store, config));
+    let op: Arc<dyn Operator> = Arc::new(ReactOperator::new(provider, tools, store, config));
 
     let input = OperatorInput::new(Content::text("Say hi."), TriggerType::User);
     let output = op.execute(input).await.unwrap();

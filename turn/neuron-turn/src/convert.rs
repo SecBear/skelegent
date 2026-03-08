@@ -152,7 +152,6 @@ impl From<ProviderMessage> for Message {
     }
 }
 
-
 /// Convert a layer0 `Message` to a `ProviderMessage`.
 ///
 /// Metadata (policy, salience, source) is discarded — the provider wire
