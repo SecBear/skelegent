@@ -10,7 +10,6 @@
 
 use layer0::content::Content;
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
-use neuron_context::SlidingWindow;
 use neuron_op_react::{ReactConfig, ReactOperator};
 use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use neuron_provider_anthropic::AnthropicProvider;
@@ -88,7 +87,6 @@ async fn anthropic_react_simple_prompt() {
     let op = ReactOperator::new(
         provider,
         ToolRegistry::new(),
-        Box::new(SlidingWindow::new()),
         Arc::new(NullStateReader),
         config,
     );
@@ -164,7 +162,6 @@ async fn openai_react_simple_prompt() {
     let op = ReactOperator::new(
         provider,
         ToolRegistry::new(),
-        Box::new(SlidingWindow::new()),
         Arc::new(NullStateReader),
         config,
     );
@@ -225,7 +222,6 @@ async fn ollama_react_simple_prompt() {
     let op = ReactOperator::new(
         provider,
         ToolRegistry::new(),
-        Box::new(SlidingWindow::new()),
         Arc::new(NullStateReader),
         config,
     );

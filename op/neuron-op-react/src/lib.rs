@@ -21,9 +21,8 @@ use layer0::orchestrator::Orchestrator;
 use neuron_tool::adapter::ToolRegistryOrchestrator;
 use neuron_tool::{ToolConcurrencyHint, ToolRegistry};
 
-use neuron_turn::AnnotatedMessage;
-use neuron_turn::context::ContextStrategy;
-use neuron_turn::convert::{content_to_user_message, parts_to_content};
+use layer0::context::{Message, Role as L0Role};
+use neuron_turn::convert::{message_to_provider, parts_to_content};
 use neuron_turn::provider::Provider;
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
@@ -55,7 +54,7 @@ pub trait CompactionEventSink: Send + Sync {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ContextSnapshot {
     /// Messages currently in the context window, with their annotations.
-    pub messages: Vec<AnnotatedMessage>,
+    pub messages: Vec<Message>,
     /// Approximate token count of the current context (4 chars ≈ 1 token heuristic).
     pub token_count: usize,
     /// Number of messages pinned (will survive compaction).
@@ -176,6 +175,12 @@ impl DispatchPlanner for SequentialPlanner {
             .collect()
     }
 }
+/// A compaction function that reduces a message list.
+///
+/// Called when estimated token count exceeds the effective context limit.
+/// Should return a shorter list, preserving pinned messages.
+pub type Compactor = dyn Fn(&[Message]) -> Vec<Message> + Send + Sync;
+
 /// A full-featured Operator implementation with a ReAct loop.
 ///
 /// Generic over `P: Provider` (not object-safe). The object-safe boundary
@@ -183,7 +188,7 @@ impl DispatchPlanner for SequentialPlanner {
 pub struct ReactOperator<P: Provider> {
     provider: P,
     tools: ToolRegistry,
-    context_strategy: Box<dyn ContextStrategy>,
+    compactor: Option<Box<Compactor>>,
     interceptor: Option<Arc<dyn ReactInterceptor>>,
     state_reader: Arc<dyn layer0::StateReader>,
     config: ReactConfig,
@@ -196,7 +201,7 @@ pub struct ReactOperator<P: Provider> {
     /// this; direct `ToolDyn::call()` is no longer supported.
     orchestrator: Arc<dyn Orchestrator>,
     /// Live snapshot buffer, updated at key mutation points during `execute`.
-    current_context: Arc<Mutex<Vec<AnnotatedMessage>>>,
+    current_context: Arc<Mutex<Vec<Message>>>,
     /// Number of messages removed in the most recent compaction cycle.
     last_compaction_removed: Arc<Mutex<usize>>,
 }
@@ -206,7 +211,6 @@ impl<P: Provider> ReactOperator<P> {
     pub fn new(
         provider: P,
         tools: ToolRegistry,
-        context_strategy: Box<dyn ContextStrategy>,
         state_reader: Arc<dyn layer0::StateReader>,
         config: ReactConfig,
     ) -> Self {
@@ -215,7 +219,7 @@ impl<P: Provider> ReactOperator<P> {
         Self {
             provider,
             tools,
-            context_strategy,
+            compactor: None,
             interceptor: None,
             state_reader,
             config,
@@ -290,6 +294,17 @@ impl<P: Provider> ReactOperator<P> {
         self.config.model_selector = Some(Arc::new(f));
         self
     }
+    /// Opt-in: attach a compaction function for context window management.
+    ///
+    /// Called when estimated token count exceeds the effective limit.
+    /// Should return a shorter message list (preserving pinned messages).
+    pub fn with_compactor(
+        mut self,
+        f: impl Fn(&[Message]) -> Vec<Message> + Send + Sync + 'static,
+    ) -> Self {
+        self.compactor = Some(Box::new(f));
+        self
+    }
 
     /// Return a point-in-time snapshot of the operator's context window.
     ///
@@ -305,10 +320,10 @@ impl<P: Provider> ReactOperator<P> {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let token_count = self.context_strategy.token_estimate(&messages);
+        let token_count = messages.iter().map(|m| m.estimated_tokens()).sum::<usize>();
         let pinned_count = messages
             .iter()
-            .filter(|am| matches!(am.policy, Some(layer0::CompactionPolicy::Pinned)))
+            .filter(|m| matches!(m.meta.policy, layer0::CompactionPolicy::Pinned))
             .count();
         let last_compaction_removed = *self
             .last_compaction_removed
@@ -372,7 +387,7 @@ impl<P: Provider> ReactOperator<P> {
     async fn assemble_context(
         &self,
         input: &OperatorInput,
-    ) -> Result<Vec<AnnotatedMessage>, OperatorError> {
+    ) -> Result<Vec<Message>, OperatorError> {
         let mut messages = Vec::new();
 
         // Read history from state if session is present
@@ -385,7 +400,7 @@ impl<P: Provider> ReactOperator<P> {
                     {
                         messages = history_messages
                             .into_iter()
-                            .map(AnnotatedMessage::from)
+                            .map(Message::from)
                             .collect();
                     }
                 }
@@ -395,9 +410,7 @@ impl<P: Provider> ReactOperator<P> {
         }
 
         // Add the new user message
-        messages.push(AnnotatedMessage::from(content_to_user_message(
-            &input.message,
-        )));
+        messages.push(Message::new(L0Role::User, input.message.clone()));
 
         Ok(messages)
     }
@@ -560,21 +573,21 @@ impl<P: Provider> ReactOperator<P> {
 ///
 /// Commands execute unconditionally — they bypass the `PreSteeringInject` hook.
 pub(crate) fn apply_context_commands(
-    messages: &mut Vec<neuron_turn::AnnotatedMessage>,
+    messages: &mut Vec<Message>,
     cmds: Vec<ContextCommand>,
 ) {
     for cmd in cmds {
         match cmd {
             ContextCommand::Pin { message_index } => {
-                if let Some(am) = messages.get_mut(message_index) {
-                    am.policy = Some(layer0::CompactionPolicy::Pinned);
+                if let Some(msg) = messages.get_mut(message_index) {
+                    msg.meta.policy = layer0::CompactionPolicy::Pinned;
                 }
             }
             ContextCommand::DropOldest { count } => {
                 let droppable: Vec<usize> = messages
                     .iter()
                     .enumerate()
-                    .filter(|(_, am)| !matches!(am.policy, Some(layer0::CompactionPolicy::Pinned)))
+                    .filter(|(_, m)| !matches!(m.meta.policy, layer0::CompactionPolicy::Pinned))
                     .map(|(i, _)| i)
                     .take(count)
                     .collect();
@@ -583,7 +596,7 @@ pub(crate) fn apply_context_commands(
                 }
             }
             ContextCommand::ClearWorking => {
-                messages.retain(|am| matches!(am.policy, Some(layer0::CompactionPolicy::Pinned)));
+                messages.retain(|m| matches!(m.meta.policy, layer0::CompactionPolicy::Pinned));
             }
             ContextCommand::SaveSnapshot { path } => match serde_json::to_vec(messages) {
                 Ok(data) => {
@@ -599,7 +612,7 @@ pub(crate) fn apply_context_commands(
             },
             ContextCommand::LoadSnapshot { path } => match std::fs::read(&path) {
                 Ok(data) => {
-                    match serde_json::from_slice::<Vec<neuron_turn::AnnotatedMessage>>(&data) {
+                    match serde_json::from_slice::<Vec<Message>>(&data) {
                         Ok(loaded) => {
                             messages.clear();
                             messages.extend(loaded);
@@ -679,7 +692,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             // 2. Build ProviderRequest
             let request = ProviderRequest {
                 model: config.model.clone(),
-                messages: messages.iter().map(|am| am.message.clone()).collect(),
+                messages: messages.iter().map(message_to_provider).collect(),
                 tools: tools.clone(),
                 max_tokens: Some(config.max_tokens),
                 temperature: None,
@@ -789,10 +802,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
 
             // 7. Tool execution
             // Add assistant message to context
-            messages.push(AnnotatedMessage::from(ProviderMessage {
-                role: Role::Assistant,
-                content: response.content.clone(),
-            }));
+            messages.push(Message::new(L0Role::Assistant, parts_to_content(&response.content)));
 
             let mut dispatch_results: Vec<ContentPart> = Vec::new();
             // Use planner to decide batches. Build (id,name,input) vector first.
@@ -827,7 +837,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 .await;
                             apply_context_commands(&mut messages, ctx_cmds);
                             if !injected.is_empty() {
-                                messages.extend(injected.into_iter().map(AnnotatedMessage::from));
+                                messages.extend(injected.into_iter().map(Message::from));
                                 // All tools in this batch are skipped with placeholders
                                 let skipped_names: Vec<String> =
                                     call_group.iter().map(|(_, n, _)| n.clone()).collect();
@@ -875,8 +885,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     .await;
                                 apply_context_commands(&mut messages, ctx_cmds);
                                 if !injected.is_empty() {
-                                    messages
-                                        .extend(injected.into_iter().map(AnnotatedMessage::from));
+                                    messages.extend(injected.into_iter().map(Message::from));
                                     let skipped_names: Vec<String> = call_group
                                         .iter()
                                         .skip(idx)
@@ -1105,8 +1114,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                     .await;
                                 apply_context_commands(&mut messages, ctx_cmds);
                                 if !injected.is_empty() {
-                                    messages
-                                        .extend(injected.into_iter().map(AnnotatedMessage::from));
+                                    messages.extend(injected.into_iter().map(Message::from));
                                     if idx + 1 < len {
                                         let skipped_names: Vec<String> = call_group
                                             .iter()
@@ -1159,7 +1167,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 .await;
                             apply_context_commands(&mut messages, ctx_cmds);
                             if !injected.is_empty() {
-                                messages.extend(injected.into_iter().map(AnnotatedMessage::from));
+                                messages.extend(injected.into_iter().map(Message::from));
                                 _steered = true;
                                 break 'batches;
                             }
@@ -1179,7 +1187,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 .await;
                             apply_context_commands(&mut messages, ctx_cmds);
                             if !injected.is_empty() {
-                                messages.extend(injected.into_iter().map(AnnotatedMessage::from));
+                                messages.extend(injected.into_iter().map(Message::from));
                                 let skipped_names = vec![name.clone()];
                                 dispatch_results.push(ContentPart::ToolResult {
                                     tool_use_id: id,
@@ -1383,7 +1391,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
                                 .await;
                             apply_context_commands(&mut messages, ctx_cmds);
                             if !injected.is_empty() {
-                                messages.extend(injected.into_iter().map(AnnotatedMessage::from));
+                                messages.extend(injected.into_iter().map(Message::from));
                                 _steered = true;
                                 break 'batches;
                             }
@@ -1393,10 +1401,7 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             }
 
             // Add tool results as user message
-            messages.push(AnnotatedMessage::from(ProviderMessage {
-                role: Role::User,
-                content: dispatch_results,
-            }));
+            messages.push(Message::new(L0Role::User, parts_to_content(&dispatch_results)));
             *self
                 .current_context
                 .lock()
@@ -1579,92 +1584,77 @@ impl<P: Provider + 'static> Operator for ReactOperator<P> {
             let effective_limit =
                 (config.max_tokens as f32 * 4.0 * (1.0 - self.config.compaction_reserve_pct))
                     as usize;
-            if self
-                .context_strategy
-                .should_compact(&messages, effective_limit)
+            let total_estimated: usize = messages.iter().map(|m| m.estimated_tokens()).sum();
+            if total_estimated > effective_limit
+                && let Some(ref compactor) = self.compactor
             {
-                // Interceptor: PreCompaction
-                let should_compact = if let Some(ref interceptor) = self.interceptor {
-                    let state = self.build_loop_state(
-                        total_tokens_in,
-                        total_tokens_out,
-                        total_cost,
-                        turns_used,
-                        DurationMs::from(start.elapsed()),
-                    );
-                    matches!(
-                        interceptor.pre_compaction(&state, messages.len()).await,
-                        ReactAction::Continue
-                    )
-                } else {
-                    true
-                };
-                if !should_compact {
-                    // Interceptor blocked compaction — skip it
-                    if let Some(ref sink) = self.compaction_sink {
-                        sink.on_compaction_event(CompactionEvent::CompactionSkipped {
-                            agent: AgentId::new("react"),
-                            reason: "blocked by interceptor".into(),
-                        });
-                    }
-                } else {
-                    let before_count = messages.len() as u32;
-                    let before_tokens = self.context_strategy.token_estimate(&messages) as u64;
-                    match self.context_strategy.compact(messages.clone()) {
-                        Ok(compacted) => {
-                            let after_count = compacted.len() as u32;
-                            let after_tokens =
-                                self.context_strategy.token_estimate(&compacted) as u64;
-                            if let Some(ref sink) = self.compaction_sink {
-                                sink.on_compaction_event(CompactionEvent::CompactionQuality {
-                                    agent: AgentId::new("react"),
-                                    tokens_before: before_tokens,
-                                    tokens_after: after_tokens,
-                                    items_preserved: after_count,
-                                    items_lost: before_count.saturating_sub(after_count),
-                                });
-                            }
-                            messages = compacted;
-                            *self
-                                .last_compaction_removed
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner()) =
-                                before_count.saturating_sub(after_count) as usize;
-                            *self
-                                .current_context
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner()) = messages.clone();
-                            // Interceptor: PostCompaction
-                            if let Some(ref interceptor) = self.interceptor {
-                                let state = self.build_loop_state(
-                                    total_tokens_in,
-                                    total_tokens_out,
-                                    total_cost,
-                                    turns_used,
-                                    DurationMs::from(start.elapsed()),
-                                );
-                                interceptor
-                                    .post_compaction(
-                                        &state,
-                                        before_count as usize,
-                                        after_count as usize,
-                                    )
-                                    .await;
-                            }
+                    // Interceptor: PreCompaction
+                    let should_compact = if let Some(ref interceptor) = self.interceptor {
+                        let state = self.build_loop_state(
+                            total_tokens_in,
+                            total_tokens_out,
+                            total_cost,
+                            turns_used,
+                            DurationMs::from(start.elapsed()),
+                        );
+                        matches!(
+                            interceptor.pre_compaction(&state, messages.len()).await,
+                            ReactAction::Continue
+                        )
+                    } else {
+                        true
+                    };
+                    if !should_compact {
+                        if let Some(ref sink) = self.compaction_sink {
+                            sink.on_compaction_event(CompactionEvent::CompactionSkipped {
+                                agent: AgentId::new("react"),
+                                reason: "blocked by interceptor".into(),
+                            });
                         }
-                        Err(e) => {
-                            if let Some(ref sink) = self.compaction_sink {
-                                sink.on_compaction_event(CompactionEvent::CompactionFailed {
-                                    agent: AgentId::new("react"),
-                                    error: e.to_string(),
-                                    strategy: "context_strategy".into(),
-                                });
-                            }
-                            // messages unchanged — continue the loop, don't exit
+                    } else {
+                        let before_count = messages.len() as u32;
+                        let before_tokens = total_estimated as u64;
+                        let compacted = compactor(&messages);
+                        let after_count = compacted.len() as u32;
+                        let after_tokens: u64 = compacted.iter().map(|m| m.estimated_tokens() as u64).sum();
+                        if let Some(ref sink) = self.compaction_sink {
+                            sink.on_compaction_event(CompactionEvent::CompactionQuality {
+                                agent: AgentId::new("react"),
+                                tokens_before: before_tokens,
+                                tokens_after: after_tokens,
+                                items_preserved: after_count,
+                                items_lost: before_count.saturating_sub(after_count),
+                            });
+                        }
+                        messages = compacted;
+                        *self
+                            .last_compaction_removed
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) =
+                            before_count.saturating_sub(after_count) as usize;
+                        *self
+                            .current_context
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()) = messages.clone();
+                        // Interceptor: PostCompaction
+                        if let Some(ref interceptor) = self.interceptor {
+                            let state = self.build_loop_state(
+                                total_tokens_in,
+                                total_tokens_out,
+                                total_cost,
+                                turns_used,
+                                DurationMs::from(start.elapsed()),
+                            );
+                            interceptor
+                                .post_compaction(
+                                    &state,
+                                    before_count as usize,
+                                    after_count as usize,
+                                )
+                                .await;
                         }
                     }
                 }
-            }
 
             // 11. Loop repeats
         }
@@ -1757,7 +1747,6 @@ fn parse_scope(s: &str) -> Scope {
 mod tests {
     use super::*;
     use neuron_tool::ToolRegistry;
-    use neuron_turn::context::NoCompaction;
     use neuron_turn::provider::ProviderError;
     use serde_json::json;
     use std::collections::VecDeque;
@@ -1901,7 +1890,6 @@ mod tests {
         ReactOperator::new(
             provider,
             ToolRegistry::new(),
-            Box::new(NoCompaction),
             Arc::new(NullStateReader),
             ReactConfig::default(),
         )
@@ -1911,7 +1899,6 @@ mod tests {
         ReactOperator::new(
             provider,
             tools,
-            Box::new(NoCompaction),
             Arc::new(NullStateReader),
             ReactConfig::default(),
         )
@@ -1984,36 +1971,34 @@ mod tests {
         tools.register(Arc::new(EchoTool));
 
         let mut op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_max_turns: 2,
-                ..Default::default()
-            },
-        );
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_max_turns: 2,
+                        ..Default::default()
+                    },
+                );
         // Avoid unused warning
         let _ = &mut op;
 
         let op = ReactOperator::new(
-            MockProvider::new(vec![
-                tool_use_response("tu_1", "echo", json!({})),
-                tool_use_response("tu_2", "echo", json!({})),
-                simple_text_response("never reached"),
-            ]),
-            {
-                let mut t = ToolRegistry::new();
-                t.register(Arc::new(EchoTool));
-                t
-            },
-            Box::new(NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_max_turns: 2,
-                ..Default::default()
-            },
-        );
+                    MockProvider::new(vec![
+                        tool_use_response("tu_1", "echo", json!({})),
+                        tool_use_response("tu_2", "echo", json!({})),
+                        simple_text_response("never reached"),
+                    ]),
+                    {
+                        let mut t = ToolRegistry::new();
+                        t.register(Arc::new(EchoTool));
+                        t
+                    },
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_max_turns: 2,
+                        ..Default::default()
+                    },
+                );
 
         let output = op.execute(simple_input("loop")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::MaxTurns);
@@ -2030,12 +2015,11 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig::default(),
-        );
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig::default(),
+                );
 
         let mut input = simple_input("spend");
         let mut tc = layer0::operator::OperatorConfig::default();
@@ -2311,12 +2295,11 @@ mod tests {
         // ReactOperator<P> can be used as Arc<dyn Operator>
         let provider = MockProvider::new(vec![simple_text_response("Hello!")]);
         let op: Arc<dyn Operator> = Arc::new(ReactOperator::new(
-            provider,
-            ToolRegistry::new(),
-            Box::new(NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig::default(),
-        ));
+                    provider,
+                    ToolRegistry::new(),
+                    Arc::new(NullStateReader),
+                    ReactConfig::default(),
+                ));
 
         let output = op.execute(simple_input("Hi")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
@@ -2337,12 +2320,11 @@ mod tests {
         }
 
         let op = ReactOperator::new(
-            ErrorProvider,
-            ToolRegistry::new(),
-            Box::new(NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig::default(),
-        );
+                    ErrorProvider,
+                    ToolRegistry::new(),
+                    Arc::new(NullStateReader),
+                    ReactConfig::default(),
+                );
 
         let result = op.execute(simple_input("test")).await;
         assert!(matches!(result, Err(OperatorError::Retryable(_))));
@@ -2571,12 +2553,11 @@ mod tests {
             vec![user_msg("STEER")], // pre-exclusive: trigger
         ]));
         let op = ReactOperator::new(
-            counting,
-            tools,
-            Box::new(NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig::default(),
-        )
+                    counting,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig::default(),
+                )
         .with_steering(steering);
         let output = op.execute(simple_input("run"));
         let output = output.await.unwrap();
@@ -2704,15 +2685,14 @@ mod tests {
             finals: finals.clone(),
         });
         let op = ReactOperator::new(
-            MockProvider::new(vec![
-                tool_use_response("tu_s", "stream_echo", json!({})),
-                simple_text_response("OK"),
-            ]),
-            tools,
-            Box::new(NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig::default(),
-        )
+                    MockProvider::new(vec![
+                        tool_use_response("tu_s", "stream_echo", json!({})),
+                        simple_text_response("OK"),
+                    ]),
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig::default(),
+                )
         .with_interceptor(interceptor);
         let _ = op.execute(simple_input("run")).await.unwrap();
         // No streaming chunks — orchestrator dispatch is request-response only
@@ -2849,27 +2829,6 @@ mod tests {
         }
     }
 
-    /// A context strategy that compacts when token_estimate > limit.
-    /// Records the limit it was called with.
-    struct ThresholdCompaction {
-        last_limit: std::sync::Arc<Mutex<Option<usize>>>,
-    }
-    impl neuron_turn::context::ContextStrategy for ThresholdCompaction {
-        fn token_estimate(&self, messages: &[neuron_turn::AnnotatedMessage]) -> usize {
-            messages.len() * 100
-        }
-        fn should_compact(&self, messages: &[neuron_turn::AnnotatedMessage], limit: usize) -> bool {
-            *self.last_limit.lock().unwrap() = Some(limit);
-            self.token_estimate(messages) > limit
-        }
-        fn compact(
-            &self,
-            messages: Vec<neuron_turn::AnnotatedMessage>,
-        ) -> Result<Vec<neuron_turn::AnnotatedMessage>, neuron_turn::context::CompactionError>
-        {
-            Ok(messages)
-        }
-    }
 
     /// A provider that records the model field it receives.
     struct RecordingProvider {
@@ -2906,15 +2865,14 @@ mod tests {
             reason: "observer_halt_test".into(),
         });
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_max_turns: 1,
-                ..Default::default()
-            },
-        )
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_max_turns: 1,
+                        ..Default::default()
+                    },
+                )
         .with_interceptor(interceptor);
         let output = op.execute(simple_input("run")).await.unwrap();
         // Must be InterceptorHalt, not MaxTurns
@@ -2958,12 +2916,11 @@ mod tests {
             reason: "injection_blocked".into(),
         });
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig::default(),
-        )
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig::default(),
+                )
         .with_interceptor(interceptor)
         .with_steering(steering);
         let output = op.execute(simple_input("run")).await.unwrap();
@@ -3002,12 +2959,11 @@ mod tests {
             recorded: recorded.clone(),
         });
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig::default(),
-        )
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig::default(),
+                )
         .with_interceptor(interceptor)
         .with_steering(steering);
         let output = op.execute(simple_input("run")).await.unwrap();
@@ -3061,39 +3017,30 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_reserve_enforced() {
-        // max_tokens=100, compaction_reserve_pct=0.20
-        // Effective limit = 100 * 4 * 0.80 = 320
-        // Use a tool-use turn so the compaction step is reached.
-        // ThresholdCompaction records the limit it is called with.
         let provider = MockProvider::new(vec![
             tool_use_response("t1", "echo", json!({})),
             simple_text_response("Done"),
         ]);
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        let last_limit = std::sync::Arc::new(Mutex::new(None::<usize>));
+        let compacted = Arc::new(Mutex::new(false));
+        let compacted_clone = compacted.clone();
         let op = ReactOperator::new(
             provider,
             tools,
-            Box::new(ThresholdCompaction {
-                last_limit: last_limit.clone(),
-            }),
             Arc::new(NullStateReader),
             ReactConfig {
-                default_max_tokens: 100,
+                default_max_tokens: 1, // tiny limit forces compaction
                 compaction_reserve_pct: 0.20,
                 ..Default::default()
             },
-        );
+        )
+        .with_compactor(move |msgs: &[Message]| {
+            *compacted_clone.lock().unwrap() = true;
+            msgs.to_vec()
+        });
         op.execute(simple_input("Hi")).await.unwrap();
-        let seen = *last_limit.lock().unwrap();
-        // Effective limit: 100 * 4 * 0.80 = 320
-        assert_eq!(
-            seen,
-            Some(320),
-            "expected effective_limit=320, got {:?}",
-            seen
-        );
+        assert!(*compacted.lock().unwrap(), "compactor should have been called");
     }
 
     // ── tests ─────────────────────────────────────────────────────────
@@ -3111,16 +3058,15 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_max_turns: 10,
-                max_tool_calls: Some(3),
-                ..Default::default()
-            },
-        );
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_max_turns: 10,
+                        max_tool_calls: Some(3),
+                        ..Default::default()
+                    },
+                );
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::BudgetExhausted);
         // 3 tool calls were made
@@ -3139,16 +3085,15 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_max_turns: 10,
-                max_repeat_calls: Some(2),
-                ..Default::default()
-            },
-        );
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_max_turns: 10,
+                        max_repeat_calls: Some(2),
+                        ..Default::default()
+                    },
+                );
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(
             output.exit_reason,
@@ -3167,16 +3112,15 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_max_turns: 10,
-                max_repeat_calls: Some(2),
-                ..Default::default()
-            },
-        );
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_max_turns: 10,
+                        max_repeat_calls: Some(2),
+                        ..Default::default()
+                    },
+                );
         let output = op.execute(simple_input("run")).await.unwrap();
         // No stuck detection — completes normally
         assert_eq!(output.exit_reason, ExitReason::Complete);
@@ -3194,16 +3138,15 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                max_tool_calls: None,
-                max_repeat_calls: None,
-                ..Default::default()
-            },
-        );
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        max_tool_calls: None,
+                        max_repeat_calls: None,
+                        ..Default::default()
+                    },
+                );
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.metadata.sub_dispatches.len(), 2);
@@ -3226,15 +3169,14 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_model: "default-model".into(),
-                ..Default::default()
-            },
-        )
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_model: "default-model".into(),
+                        ..Default::default()
+                    },
+                )
         .with_model_selector(|req: &ProviderRequest| {
             if req.messages.len() > 1 {
                 Some("big-model".to_string())
@@ -3260,15 +3202,14 @@ mod tests {
             models_seen: models_seen.clone(),
         };
         let op = ReactOperator::new(
-            provider,
-            ToolRegistry::new(),
-            Box::new(neuron_turn::context::NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_model: "my-model".into(),
-                ..Default::default()
-            },
-        );
+                    provider,
+                    ToolRegistry::new(),
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_model: "my-model".into(),
+                        ..Default::default()
+                    },
+                );
         op.execute(simple_input("Hi")).await.unwrap();
         let seen = models_seen.lock().unwrap().clone();
         assert_eq!(seen, vec![Some("my-model".to_string())]);
@@ -3299,16 +3240,15 @@ mod tests {
             events: events.clone(),
         });
         let op = ReactOperator::new(
-            provider,
-            tools,
-            Box::new(NoCompaction),
-            Arc::new(NullStateReader),
-            ReactConfig {
-                default_max_turns: 10,
-                max_tool_calls: Some(2),
-                ..Default::default()
-            },
-        )
+                    provider,
+                    tools,
+                    Arc::new(NullStateReader),
+                    ReactConfig {
+                        default_max_turns: 10,
+                        max_tool_calls: Some(2),
+                        ..Default::default()
+                    },
+                )
         .with_budget_sink(sink);
         let output = op.execute(simple_input("run")).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::BudgetExhausted);
@@ -3334,15 +3274,12 @@ mod tests {
 
     #[tokio::test]
     async fn compaction_sink_receives_quality_event_on_success() {
-        // ThresholdCompaction fires when token_estimate (messages.len() * 100) > effective_limit.
-        // With max_tokens=1, effective_limit = 1 * 4 * 0.9 = 3, so any non-empty list triggers.
         let provider = MockProvider::new(vec![
             tool_use_response("t1", "echo", json!({})),
             simple_text_response("Done"),
         ]);
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(EchoTool));
-        let last_limit = Arc::new(Mutex::new(None::<usize>));
         let events = Arc::new(Mutex::new(Vec::<CompactionEvent>::new()));
         let sink = Arc::new(CompactionCollector {
             events: events.clone(),
@@ -3350,13 +3287,13 @@ mod tests {
         let op = ReactOperator::new(
             provider,
             tools,
-            Box::new(ThresholdCompaction { last_limit }),
             Arc::new(NullStateReader),
             ReactConfig {
                 default_max_tokens: 1,
                 ..Default::default()
             },
         )
+        .with_compactor(|msgs: &[Message]| msgs.to_vec())
         .with_compaction_sink(sink);
         op.execute(simple_input("run")).await.unwrap();
         let collected = events.lock().unwrap().clone();
@@ -3390,81 +3327,71 @@ mod tests {
         }
     }
 
-    fn make_user_am(text: &str) -> neuron_turn::AnnotatedMessage {
-        neuron_turn::AnnotatedMessage::from(ProviderMessage {
-            role: Role::User,
-            content: vec![ContentPart::Text { text: text.into() }],
-        })
+    fn make_user_msg(text: &str) -> Message {
+        Message::new(L0Role::User, Content::text(text))
     }
 
-    fn make_pinned_am(text: &str) -> neuron_turn::AnnotatedMessage {
-        neuron_turn::AnnotatedMessage::pinned(ProviderMessage {
-            role: Role::User,
-            content: vec![ContentPart::Text { text: text.into() }],
-        })
+    fn make_pinned_msg(text: &str) -> Message {
+        Message::pinned(L0Role::User, Content::text(text))
     }
 
     #[test]
     fn test_pin_command() {
-        let mut msgs = vec![make_user_am("first"), make_user_am("second")];
+        let mut msgs = vec![make_user_msg("first"), make_user_msg("second")];
         apply_context_commands(&mut msgs, vec![ContextCommand::Pin { message_index: 0 }]);
-        assert_eq!(msgs[0].policy, Some(layer0::CompactionPolicy::Pinned));
-        assert_eq!(msgs[1].policy, None);
+        assert_eq!(msgs[0].meta.policy, layer0::CompactionPolicy::Pinned);
+        assert_eq!(msgs[1].meta.policy, layer0::CompactionPolicy::Normal);
     }
 
     #[test]
     fn test_pin_out_of_bounds_is_noop() {
-        let mut msgs = vec![make_user_am("only")];
+        let mut msgs = vec![make_user_msg("only")];
         apply_context_commands(&mut msgs, vec![ContextCommand::Pin { message_index: 99 }]);
         // No panic, message unchanged
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].policy, None);
+        assert_eq!(msgs[0].meta.policy, layer0::CompactionPolicy::Normal);
     }
 
     #[test]
     fn test_drop_oldest_skips_pinned() {
         // [normal, pinned, normal, normal] — drop 2 oldest non-pinned
         let mut msgs = vec![
-            make_user_am("m0"),
-            make_pinned_am("pinned"),
-            make_user_am("m2"),
-            make_user_am("m3"),
+            make_user_msg("m0"),
+            make_pinned_msg("pinned"),
+            make_user_msg("m2"),
+            make_user_msg("m3"),
         ];
         apply_context_commands(&mut msgs, vec![ContextCommand::DropOldest { count: 2 }]);
         // m0 and m2 dropped (oldest non-pinned), pinned and m3 remain
         assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].policy, Some(layer0::CompactionPolicy::Pinned));
-        let text = match &msgs[1].message.content[0] {
-            ContentPart::Text { text } => text.as_str(),
-            _ => panic!("expected Text"),
-        };
-        assert_eq!(text, "m3");
+        assert_eq!(msgs[0].meta.policy, layer0::CompactionPolicy::Pinned);
+        assert_eq!(msgs[1].content.as_text().unwrap(), "m3");
     }
 
     #[test]
     fn test_drop_oldest_count_exceeds_droppable() {
         // Only 1 non-pinned; drop count=5 should not panic
-        let mut msgs = vec![make_pinned_am("pinned"), make_user_am("normal")];
+        let mut msgs = vec![make_pinned_msg("pinned"), make_user_msg("normal")];
         apply_context_commands(&mut msgs, vec![ContextCommand::DropOldest { count: 5 }]);
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].policy, Some(layer0::CompactionPolicy::Pinned));
+        assert_eq!(msgs[0].meta.policy, layer0::CompactionPolicy::Pinned);
     }
 
     #[test]
     fn test_clear_working_keeps_pinned() {
         let mut msgs = vec![
-            make_user_am("normal1"),
-            make_pinned_am("pinned"),
-            make_user_am("normal2"),
+            make_user_msg("normal1"),
+            make_pinned_msg("pinned"),
+            make_user_msg("normal2"),
         ];
         apply_context_commands(&mut msgs, vec![ContextCommand::ClearWorking]);
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].policy, Some(layer0::CompactionPolicy::Pinned));
+        assert_eq!(msgs[0].meta.policy, layer0::CompactionPolicy::Pinned);
     }
 
     #[test]
     fn test_save_load_snapshot_round_trip() {
-        let original = vec![make_pinned_am("pinned"), make_user_am("normal")];
+        let original = vec![make_pinned_msg("pinned"), make_user_msg("normal")];
         let path =
             std::env::temp_dir().join(format!("neuron_test_snapshot_{}.json", std::process::id()));
         let mut msgs = original.clone();
@@ -3476,7 +3403,7 @@ mod tests {
         assert!(path.exists(), "snapshot file should exist after save");
         // Corrupt the buffer
         msgs.clear();
-        msgs.push(make_user_am("corrupted"));
+        msgs.push(make_user_msg("corrupted"));
         // Load
         apply_context_commands(
             &mut msgs,
@@ -3484,15 +3411,15 @@ mod tests {
         );
         // Verify restored
         assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].policy, Some(layer0::CompactionPolicy::Pinned));
-        assert_eq!(msgs[1].policy, None);
+        assert_eq!(msgs[0].meta.policy, layer0::CompactionPolicy::Pinned);
+        assert_eq!(msgs[1].meta.policy, layer0::CompactionPolicy::Normal);
         // Cleanup
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn test_load_snapshot_missing_file_is_noop() {
-        let mut msgs = vec![make_user_am("existing")];
+        let mut msgs = vec![make_user_msg("existing")];
         let path = std::path::PathBuf::from("/nonexistent/path/snapshot.json");
         apply_context_commands(&mut msgs, vec![ContextCommand::LoadSnapshot { path }]);
         // Buffer unchanged
@@ -3533,9 +3460,9 @@ mod tests {
         let op = make_op(provider);
         {
             let mut ctx = op.current_context.lock().unwrap();
-            ctx.push(make_user_am("normal"));
-            ctx.push(make_pinned_am("pinned1"));
-            ctx.push(make_pinned_am("pinned2"));
+            ctx.push(make_user_msg("normal"));
+            ctx.push(make_pinned_msg("pinned1"));
+            ctx.push(make_pinned_msg("pinned2"));
         }
         let snap = op.context_snapshot();
         assert_eq!(snap.messages.len(), 3);

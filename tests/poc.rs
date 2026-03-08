@@ -17,7 +17,6 @@ use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, Trig
 use layer0::orchestrator::Orchestrator;
 use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
-use neuron_context::SlidingWindow;
 use neuron_op_react::{ReactConfig, ReactOperator};
 use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use neuron_orch_local::LocalOrch;
@@ -122,7 +121,6 @@ fn make_react_operator(provider: MockProvider) -> ReactOperator<MockProvider> {
     ReactOperator::new(
         provider,
         ToolRegistry::new(),
-        Box::new(SlidingWindow::new()),
         Arc::new(NullStateReader),
         react_config(),
     )
@@ -181,7 +179,6 @@ async fn provider_swap_same_config_different_backend() {
     let op_a: ReactOperator<MockProvider> = ReactOperator::new(
         MockProvider::text("Hello from provider A"),
         tools,
-        Box::new(SlidingWindow::new()),
         Arc::new(NullStateReader),
         config,
     );
@@ -193,7 +190,6 @@ async fn provider_swap_same_config_different_backend() {
     let op_b: ReactOperator<MockProviderB> = ReactOperator::new(
         MockProviderB::text("Hello from provider B"),
         tools_b,
-        Box::new(SlidingWindow::new()),
         Arc::new(NullStateReader),
         config_b,
     );
@@ -222,7 +218,6 @@ async fn provider_swap_same_config_different_backend() {
     let dyn_b: Arc<dyn Operator> = Arc::new(ReactOperator::new(
         MockProviderB::text("dyn B"),
         ToolRegistry::new(),
-        Box::new(SlidingWindow::new()),
         Arc::new(NullStateReader),
         react_config(),
     ));
