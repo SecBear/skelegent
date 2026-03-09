@@ -181,6 +181,7 @@ There is no loop, no tool execution, and no iteration. The exit reason is always
 Both operators implement `layer0::Operator`, which is object-safe. You can use them interchangeably behind `Box<dyn Operator>` or `Arc<dyn Operator>`:
 
 ```rust,no_run
+use layer0::id::OperatorId;
 use layer0::operator::Operator;
 use std::sync::Arc;
 
@@ -188,8 +189,8 @@ let engine_op: Arc<dyn Operator> = Arc::new(my_operator);
 let single_op: Arc<dyn Operator> = Arc::new(single_shot_operator);
 
 // Orchestrator doesn't know or care which operator it's dispatching to
-orchestrator.register_agent("coder", engine_op);
-orchestrator.register_agent("classifier", single_op);
+orchestrator.register(OperatorId::new("coder"), engine_op);
+orchestrator.register(OperatorId::new("classifier"), single_op);
 ```
 
 The provider's generic type parameter is erased at the `Operator` boundary. Callers never see the concrete provider type.

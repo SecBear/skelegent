@@ -22,6 +22,7 @@ Neuron builds inside a Nix devshell:
 nix develop --command cargo test --workspace --all-targets
 nix develop --command cargo clippy --workspace --all-targets -- -D warnings
 nix develop --command cargo doc --workspace --no-deps
+```
 
 ## Reading Order
 
@@ -55,6 +56,18 @@ nix develop --command cargo doc --workspace --no-deps
 | 12 | Packaging, Versioning, and Umbrella Crate | [specs/12-packaging-versioning-and-umbrella-crate.md](specs/12-packaging-versioning-and-umbrella-crate.md) |
 | 13 | Documentation and DX Parity | [specs/13-documentation-and-dx-parity.md](specs/13-documentation-and-dx-parity.md) |
 
+## Key Concepts
+
+- **OperatorId** — typed identity for operators (protocol-level concept)
+- **Operator** — object-safe trait: `async fn execute(input, orch) -> Result<Output, Error>`
+- **Orchestrator** — dispatches to operators by ID; `dispatch()` and `dispatch_many()`
+- **StateStore** — object-safe key-value state with scopes, hints, and text search
+- **Context** — mutable conversation context with ops, rules, and metrics
+- **Rule** — reactive `ContextOp` with triggers (before/after/when) for automated behavior
+- **Provider** — NOT object-safe; generic `<P: Provider>` everywhere, erased at `Operator` boundary
+- **Effect** — declarative side-effects emitted by operators (Delegate, Handoff, Log, etc.)
+- **Scope** — where state lives: Session, Workflow, Operator, Global, Custom
+
 ## Crate Map
 
 ### Layer 0 — Protocol
@@ -70,6 +83,7 @@ nix develop --command cargo doc --workspace --no-deps
 | neuron-turn | [turn/neuron-turn](turn/neuron-turn/) |
 | neuron-context | [turn/neuron-context](turn/neuron-context/) |
 | neuron-tool | [turn/neuron-tool](turn/neuron-tool/) |
+| neuron-tool-macro | [turn/neuron-tool-macro](turn/neuron-tool-macro/) |
 | neuron-mcp | [turn/neuron-mcp](turn/neuron-mcp/) |
 | neuron-turn-kit | [turn/neuron-turn-kit](turn/neuron-turn-kit/) |
 
@@ -77,7 +91,7 @@ nix develop --command cargo doc --workspace --no-deps
 
 | Crate | Path |
 |-------|------|
-| neuron-op-react | [op/neuron-op-react](op/neuron-op-react/) |
+| neuron-context-engine | [op/neuron-context-engine](op/neuron-context-engine/) |
 | neuron-op-single-shot | [op/neuron-op-single-shot](op/neuron-op-single-shot/) |
 
 ### Layer 1 — Providers
@@ -87,6 +101,7 @@ nix develop --command cargo doc --workspace --no-deps
 | neuron-provider-anthropic | [provider/neuron-provider-anthropic](provider/neuron-provider-anthropic/) |
 | neuron-provider-openai | [provider/neuron-provider-openai](provider/neuron-provider-openai/) |
 | neuron-provider-ollama | [provider/neuron-provider-ollama](provider/neuron-provider-ollama/) |
+| neuron-provider-codex | [provider/neuron-provider-codex](provider/neuron-provider-codex/) |
 
 ### Layer 2 — Orchestration
 
@@ -123,7 +138,6 @@ nix develop --command cargo doc --workspace --no-deps
 
 | Crate | Path |
 |-------|------|
-| neuron-hooks | [hooks/neuron-hooks](hooks/neuron-hooks/) |
 | neuron-hook-security | [hooks/neuron-hook-security](hooks/neuron-hook-security/) |
 
 ### Umbrella
@@ -131,6 +145,12 @@ nix develop --command cargo doc --workspace --no-deps
 | Crate | Path |
 |-------|------|
 | neuron | [neuron/](neuron/) |
+
+### Testing
+
+| Crate | Path |
+|-------|------|
+| test-utils | [test-utils/](test-utils/) |
 
 ### Examples
 

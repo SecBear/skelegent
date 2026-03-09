@@ -221,19 +221,20 @@ src/
   error.rs        — EngineError
   compile.rs      — CompiledContext, InferResult, compile(), infer()
   assembly.rs     — AssemblyExt trait + fluent methods
+  output.rs       — OutputSchema, OutputMode, OutputError, extract_json_block
   ops/
     mod.rs        — re-exports
     inject.rs     — InjectSystem, InjectMessage, InjectMessages
     compact.rs    — Compact, CompactResult
     response.rs   — AppendResponse
     tool.rs       — ExecuteTool
-    store.rs      — FlushToStore, InjectFromStore
+    store.rs      — FlushToStore, InjectFromStore, InjectionPosition
   rules/
     mod.rs        — re-exports
     budget.rs     — BudgetGuard
-    compaction.rs — CompactionRule, CompactionStrategy, sliding_window, policy_trim, summarize, extract_cognitive_state
+    compaction.rs — CompactionRule, CompactionStrategy, sliding_window, policy_trim, summarize, summarize_with, SummarizeConfig, extract_cognitive_state, extract_cognitive_state_with, ExtractConfig
     telemetry.rs  — TelemetryRule, TelemetryConfig
-  react.rs        — react_loop(), ReactLoopConfig
+  react.rs        — react_loop(), react_loop_structured(), ReactLoopConfig
   stream_react.rs — stream_react_loop()
 ```
 

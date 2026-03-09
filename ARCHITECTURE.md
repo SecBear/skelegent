@@ -316,15 +316,15 @@ construct. The parent controls the parameters. The child owns the behavior.
 ```rust
 // Parent controls the budget (data):
 let config = OperatorConfig { max_cost: Some(dec!(5.0)), ..Default::default() };
-orchestrator.dispatch(&agent_id, OperatorInput { config: Some(config), .. }).await;
+orchestrator.dispatch(&operator_id, OperatorInput { config: Some(config), .. }).await;
 
 // Child constructs the rule (behavior):
 let mut ctx = Context::new();
 if let Some(max_cost) = input.config.as_ref().and_then(|c| c.max_cost) {
-    ctx.add_rule(BudgetGuard::rule(BudgetGuardConfig {
+    ctx.add_rule(Rule::before::<Compile>("budget", 100, BudgetGuard::with_config(BudgetGuardConfig {
         max_cost: Some(max_cost),
         ..Default::default()
-    }));
+    })));
 }
 ```
 

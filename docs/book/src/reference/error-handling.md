@@ -33,7 +33,7 @@ Errors from orchestration (Layer 0, `layer0::error::OrchError`):
 
 ```rust
 pub enum OrchError {
-    AgentNotFound(String),    // Agent ID not registered
+    OperatorNotFound(String),    // Operator ID not registered
     WorkflowNotFound(String), // Workflow ID not found
     DispatchFailed(String),   // Dispatch failed
     SignalFailed(String),     // Signal delivery failed
