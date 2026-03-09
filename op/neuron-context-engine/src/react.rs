@@ -70,7 +70,10 @@ impl fmt::Debug for ReactLoopConfig {
             .field("model", &self.model)
             .field("max_tokens", &self.max_tokens)
             .field("temperature", &self.temperature)
-            .field("tool_filter", &self.tool_filter.as_ref().map(|_| "<filter>"))
+            .field(
+                "tool_filter",
+                &self.tool_filter.as_ref().map(|_| "<filter>"),
+            )
             .finish()
     }
 }
@@ -154,11 +157,7 @@ pub async fn react_loop<P: Provider>(
         let tool_calls = result.response.tool_calls.clone();
         let needs_approval: Vec<_> = tool_calls
             .iter()
-            .filter(|call| {
-                tools
-                    .get(&call.name)
-                    .is_some_and(|t| t.requires_approval())
-            })
+            .filter(|call| tools.get(&call.name).is_some_and(|t| t.requires_approval()))
             .collect();
 
         if !needs_approval.is_empty() {
@@ -327,8 +326,14 @@ pub async fn react_loop_structured<P: Provider>(
                     ctx.inject_message(retry_msg).await?;
                 }
                 // Dispatch any non-output tool calls in the same response
-                let awaiting = dispatch_function_tools(ctx, &result.response, tools, tool_ctx, &output.tool_name)
-                    .await?;
+                let awaiting = dispatch_function_tools(
+                    ctx,
+                    &result.response,
+                    tools,
+                    tool_ctx,
+                    &output.tool_name,
+                )
+                .await?;
                 if awaiting {
                     return Err(EngineError::Halted {
                         reason: "tool approval required during structured output loop".into(),
@@ -388,11 +393,7 @@ async fn dispatch_function_tools(
         .tool_calls
         .iter()
         .filter(|call| call.name != output_tool_name)
-        .filter(|call| {
-            tools
-                .get(&call.name)
-                .is_some_and(|t| t.requires_approval())
-        })
+        .filter(|call| tools.get(&call.name).is_some_and(|t| t.requires_approval()))
         .collect();
 
     if !needs_approval.is_empty() {

@@ -66,10 +66,7 @@ impl TestProvider {
     }
 
     /// Queue a response with multiple tool calls.
-    pub fn respond_with_tool_calls(
-        &self,
-        calls: Vec<(&str, &str, serde_json::Value)>,
-    ) -> &Self {
+    pub fn respond_with_tool_calls(&self, calls: Vec<(&str, &str, serde_json::Value)>) -> &Self {
         let tool_calls = calls
             .into_iter()
             .map(|(name, id, input)| crate::infer::ToolCall {

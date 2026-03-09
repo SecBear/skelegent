@@ -11,6 +11,7 @@
 pub mod config;
 pub mod infer;
 pub mod provider;
+pub mod stream;
 pub mod types;
 
 #[cfg(any(test, feature = "test-utils"))]

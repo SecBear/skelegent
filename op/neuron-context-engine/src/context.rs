@@ -165,6 +165,11 @@ impl Context {
         self.rules.sort_by(|a, b| b.priority.cmp(&a.priority));
     }
 
+    /// Number of rules currently attached.
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
     /// Estimated token count of all messages.
     pub fn token_count(&self) -> usize {
         self.messages.iter().map(|m| m.estimated_tokens()).sum()

@@ -1,15 +1,18 @@
 #![deny(missing_docs)]
 //! Ollama local model provider for neuron-turn.
 //!
-//! Implements the [`neuron_turn::Provider`] trait for Ollama's `/api/chat` endpoint.
+//! Implements the [`neuron_turn::Provider`] and [`neuron_turn::stream::StreamProvider`]
+//! traits for Ollama's `/api/chat` endpoint.
 //! Ollama runs models locally, so there are no auth headers and cost is always zero.
 
 mod types;
 
+use futures_util::StreamExt;
 use layer0::content::{Content, ContentBlock};
 use layer0::context::Role as Layer0Role;
 use neuron_turn::infer::{InferRequest, InferResponse, ToolCall};
 use neuron_turn::provider::{Provider, ProviderError};
+use neuron_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
 use tracing::Instrument;
@@ -17,6 +20,8 @@ use types::*;
 use uuid::Uuid;
 
 /// Ollama local model provider.
+///
+/// Supports both synchronous ([`Provider`]) and streaming ([`StreamProvider`]) inference.
 pub struct OllamaProvider {
     client: reqwest::Client,
     api_url: String,
@@ -325,6 +330,218 @@ impl Provider for OllamaProvider {
                 output_tokens = response.usage.output_tokens,
                 "inference finished"
             );
+            Ok(response)
+        }
+        .instrument(span)
+    }
+}
+
+impl StreamProvider for OllamaProvider {
+    fn infer_stream(
+        &self,
+        request: StreamRequest,
+        on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
+    ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        let infer_request = InferRequest {
+            model: request.model,
+            messages: request.messages,
+            tools: request.tools,
+            max_tokens: request.max_tokens,
+            temperature: request.temperature,
+            system: request.system,
+            extra: request.extra,
+        };
+        let mut api_request = self.build_infer_request(&infer_request);
+        api_request.stream = true;
+
+        let http_request = self
+            .client
+            .post(&self.api_url)
+            .header("content-type", "application/json")
+            .json(&api_request);
+
+        let model = infer_request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.infer_stream", provider = "ollama", model);
+
+        async move {
+            let http_response =
+                http_request
+                    .send()
+                    .await
+                    .map_err(|e| ProviderError::TransientError {
+                        message: e.to_string(),
+                        status: None,
+                    })?;
+
+            let status = http_response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(ProviderError::RateLimited);
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                let body = http_response.text().await.unwrap_or_default();
+                return Err(ProviderError::AuthFailed(body));
+            }
+            if !status.is_success() {
+                let body = http_response.text().await.unwrap_or_default();
+                return Err(map_error_response(status, &body));
+            }
+
+            // Process NDJSON byte stream
+            let mut stream = http_response.bytes_stream();
+            let mut buf = String::new();
+
+            // Accumulation state
+            let mut accumulated_text = String::new();
+            let mut tool_calls: Vec<ToolCall> = Vec::new();
+            let mut stop_reason = StopReason::EndTurn;
+            let mut input_tokens: u64 = 0;
+            let mut output_tokens: u64 = 0;
+            let mut model_name = String::new();
+
+            while let Some(chunk) = stream.next().await {
+                let bytes = chunk.map_err(|e| ProviderError::TransientError {
+                    message: format!("stream read error: {e}"),
+                    status: None,
+                })?;
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+
+                // Process complete NDJSON lines
+                while let Some(newline_pos) = buf.find('\n') {
+                    let line = buf[..newline_pos].trim().to_string();
+                    buf = buf[newline_pos + 1..].to_string();
+
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    let chunk_response: OllamaResponse =
+                        serde_json::from_str(&line).map_err(|e| {
+                            ProviderError::InvalidResponse(format!(
+                                "failed to parse NDJSON chunk: {e}"
+                            ))
+                        })?;
+
+                    model_name = chunk_response.model.clone();
+
+                    if !chunk_response.done {
+                        // Streaming delta — accumulate text
+                        if !chunk_response.message.content.is_empty() {
+                            on_event(StreamEvent::TextDelta(
+                                chunk_response.message.content.clone(),
+                            ));
+                            accumulated_text.push_str(&chunk_response.message.content);
+                        }
+
+                        // Handle tool calls in non-final chunks (rare for Ollama)
+                        if let Some(ref tcs) = chunk_response.message.tool_calls {
+                            for tc in tcs {
+                                let id = Uuid::new_v4().to_string();
+                                let index = tool_calls.len();
+                                on_event(StreamEvent::ToolCallStart {
+                                    index,
+                                    id: id.clone(),
+                                    name: tc.function.name.clone(),
+                                });
+                                let json_str = tc.function.arguments.to_string();
+                                on_event(StreamEvent::ToolCallDelta {
+                                    index,
+                                    json_delta: json_str,
+                                });
+                                tool_calls.push(ToolCall {
+                                    id,
+                                    name: tc.function.name.clone(),
+                                    input: tc.function.arguments.clone(),
+                                });
+                            }
+                        }
+                    } else {
+                        // Final chunk — extract eval counts and stop reason
+                        input_tokens = chunk_response.prompt_eval_count.unwrap_or(0);
+                        output_tokens = chunk_response.eval_count.unwrap_or(0);
+
+                        // Accumulate any remaining text in the final chunk
+                        if !chunk_response.message.content.is_empty() {
+                            on_event(StreamEvent::TextDelta(
+                                chunk_response.message.content.clone(),
+                            ));
+                            accumulated_text.push_str(&chunk_response.message.content);
+                        }
+
+                        // Tool calls typically arrive in the final chunk
+                        if let Some(ref tcs) = chunk_response.message.tool_calls {
+                            for tc in tcs {
+                                let id = Uuid::new_v4().to_string();
+                                let index = tool_calls.len();
+                                on_event(StreamEvent::ToolCallStart {
+                                    index,
+                                    id: id.clone(),
+                                    name: tc.function.name.clone(),
+                                });
+                                let json_str = tc.function.arguments.to_string();
+                                on_event(StreamEvent::ToolCallDelta {
+                                    index,
+                                    json_delta: json_str,
+                                });
+                                tool_calls.push(ToolCall {
+                                    id,
+                                    name: tc.function.name.clone(),
+                                    input: tc.function.arguments.clone(),
+                                });
+                            }
+                        }
+
+                        // Determine stop reason
+                        let has_tool_calls = !tool_calls.is_empty();
+                        stop_reason = if has_tool_calls {
+                            StopReason::ToolUse
+                        } else {
+                            match chunk_response.done_reason.as_deref() {
+                                Some("stop") => StopReason::EndTurn,
+                                Some("length") => StopReason::MaxTokens,
+                                _ => StopReason::EndTurn,
+                            }
+                        };
+
+                        let usage = TokenUsage {
+                            input_tokens,
+                            output_tokens,
+                            cache_read_tokens: None,
+                            cache_creation_tokens: None,
+                        };
+                        on_event(StreamEvent::Usage(usage));
+                    }
+                }
+            }
+
+            // Build final response
+            let content = if accumulated_text.is_empty() {
+                Content::text(String::new())
+            } else {
+                Content::text(accumulated_text)
+            };
+
+            let usage = TokenUsage {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+            };
+
+            let response = InferResponse {
+                content,
+                tool_calls,
+                stop_reason,
+                usage,
+                model: model_name,
+                cost: Some(Decimal::ZERO),
+                truncated: None,
+            };
+
+            on_event(StreamEvent::Done(response.clone()));
+
+            tracing::info!(input_tokens, output_tokens, "streaming inference finished");
             Ok(response)
         }
         .instrument(span)

@@ -27,6 +27,12 @@ pub struct OpenAIRequest {
     /// Reasoning effort level (e.g. "low", "medium", "high").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Whether to stream the response.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stream: bool,
+    /// Stream options (e.g. include_usage).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<serde_json::Value>,
 }
 
 /// A message in the OpenAI Chat Completions API format.
@@ -184,4 +190,71 @@ pub struct OpenAICompletionTokensDetails {
     /// Number of reasoning tokens used.
     #[serde(default)]
     pub reasoning_tokens: Option<u64>,
+}
+
+/// A streaming chunk from OpenAI's Chat Completions API.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct OpenAIStreamChunk {
+    /// Unique identifier for the chunk.
+    pub id: String,
+    /// Choices within this chunk.
+    pub choices: Vec<OpenAIStreamChoice>,
+    /// Usage statistics (present in the final chunk when stream_options.include_usage is set).
+    #[serde(default)]
+    pub usage: Option<OpenAIUsage>,
+    /// Model that generated the chunk.
+    pub model: String,
+}
+
+/// A choice within a streaming chunk.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct OpenAIStreamChoice {
+    /// The delta payload.
+    pub delta: OpenAIStreamDelta,
+    /// Why generation stopped (present in the final choice).
+    #[serde(default)]
+    pub finish_reason: Option<String>,
+    /// Index of this choice.
+    pub index: u32,
+}
+
+/// The delta payload within a streaming choice.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct OpenAIStreamDelta {
+    /// Role of the message author (present in the first chunk).
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Text content delta.
+    #[serde(default)]
+    pub content: Option<String>,
+    /// Tool call deltas.
+    #[serde(default)]
+    pub tool_calls: Option<Vec<OpenAIStreamToolCall>>,
+}
+
+/// A tool call delta in streaming.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenAIStreamToolCall {
+    /// Index of the tool call being accumulated.
+    pub index: u32,
+    /// Tool call ID (present in the first delta for this index).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Function delta.
+    #[serde(default)]
+    pub function: Option<OpenAIStreamFunction>,
+}
+
+/// Function delta in a streaming tool call.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenAIStreamFunction {
+    /// Function name (present in the first delta for this tool call).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Partial JSON arguments.
+    #[serde(default)]
+    pub arguments: Option<String>,
 }

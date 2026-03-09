@@ -87,6 +87,7 @@ pub mod output;
 pub mod react;
 pub mod rule;
 pub mod rules;
+pub mod stream_react;
 
 // Re-exports
 pub use compile::{CompileConfig, CompiledContext, InferResult};
@@ -98,3 +99,4 @@ pub use output::{OutputError, OutputMode, OutputSchema, extract_json_block};
 pub use react::{ReactLoopConfig, ToolFilter, react_loop, react_loop_structured};
 pub use rule::{Rule, Trigger};
 pub use rules::*;
+pub use stream_react::stream_react_loop;

@@ -16,7 +16,7 @@ pub struct OllamaRequest {
     pub model: String,
     /// Conversation messages.
     pub messages: Vec<OllamaMessage>,
-    /// Whether to stream the response. Always `false` for this provider.
+    /// Whether to stream the response.
     pub stream: bool,
     /// Tools available to the model.
     #[serde(skip_serializing_if = "Vec::is_empty")]

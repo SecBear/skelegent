@@ -24,6 +24,7 @@ members = [
   "provider/neuron-provider-anthropic",
   "provider/neuron-provider-openai",
   "provider/neuron-provider-ollama",
+  "provider/neuron-provider-codex",
   "turn/neuron-mcp",
   "secret/neuron-secret",
   "crypto/neuron-crypto",
@@ -59,6 +60,7 @@ neuron-state-fs = { path = "state/neuron-state-fs", version = "0.4.0" }
 neuron-provider-anthropic = { path = "provider/neuron-provider-anthropic", version = "0.4.0" }
 neuron-provider-openai = { path = "provider/neuron-provider-openai", version = "0.4.0" }
 neuron-provider-ollama = { path = "provider/neuron-provider-ollama", version = "0.4.0" }
+neuron-provider-codex = { path = "provider/neuron-provider-codex", version = "0.4.0" }
 neuron-orch-local = { path = "orch/neuron-orch-local", version = "0.4.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
