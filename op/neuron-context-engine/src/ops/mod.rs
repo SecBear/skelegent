@@ -10,4 +10,4 @@ pub use compact::{Compact, CompactResult};
 pub use inject::{InjectMessage, InjectMessages, InjectSystem};
 pub use response::AppendResponse;
 pub use tool::ExecuteTool;
-pub use store::{FlushToStore, InjectFromStore};
+pub use store::{FlushToStore, InjectFromStore, InjectionPosition};

@@ -14,6 +14,23 @@ use std::sync::Arc;
 /// Type alias for the extractor closure used by [`FlushToStore`].
 type Extractor = Arc<dyn Fn(&[Message]) -> serde_json::Value + Send + Sync>;
 
+/// Type alias for the formatter closure used by [`InjectFromStore`].
+type Formatter = Arc<dyn Fn(&str, &serde_json::Value) -> String + Send + Sync>;
+
+/// Where to insert injected messages in the context.
+#[derive(Debug, Clone, Default)]
+pub enum InjectionPosition {
+    /// After the first system message (position 1), or position 0 if no system message.
+    /// This is the default.
+    #[default]
+    AfterSystemPrompt,
+    /// At the end of the message list.
+    Append,
+    /// At a specific index. Clamped to `ctx.messages.len()`.
+    At(usize),
+}
+
+
 /// Extract content from context messages and write it to a [`StateStore`].
 ///
 /// The extractor function transforms the current messages into a JSON value.
@@ -60,16 +77,20 @@ impl ContextOp for FlushToStore {
     }
 }
 
-/// Search a [`StateStore`] and inject matching results as system messages.
+/// Search a [`StateStore`] and inject matching results as messages.
 ///
-/// Performs a search query against the store, then prepends each result
-/// as a system message at the start of the context (after any existing
-/// system message at position 0).
+/// Performs a search query against the store, then inserts each result
+/// as a message at the configured [`InjectionPosition`] (default:
+/// after any existing system message at position 0).
 pub struct InjectFromStore {
     store: Arc<dyn StateStore>,
     scope: Scope,
     query: String,
     limit: usize,
+    position: InjectionPosition,
+    role: Role,
+    policy: CompactionPolicy,
+    formatter: Formatter,
 }
 
 impl InjectFromStore {
@@ -78,6 +99,9 @@ impl InjectFromStore {
     /// Searches the store for `query` and injects up to `limit` results
     /// as system messages into the context, immediately after the
     /// existing system prompt (if any).
+    ///
+    /// Use the builder methods ([`Self::with_position`], [`Self::with_role`],
+    /// [`Self::with_policy`], [`Self::with_formatter`]) to customise behaviour.
     pub fn new(
         store: Arc<dyn StateStore>,
         scope: Scope,
@@ -89,7 +113,41 @@ impl InjectFromStore {
             scope,
             query: query.into(),
             limit,
+            position: InjectionPosition::AfterSystemPrompt,
+            role: Role::System,
+            policy: CompactionPolicy::CompressFirst,
+            formatter: Arc::new(|key, value| format!("[Memory: {}] {}", key, value)),
         }
+    }
+
+    /// Set where injected messages are inserted.
+    pub fn with_position(mut self, position: InjectionPosition) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// Set the role for injected messages (default: [`Role::System`]).
+    pub fn with_role(mut self, role: Role) -> Self {
+        self.role = role;
+        self
+    }
+
+    /// Set the compaction policy for injected messages (default: [`CompactionPolicy::CompressFirst`]).
+    pub fn with_policy(mut self, policy: CompactionPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Set a custom formatter for injected messages.
+    ///
+    /// The formatter receives `(key, value)` from the store and returns
+    /// the message text content.
+    pub fn with_formatter(
+        mut self,
+        formatter: impl Fn(&str, &serde_json::Value) -> String + Send + Sync + 'static,
+    ) -> Self {
+        self.formatter = Arc::new(formatter);
+        self
     }
 }
 
@@ -112,25 +170,29 @@ impl ContextOp for InjectFromStore {
                 .await
                 .map_err(|e| EngineError::Custom(Box::new(e)))?
             {
-                let text = format!("[Memory: {}] {}", result.key, value);
-                let mut msg = Message::new(Role::System, Content::text(text));
-                msg.meta.policy = CompactionPolicy::CompressFirst;
+                let text = (self.formatter)(&result.key, &value);
+                let mut msg = Message::new(self.role.clone(), Content::text(text));
+                msg.meta.policy = self.policy;
                 messages.push(msg);
             }
         }
 
         let count = messages.len();
 
-        // Insert after the main system message at position 0 (if present),
-        // otherwise insert at position 0.
-        let insert_at = if ctx
-            .messages
-            .first()
-            .is_some_and(|m| m.role == Role::System)
-        {
-            1
-        } else {
-            0
+        let insert_at = match &self.position {
+            InjectionPosition::AfterSystemPrompt => {
+                if ctx
+                    .messages
+                    .first()
+                    .is_some_and(|m| m.role == Role::System)
+                {
+                    1
+                } else {
+                    0
+                }
+            }
+            InjectionPosition::Append => ctx.messages.len(),
+            InjectionPosition::At(idx) => (*idx).min(ctx.messages.len()),
         };
 
         for (i, msg) in messages.into_iter().enumerate() {
@@ -349,5 +411,73 @@ mod tests {
         let stored = data.get("messages_key").unwrap();
         assert_eq!(stored["count"], 2);
         assert_eq!(stored["first"], "hello world");
+    }
+
+    #[tokio::test]
+    async fn inject_with_append_position() {
+        let store = MockStore::new();
+        {
+            let mut data = store.data.write().unwrap();
+            data.insert("mem_x".to_string(), json!("appended memory"));
+        }
+
+        let mut ctx = Context::new();
+        ctx.messages.push(Message::new(Role::System, Content::text("system")));
+        ctx.messages.push(Message::new(Role::User, Content::text("user msg")));
+
+        ctx.run(
+            InjectFromStore::new(store.clone(), Scope::Global, "mem", 10)
+                .with_position(InjectionPosition::Append),
+        )
+        .await
+        .unwrap();
+
+        // Memory should be at the end
+        assert_eq!(ctx.messages.len(), 3);
+        assert_eq!(ctx.messages[2].role, Role::System);
+        assert!(ctx.messages[2].text_content().contains("appended memory"));
+    }
+
+    #[tokio::test]
+    async fn inject_with_custom_role_and_formatter() {
+        let store = MockStore::new();
+        {
+            let mut data = store.data.write().unwrap();
+            data.insert("fact_1".to_string(), json!("the sky is blue"));
+        }
+
+        let mut ctx = Context::new();
+        ctx.messages.push(Message::new(Role::User, Content::text("hello")));
+
+        ctx.run(
+            InjectFromStore::new(store.clone(), Scope::Global, "fact", 10)
+                .with_role(Role::User)
+                .with_formatter(|key, value| format!("Fact ({key}): {value}")),
+        )
+        .await
+        .unwrap();
+
+        // Should be injected at position 0 (no system message), with Role::User
+        assert_eq!(ctx.messages[0].role, Role::User);
+        assert_eq!(ctx.messages[0].text_content(), "Fact (fact_1): \"the sky is blue\"");
+    }
+
+    #[tokio::test]
+    async fn inject_with_custom_policy() {
+        let store = MockStore::new();
+        {
+            let mut data = store.data.write().unwrap();
+            data.insert("mem_p".to_string(), json!("pinned memory"));
+        }
+
+        let mut ctx = Context::new();
+        ctx.run(
+            InjectFromStore::new(store.clone(), Scope::Global, "mem", 10)
+                .with_policy(CompactionPolicy::Pinned),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(ctx.messages[0].meta.policy, CompactionPolicy::Pinned);
     }
 }

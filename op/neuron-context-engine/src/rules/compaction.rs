@@ -257,29 +257,57 @@ impl ContextOp for CompactionRule {
     }
 }
 
-/// Summarize a slice of messages into a single pinned assistant message.
+/// Default system prompt for [`summarize`] and [`summarize_with`].
+pub const DEFAULT_SUMMARY_PROMPT: &str = "Summarize the conversation so far. Preserve: (1) key decisions made, (2) unresolved questions, (3) facts established, (4) current task state. Be concise but lose no critical information.";
+
+/// Configuration for LLM-driven summarization.
+#[derive(Debug, Clone)]
+pub struct SummarizeConfig {
+    /// System prompt instructing the model how to summarize.
+    pub prompt: String,
+    /// Maximum output tokens for the summarization call.
+    pub max_tokens: u32,
+    /// Compaction policy applied to the returned summary message.
+    pub output_policy: CompactionPolicy,
+}
+
+impl Default for SummarizeConfig {
+    fn default() -> Self {
+        Self {
+            prompt: DEFAULT_SUMMARY_PROMPT.into(),
+            max_tokens: 2048,
+            output_policy: CompactionPolicy::Pinned,
+        }
+    }
+}
+
+/// Summarize messages using the default prompt and policy.
+/// See [`summarize_with`] for full configuration.
+pub async fn summarize<P: Provider>(
+    messages: &[Message],
+    provider: &P,
+) -> Result<Message, EngineError> {
+    summarize_with(messages, provider, &SummarizeConfig::default()).await
+}
+
+/// Summarize messages with custom configuration.
 ///
-/// Calls the provider with a system prompt that instructs the model to produce
-/// a concise summary preserving key decisions, unresolved questions, facts
-/// established, and current task state. The returned message has
-/// [`CompactionPolicy::Pinned`] so it survives further compaction.
-///
-/// The caller decides where to inject the result; this function does not
-/// mutate any [`crate::context::Context`].
+/// Use [`SummarizeConfig`] to control the prompt, max tokens, and output
+/// compaction policy. The returned message has the configured
+/// [`SummarizeConfig::output_policy`].
 ///
 /// # Errors
 ///
 /// Returns [`EngineError::Halted`] if the provider returns an empty response.
 /// Returns [`EngineError::Provider`] if the provider call fails.
-pub async fn summarize<P: Provider>(
+pub async fn summarize_with<P: Provider>(
     messages: &[Message],
     provider: &P,
+    config: &SummarizeConfig,
 ) -> Result<Message, EngineError> {
     let request = InferRequest::new(messages.to_vec())
-        .with_system(
-            "Summarize the conversation so far. Preserve: (1) key decisions made, (2) unresolved questions, (3) facts established, (4) current task state. Be concise but lose no critical information.",
-        )
-        .with_max_tokens(2048);
+        .with_system(&config.prompt)
+        .with_max_tokens(config.max_tokens);
     let response = provider.infer(request).await?;
     let is_empty = response.text().is_none_or(str::is_empty);
     if is_empty {
@@ -288,8 +316,32 @@ pub async fn summarize<P: Provider>(
         });
     }
     let mut msg = Message::new(Role::Assistant, response.content);
-    msg.meta.policy = CompactionPolicy::Pinned;
+    msg.meta.policy = config.output_policy;
     Ok(msg)
+}
+
+/// Default system prompt template for [`extract_cognitive_state`].
+///
+/// The placeholder `{schema}` is replaced with the pretty-printed JSON schema.
+pub const DEFAULT_EXTRACT_PROMPT_TEMPLATE: &str = "Extract the current cognitive state from this conversation according to the following JSON schema. Return ONLY valid JSON, no explanation.\n\nSchema:\n{schema}";
+
+/// Configuration for cognitive state extraction.
+#[derive(Debug, Clone)]
+pub struct ExtractConfig {
+    /// System prompt template. Must contain `{schema}` which is replaced with
+    /// the pretty-printed schema.
+    pub prompt_template: String,
+    /// Maximum output tokens.
+    pub max_tokens: u32,
+}
+
+impl Default for ExtractConfig {
+    fn default() -> Self {
+        Self {
+            prompt_template: DEFAULT_EXTRACT_PROMPT_TEMPLATE.into(),
+            max_tokens: 4096,
+        }
+    }
 }
 
 /// Extract the current cognitive state from a slice of messages as JSON.
@@ -310,14 +362,25 @@ pub async fn extract_cognitive_state<P: Provider>(
     provider: &P,
     schema: &serde_json::Value,
 ) -> Result<serde_json::Value, EngineError> {
+    extract_cognitive_state_with(messages, provider, schema, &ExtractConfig::default()).await
+}
+
+/// Extract cognitive state with custom configuration.
+///
+/// The `config.prompt_template` must contain `{schema}` — it is replaced with
+/// the pretty-printed schema.
+pub async fn extract_cognitive_state_with<P: Provider>(
+    messages: &[Message],
+    provider: &P,
+    schema: &serde_json::Value,
+    config: &ExtractConfig,
+) -> Result<serde_json::Value, EngineError> {
     let schema_pretty = serde_json::to_string_pretty(schema)
         .unwrap_or_else(|_| schema.to_string());
-    let system = format!(
-        "Extract the current cognitive state from this conversation according to the following JSON schema. Return ONLY valid JSON, no explanation.\n\nSchema:\n{schema_pretty}"
-    );
+    let system = config.prompt_template.replace("{schema}", &schema_pretty);
     let request = InferRequest::new(messages.to_vec())
         .with_system(system)
-        .with_max_tokens(4096);
+        .with_max_tokens(config.max_tokens);
     let response = provider.infer(request).await?;
     let text = response.text().unwrap_or("");
     let trimmed = strip_json_fences(text);
@@ -570,6 +633,45 @@ mod tests {
         let schema = serde_json::json!({});
         let result = extract_cognitive_state(&messages, &provider, &schema).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn summarize_with_custom_prompt() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Custom summary")]);
+        let messages: Vec<Message> = (0..3).map(|i| msg(&format!("msg {i}"))).collect();
+        let config = SummarizeConfig {
+            prompt: "Just say what happened.".into(),
+            ..SummarizeConfig::default()
+        };
+        let result = summarize_with(&messages, &provider, &config).await.unwrap();
+        assert_eq!(result.text_content(), "Custom summary");
+        assert_eq!(result.meta.policy, CompactionPolicy::Pinned);
+    }
+
+    #[tokio::test]
+    async fn summarize_with_custom_policy() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Summary")]);
+        let messages = vec![msg("hello")];
+        let config = SummarizeConfig {
+            output_policy: CompactionPolicy::Normal,
+            ..SummarizeConfig::default()
+        };
+        let result = summarize_with(&messages, &provider, &config).await.unwrap();
+        assert_eq!(result.meta.policy, CompactionPolicy::Normal);
+    }
+
+    #[tokio::test]
+    async fn extract_cognitive_state_with_custom_prompt() {
+        let provider = TestProvider::with_responses(vec![make_text_response(r#"{"key": "value"}"#)]);
+        let messages = vec![msg("hello")];
+        let config = ExtractConfig {
+            prompt_template: "Custom extraction: {schema}".into(),
+            ..ExtractConfig::default()
+        };
+        let result = extract_cognitive_state_with(&messages, &provider, &serde_json::json!({}), &config)
+            .await
+            .unwrap();
+        assert_eq!(result["key"], "value");
     }
 
 }
