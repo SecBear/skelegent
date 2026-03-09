@@ -34,7 +34,7 @@ pattern:
 pub trait DispatchMiddleware: Send + Sync {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError>;
@@ -161,7 +161,7 @@ pub enum Role {
 ///
 /// Compaction is methods on Context, not a trait hierarchy.
 pub struct Context {
-    agent_id: AgentId,
+    operator_id: OperatorId,
     messages: Vec<Message>,
     watchers: Vec<Arc<dyn ContextWatcher>>,
 }

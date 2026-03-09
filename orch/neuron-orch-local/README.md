@@ -9,7 +9,7 @@
 ## Overview
 
 `neuron-orch-local` is a fully in-process implementation of `layer0`'s `Orchestrator` trait.
-Operators are registered by `AgentId` and dispatched directly via `tokio::spawn`. No durability —
+Operators are registered by `OperatorId` and dispatched directly via `tokio::spawn`. No durability —
 failed operators are not retried. Signals are tracked in an in-memory per-workflow journal.
 
 Use it for:
@@ -19,7 +19,7 @@ Use it for:
 
 ## Exports
 
-- **`LocalOrch`** — `new()`, `register(AgentId, Arc<dyn Operator>)`, `signal_count(&WorkflowId)`
+- **`LocalOrch`** — `new()`, `register(OperatorId, Arc<dyn Operator>)`, `signal_count(&WorkflowId)`
 
 Implements `Orchestrator` (from `layer0`): `dispatch`, `dispatch_many`, `signal`, `query`.
 
@@ -34,17 +34,17 @@ tokio = { version = "1", features = ["full"] }
 
 ```rust,no_run
 use neuron_orch_local::LocalOrch;
-use layer0::{AgentId, Content, Operator, OperatorInput, OperatorOutput, Orchestrator};
+use layer0::{OperatorId, Content, Operator, OperatorInput, OperatorOutput, Orchestrator};
 use layer0::operator::TriggerType;
 use std::sync::Arc;
 
 // Given an `op: Arc<dyn Operator>`, register and dispatch:
 let mut orch = LocalOrch::new();
-orch.register(AgentId::new("worker"), op);
+orch.register(OperatorId::new("worker"), op);
 
 let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
 // dispatch is async:
-// let output = orch.dispatch(&AgentId::new("worker"), input).await?;
+// let output = orch.dispatch(&OperatorId::new("worker"), input).await?;
 ```
 
 ## Part of the neuron workspace

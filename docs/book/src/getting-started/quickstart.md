@@ -7,7 +7,7 @@ This example creates an Anthropic provider, registers a tool, builds a `Context`
 ```rust,no_run
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
 use neuron_provider_anthropic::AnthropicProvider;
 use neuron_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 4. Create a tool-call context (identifies the calling agent)
-    let tool_ctx = ToolCallContext::new(AgentId::from("assistant"));
+    let tool_ctx = ToolCallContext::new(OperatorId::from("assistant"));
 
     // 5. Build a Context and inject the user message
     let mut ctx = Context::new();

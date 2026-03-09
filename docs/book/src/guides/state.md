@@ -28,7 +28,7 @@ State is partitioned by `Scope`. A scope is a structured identifier that determi
 
 ```rust
 pub enum Scope {
-    Agent(AgentId),
+    Operator(OperatorId),
     Session(SessionId),
     Workflow(WorkflowId),
     Global,

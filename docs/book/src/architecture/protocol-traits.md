@@ -119,13 +119,13 @@ How operators from different agents compose, and how execution survives failures
 pub trait Orchestrator: Send + Sync {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError>;
 
     async fn dispatch_many(
         &self,
-        tasks: Vec<(AgentId, OperatorInput)>,
+        tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, OrchError>>;
 
     async fn signal(
@@ -230,7 +230,7 @@ Observation and intervention at protocol boundaries. Three traits cover the thre
 pub trait DispatchMiddleware: Send + Sync {
     async fn on_dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: DispatchNext<'_>,
     ) -> Result<OperatorOutput, OrchError>;

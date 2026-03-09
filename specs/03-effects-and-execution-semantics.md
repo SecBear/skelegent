@@ -67,7 +67,7 @@ the agent directly — it declares the intent.
 
 ```rust
 Effect::Delegate {
-    agent: AgentId,
+    operator: OperatorId,
     input: Box<OperatorInput>,
 }
 ```
@@ -86,7 +86,7 @@ the next agent takes over entirely.
 
 ```rust
 Effect::Handoff {
-    agent: AgentId,
+    operator: OperatorId,
     state: serde_json::Value,  // context to pass to the next agent
 }
 ```

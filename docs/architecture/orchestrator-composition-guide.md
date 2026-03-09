@@ -45,7 +45,7 @@ wildly by deployment.
 
 ```rust
 // dispatch() RETURNS the result. This is synchronous from the caller's perspective.
-async fn dispatch(&self, agent: &AgentId, input: OperatorInput) -> Result<OperatorOutput, OrchError>;
+async fn dispatch(&self, operator: &OperatorId, input: OperatorInput) -> Result<OperatorOutput, OrchError>;
 ```
 
 The orchestrator implementation decides:

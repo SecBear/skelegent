@@ -39,7 +39,7 @@ Four protocol traits + two cross-cutting interfaces:
 
 **Effects:** `Effect`, `Scope`, `SignalPayload`
 
-**Identity:** `AgentId`, `WorkflowId`, `ScopeId`, `SessionId`
+**Identity:** `OperatorId`, `WorkflowId`, `ScopeId`, `SessionId`
 
 **Content:** `Content`, `ContentBlock`
 

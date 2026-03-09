@@ -63,7 +63,7 @@ Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `
 - `neuron-effects-core` -- `EffectExecutor` trait and shared effect execution types
 - `neuron-effects-local` -- Local effect interpreter (executes effects in-process)
 
-Layer 2 implements `layer0::Orchestrator`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `AgentId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
+Layer 2 implements `layer0::Orchestrator`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `OperatorId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
 
 Future implementations could include Temporal workflows (durable, replayable) or Restate (durable execution with virtual objects).
 

@@ -9,13 +9,13 @@ Orchestration is how multiple agents compose and how execution survives failures
 pub trait Orchestrator: Send + Sync {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError>;
 
     async fn dispatch_many(
         &self,
-        tasks: Vec<(AgentId, OperatorInput)>,
+        tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, OrchError>>;
 
     async fn signal(
@@ -34,12 +34,12 @@ pub trait Orchestrator: Send + Sync {
 
 ## LocalOrch (`neuron-orch-local`)
 
-The local orchestrator dispatches operator invocations in-process using tokio. It maps `AgentId` values to `Arc<dyn Operator>` references and calls `execute()` directly.
+The local orchestrator dispatches operator invocations in-process using tokio. It maps `OperatorId` values to `Arc<dyn Operator>` references and calls `execute()` directly.
 
 ```rust,no_run
 use neuron_orch_local::LocalOrch;
 use layer0::operator::Operator;
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 use std::sync::Arc;
 
 // Assume `coder` and `reviewer` are constructed operators
@@ -47,8 +47,8 @@ let coder: Arc<dyn Operator> = /* ... */;
 let reviewer: Arc<dyn Operator> = /* ... */;
 
 let mut orchestrator = LocalOrch::new();
-orchestrator.register(AgentId("coder".into()), coder);
-orchestrator.register(AgentId("reviewer".into()), reviewer);
+orchestrator.register(OperatorId("coder".into()), coder);
+orchestrator.register(OperatorId("reviewer".into()), reviewer);
 ```
 
 ### Dispatching
@@ -59,7 +59,7 @@ Single dispatch sends work to one agent:
 use layer0::orchestrator::Orchestrator;
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::content::Content;
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 
 # async fn example(orchestrator: &dyn Orchestrator) -> Result<(), Box<dyn std::error::Error>> {
 let input = OperatorInput::new(
@@ -68,7 +68,7 @@ let input = OperatorInput::new(
 );
 
 let output = orchestrator
-    .dispatch(&AgentId("coder".into()), input)
+    .dispatch(&OperatorId("coder".into()), input)
     .await?;
 
 println!("Agent response: {:?}", output.message);
@@ -84,16 +84,16 @@ println!("Agent response: {:?}", output.message);
 use layer0::orchestrator::Orchestrator;
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::content::Content;
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 
 # async fn example(orchestrator: &dyn Orchestrator) -> Result<(), Box<dyn std::error::Error>> {
 let tasks = vec![
     (
-        AgentId("analyzer".into()),
+        OperatorId("analyzer".into()),
         OperatorInput::new(Content::text("Analyze security risks"), TriggerType::Task),
     ),
     (
-        AgentId("reviewer".into()),
+        OperatorId("reviewer".into()),
         OperatorInput::new(Content::text("Review code quality"), TriggerType::Task),
     ),
 ];
@@ -161,7 +161,7 @@ The `neuron-orch-kit` crate provides shared utilities for orchestrator implement
 
 ```rust
 pub enum OrchError {
-    AgentNotFound(String),    // No agent registered with that ID
+    OperatorNotFound(String),    // No agent registered with that ID
     WorkflowNotFound(String), // No workflow with that ID
     DispatchFailed(String),   // Dispatch failed for other reasons
     SignalFailed(String),     // Signal delivery failed

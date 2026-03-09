@@ -18,7 +18,7 @@ Three traits — one per Layer 0 protocol boundary — follow the continuation p
 pub trait DispatchMiddleware: Send + Sync {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError>;
@@ -98,7 +98,7 @@ Call order: observers → transformers → guards → terminal (the real orchest
 ```rust,no_run
 use async_trait::async_trait;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput};
 use layer0::error::OrchError;
 
@@ -108,13 +108,13 @@ struct LoggingMiddleware;
 impl DispatchMiddleware for LoggingMiddleware {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError> {
-        tracing::info!(%agent, "dispatch start");
-        let result = next.dispatch(agent, input).await;
-        tracing::info!(%agent, ok = result.is_ok(), "dispatch end");
+        tracing::info!(%operator, "dispatch start");
+        let result = next.dispatch(operator, input).await;
+        tracing::info!(%operator, ok = result.is_ok(), "dispatch end");
         result
     }
 }
@@ -125,7 +125,7 @@ impl DispatchMiddleware for LoggingMiddleware {
 ```rust,no_run
 use async_trait::async_trait;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput};
 use layer0::error::OrchError;
 
@@ -137,16 +137,16 @@ struct DenyToolMiddleware {
 impl DispatchMiddleware for DenyToolMiddleware {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError> {
-        if agent.as_str() == self.denied {
+        if operator.as_str() == self.denied {
             return Err(OrchError::PolicyDenied {
                 reason: format!("tool {} is denied by policy", self.denied),
             });
         }
-        next.dispatch(agent, input).await
+        next.dispatch(operator, input).await
     }
 }
 ```

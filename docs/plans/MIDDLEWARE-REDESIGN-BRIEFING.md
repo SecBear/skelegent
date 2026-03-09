@@ -21,7 +21,7 @@ middleware** and unify context types into a single concrete `Context`.
 
 #[async_trait]
 pub trait DispatchMiddleware: Send + Sync {
-    async fn dispatch(&self, agent: &AgentId, input: OperatorInput,
+    async fn dispatch(&self, operator: &OperatorId, input: OperatorInput,
                       next: &dyn DispatchNext) -> Result<OperatorOutput, OrchError>;
 }
 
@@ -62,7 +62,7 @@ pub struct Message { pub role: Role, pub content: Content, pub meta: MessageMeta
 pub enum Role { System, User, Assistant, Tool { name: String, call_id: String } }
 
 pub struct Context {
-    agent_id: AgentId,
+    operator_id: OperatorId,
     messages: Vec<Message>,
     watchers: Vec<Arc<dyn ContextWatcher>>,
 }

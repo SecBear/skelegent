@@ -174,12 +174,12 @@ mod tests {
         impl DispatchMiddleware for TagMiddleware {
             async fn dispatch(
                 &self,
-                agent: &AgentId,
+                operator: &OperatorId,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
             ) -> Result<OperatorOutput, OrchError> {
                 input.metadata = serde_json::json!({"tagged": true});
-                next.dispatch(agent, input).await
+                next.dispatch(operator, input).await
             }
         }
 
@@ -212,7 +212,7 @@ Write `neuron/layer0/src/middleware.rs`:
 use crate::effect::Scope;
 use crate::environment::EnvironmentSpec;
 use crate::error::{EnvError, OrchError, StateError};
-use crate::id::AgentId;
+use crate::id::OperatorId;
 use crate::operator::{OperatorInput, OperatorOutput};
 use async_trait::async_trait;
 
@@ -229,7 +229,7 @@ pub trait DispatchNext: Send + Sync {
     /// Forward the dispatch to the next layer.
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError>;
 }
@@ -244,7 +244,7 @@ pub trait DispatchMiddleware: Send + Sync {
     /// Intercept a dispatch call.
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError>;
@@ -382,12 +382,12 @@ async fn dispatch_stack_observer_always_runs() {
     impl DispatchMiddleware for CountObserver {
         async fn dispatch(
             &self,
-            agent: &AgentId,
+            operator: &OperatorId,
             input: OperatorInput,
             next: &dyn DispatchNext,
         ) -> Result<OperatorOutput, OrchError> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            next.dispatch(agent, input).await
+            next.dispatch(operator, input).await
         }
     }
 
@@ -397,7 +397,7 @@ async fn dispatch_stack_observer_always_runs() {
     impl DispatchMiddleware for HaltGuard {
         async fn dispatch(
             &self,
-            _agent: &AgentId,
+            _operator: &OperatorId,
             _input: OperatorInput,
             _next: &dyn DispatchNext,
         ) -> Result<OperatorOutput, OrchError> {
@@ -416,7 +416,7 @@ async fn dispatch_stack_observer_always_runs() {
 
     // Even though the guard halts, the observer must have run
     let input = OperatorInput::new(Content::text("test"), TriggerType::User);
-    let result = stack.dispatch(&AgentId::from("a"), input).await;
+    let result = stack.dispatch(&OperatorId::from("a"), input).await;
     assert!(result.is_err());
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
@@ -429,13 +429,13 @@ async fn dispatch_stack_transform_then_guard() {
     impl DispatchMiddleware for Uppercaser {
         async fn dispatch(
             &self,
-            agent: &AgentId,
+            operator: &OperatorId,
             mut input: OperatorInput,
             next: &dyn DispatchNext,
         ) -> Result<OperatorOutput, OrchError> {
             // Transform: uppercase the metadata tag
             input.metadata = serde_json::json!({"transformed": true});
-            next.dispatch(agent, input).await
+            next.dispatch(operator, input).await
         }
     }
 
@@ -445,12 +445,12 @@ async fn dispatch_stack_transform_then_guard() {
     impl DispatchMiddleware for PassGuard {
         async fn dispatch(
             &self,
-            agent: &AgentId,
+            operator: &OperatorId,
             input: OperatorInput,
             next: &dyn DispatchNext,
         ) -> Result<OperatorOutput, OrchError> {
             // Guard passes — call next
-            next.dispatch(agent, input).await
+            next.dispatch(operator, input).await
         }
     }
 
@@ -461,7 +461,7 @@ async fn dispatch_stack_transform_then_guard() {
     impl DispatchNext for EchoNext {
         async fn dispatch(
             &self,
-            _agent: &AgentId,
+            _operator: &OperatorId,
             input: OperatorInput,
         ) -> Result<OperatorOutput, OrchError> {
             Ok(OperatorOutput::new(input.message, ExitReason::Complete))
@@ -474,7 +474,7 @@ async fn dispatch_stack_transform_then_guard() {
         .build();
 
     let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
-    let result = stack.dispatch_with(&AgentId::from("a"), input, &EchoNext).await;
+    let result = stack.dispatch_with(&OperatorId::from("a"), input, &EchoNext).await;
     assert!(result.is_ok());
 }
 ```
@@ -525,19 +525,19 @@ impl DispatchStack {
     /// Dispatch through the middleware chain, ending at `terminal`.
     pub async fn dispatch_with(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         terminal: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError> {
         if self.layers.is_empty() {
-            return terminal.dispatch(agent, input).await;
+            return terminal.dispatch(operator, input).await;
         }
         let chain = MiddlewareChain {
             layers: &self.layers,
             index: 0,
             terminal,
         };
-        chain.dispatch(agent, input).await
+        chain.dispatch(operator, input).await
     }
 }
 
@@ -581,18 +581,18 @@ struct MiddlewareChain<'a> {
 impl DispatchNext for MiddlewareChain<'_> {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError> {
         if self.index >= self.layers.len() {
-            return self.terminal.dispatch(agent, input).await;
+            return self.terminal.dispatch(operator, input).await;
         }
         let next = MiddlewareChain {
             layers: self.layers,
             index: self.index + 1,
             terminal: self.terminal,
         };
-        self.layers[self.index].dispatch(agent, input, &next).await
+        self.layers[self.index].dispatch(operator, input, &next).await
     }
 }
 ```
@@ -671,7 +671,7 @@ Replace the generic `AgentContext<M>` with the concrete `Context` type and migra
 ```rust
 #[test]
 fn context_push_and_read() {
-    let mut ctx = Context::new(AgentId::from("agent-1"));
+    let mut ctx = Context::new(OperatorId::from("agent-1"));
     ctx.push(Message::new(Role::User, Content::text("hello"))).unwrap();
     ctx.push(Message::new(Role::Assistant, Content::text("hi"))).unwrap();
     assert_eq!(ctx.len(), 2);
@@ -681,7 +681,7 @@ fn context_push_and_read() {
 
 #[test]
 fn context_compact_truncate() {
-    let mut ctx = Context::new(AgentId::from("a"));
+    let mut ctx = Context::new(OperatorId::from("a"));
     for i in 0..10 {
         ctx.push(Message::new(Role::User, Content::text(format!("msg {i}")))).unwrap();
     }
@@ -692,7 +692,7 @@ fn context_compact_truncate() {
 
 #[test]
 fn context_compact_by_policy_preserves_pinned() {
-    let mut ctx = Context::new(AgentId::from("a"));
+    let mut ctx = Context::new(OperatorId::from("a"));
     ctx.push(Message::pinned(Role::System, Content::text("you are helpful"))).unwrap();
     for i in 0..5 {
         ctx.push(Message::new(Role::User, Content::text(format!("msg {i}")))).unwrap();
@@ -706,7 +706,7 @@ fn context_compact_by_policy_preserves_pinned() {
 
 #[test]
 fn context_compact_with_closure() {
-    let mut ctx = Context::new(AgentId::from("a"));
+    let mut ctx = Context::new(OperatorId::from("a"));
     for i in 0..6 {
         ctx.push(Message::new(Role::User, Content::text(format!("msg {i}")))).unwrap();
     }
@@ -947,11 +947,11 @@ pub struct RedactionMiddleware { /* ... */ }
 impl DispatchMiddleware for RedactionMiddleware {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError> {
-        let mut output = next.dispatch(agent, input).await?;
+        let mut output = next.dispatch(operator, input).await?;
         // Redact secrets from output
         self.redact(&mut output);
         Ok(output)
@@ -1600,11 +1600,11 @@ impl RedactionMiddleware {
 impl DispatchMiddleware for RedactionMiddleware {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError> {
-        let mut output = next.dispatch(agent, input).await?;
+        let mut output = next.dispatch(operator, input).await?;
         // Scan output message content for secrets
         if let Some(text) = output.message.as_text() {
             if let Some(redacted) = self.redact(text) {
@@ -1660,7 +1660,7 @@ impl ExfilGuardMiddleware {
 impl DispatchMiddleware for ExfilGuardMiddleware {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError> {
@@ -1687,7 +1687,7 @@ impl DispatchMiddleware for ExfilGuardMiddleware {
         }
 
         // Input is clean — proceed
-        next.dispatch(agent, input).await
+        next.dispatch(operator, input).await
     }
 }
 ```

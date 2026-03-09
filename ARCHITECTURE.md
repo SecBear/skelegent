@@ -343,7 +343,7 @@ registry that must be synchronized across processes.
 ### The dispatch boundary
 
 Same-process dispatch (`LocalOrchestrator`): the agent registry — the thing
-that maps `AgentId` to a constructed `Operator` — is where behavior is wired.
+that maps `OperatorId` to a constructed `Operator` — is where behavior is wired.
 Rules are attached at operator construction, not per-dispatch. If a system
 architect wants agent B to always run with a budget guard, they configure that
 when registering agent B.

@@ -30,9 +30,9 @@ The `Orchestrator` trait defines how multiple agents work together and how execu
 ```rust
 #[async_trait]
 pub trait Orchestrator: Send + Sync {
-    async fn dispatch(&self, agent: &AgentId, input: OperatorInput)
+    async fn dispatch(&self, operator: &OperatorId, input: OperatorInput)
         -> Result<OperatorOutput, OrchError>;
-    async fn dispatch_many(&self, tasks: Vec<(AgentId, OperatorInput)>)
+    async fn dispatch_many(&self, tasks: Vec<(OperatorId, OperatorInput)>)
         -> Vec<Result<OperatorOutput, OrchError>>;
     async fn signal(&self, target: &WorkflowId, signal: SignalPayload)
         -> Result<(), OrchError>;
