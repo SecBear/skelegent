@@ -22,9 +22,9 @@ use crate::op::ContextOp;
 use crate::rule::{Rule, Trigger};
 use async_trait::async_trait;
 use layer0::context::Message;
-use layer0::lifecycle::CompactionPolicy;
 use layer0::context::Role;
-use neuron_turn::infer::InferRequest;
+use layer0::lifecycle::CompactionPolicy;
+use neuron_turn::infer::{InferRequest, InferResponse};
 use neuron_turn::provider::Provider;
 
 /// A summary produced by a compaction operation.
@@ -193,6 +193,10 @@ pub struct CompactionRule {
     strategy: CompactionStrategy,
     /// Fire when message count exceeds this value.
     max_messages: usize,
+    /// Custom trigger predicate, if any.
+    custom_trigger: Option<Trigger>,
+    /// Rule priority (default: 50).
+    priority: i32,
 }
 
 impl CompactionRule {
@@ -204,6 +208,8 @@ impl CompactionRule {
         Self {
             strategy: CompactionStrategy::SlidingWindow { keep },
             max_messages: keep,
+            custom_trigger: None,
+            priority: 50,
         }
     }
 
@@ -215,6 +221,8 @@ impl CompactionRule {
         Self {
             strategy: CompactionStrategy::PolicyTrim { target },
             max_messages: target,
+            custom_trigger: None,
+            priority: 50,
         }
     }
 
@@ -223,14 +231,37 @@ impl CompactionRule {
     /// Uses [`Trigger::When`] — evaluates at the start of every [`Context::run()`]
     /// call. Priority is 50: below budget guards (default 100) and above
     /// telemetry (0).
-    pub fn into_rule(self) -> Rule {
+    /// Override the trigger predicate.
+    ///
+    /// By default, the rule fires when `messages.len() > max_messages`.
+    /// Use this to supply a custom predicate.
+    pub fn with_trigger(mut self, trigger: Trigger) -> Self {
+        self.custom_trigger = Some(trigger);
+        self
+    }
+
+    /// Override the rule priority (default: 50).
+    ///
+    /// Higher priority rules fire first. Budget guards default to 100,
+    /// compaction to 50, telemetry to 0.
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    /// Convert this into a [`Rule`] that fires automatically.
+    ///
+    /// Uses [`Trigger::When`] — evaluates at the start of every [`Context::run()`]
+    /// call. Priority is 50: below budget guards (default 100) and above
+    /// telemetry (0).
+    pub fn into_rule(mut self) -> Rule {
         let max = self.max_messages;
-        Rule::new(
-            "compaction",
-            Trigger::When(Box::new(move |ctx| ctx.messages.len() > max)),
-            50,
-            self,
-        )
+        let trigger = self
+            .custom_trigger
+            .take()
+            .unwrap_or_else(|| Trigger::When(Box::new(move |ctx| ctx.messages.len() > max)));
+        let priority = self.priority;
+        Rule::new("compaction", trigger, priority, self)
     }
 }
 
@@ -303,18 +334,33 @@ pub async fn summarize<P: Provider>(
 ///
 /// Returns [`EngineError::Halted`] if the provider returns an empty response.
 /// Returns [`EngineError::Provider`] if the provider call fails.
-pub async fn summarize_with<P: Provider>(
-    messages: &[Message],
-    provider: &P,
-    config: &SummarizeConfig,
-) -> Result<Message, EngineError> {
+/// Build an [`InferRequest`] for summarization.
+///
+/// This is the request that [`summarize_with()`] sends to the provider.
+/// Use this to inspect or modify the request before calling the provider yourself.
+pub fn build_summarize_request(messages: &[Message], config: &SummarizeConfig) -> InferRequest {
     let mut request = InferRequest::new(messages.to_vec())
         .with_system(&config.prompt)
         .with_max_tokens(config.max_tokens);
     if let Some(ref model) = config.model {
         request = request.with_model(model);
     }
-    let response = provider.infer(request).await?;
+    request
+}
+
+/// Parse a provider response into a summarization message.
+///
+/// Validates the response is non-empty and wraps it as a [`Message`] with
+/// the configured [`CompactionPolicy`]. This is the parsing step that
+/// [`summarize_with()`] applies after inference.
+///
+/// # Errors
+///
+/// Returns [`EngineError::Halted`] if the response text is empty.
+pub fn parse_summarize_response(
+    response: InferResponse,
+    config: &SummarizeConfig,
+) -> Result<Message, EngineError> {
     let is_empty = response.text().is_none_or(str::is_empty);
     if is_empty {
         return Err(EngineError::Halted {
@@ -324,6 +370,26 @@ pub async fn summarize_with<P: Provider>(
     let mut msg = Message::new(Role::Assistant, response.content);
     msg.meta.policy = config.output_policy;
     Ok(msg)
+}
+
+/// Summarize messages with custom configuration.
+///
+/// Use [`SummarizeConfig`] to control the prompt, max tokens, and output
+/// compaction policy. The returned message has the configured
+/// [`SummarizeConfig::output_policy`].
+///
+/// # Errors
+///
+/// Returns [`EngineError::Halted`] if the provider returns an empty response.
+/// Returns [`EngineError::Provider`] if the provider call fails.
+pub async fn summarize_with<P: Provider>(
+    messages: &[Message],
+    provider: &P,
+    config: &SummarizeConfig,
+) -> Result<Message, EngineError> {
+    let request = build_summarize_request(messages, config);
+    let response = provider.infer(request).await?;
+    parse_summarize_response(response, config)
 }
 
 /// Default system prompt template for [`extract_cognitive_state`].
@@ -378,14 +444,16 @@ pub async fn extract_cognitive_state<P: Provider>(
 ///
 /// The `config.prompt_template` must contain `{schema}` — it is replaced with
 /// the pretty-printed schema.
-pub async fn extract_cognitive_state_with<P: Provider>(
+/// Build an [`InferRequest`] for cognitive state extraction.
+///
+/// Substitutes `{schema}` in the prompt template with the pretty-printed schema.
+/// This is the request that [`extract_cognitive_state_with()`] sends to the provider.
+pub fn build_extract_request(
     messages: &[Message],
-    provider: &P,
     schema: &serde_json::Value,
     config: &ExtractConfig,
-) -> Result<serde_json::Value, EngineError> {
-    let schema_pretty = serde_json::to_string_pretty(schema)
-        .unwrap_or_else(|_| schema.to_string());
+) -> InferRequest {
+    let schema_pretty = serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
     let system = config.prompt_template.replace("{schema}", &schema_pretty);
     let mut request = InferRequest::new(messages.to_vec())
         .with_system(system)
@@ -393,7 +461,19 @@ pub async fn extract_cognitive_state_with<P: Provider>(
     if let Some(ref model) = config.model {
         request = request.with_model(model);
     }
-    let response = provider.infer(request).await?;
+    request
+}
+
+/// Parse a provider response into a cognitive state JSON value.
+///
+/// Strips markdown JSON fences via [`strip_json_fences()`] and parses
+/// the result as JSON. This is the parsing step that
+/// [`extract_cognitive_state_with()`] applies after inference.
+///
+/// # Errors
+///
+/// Returns [`EngineError::Halted`] if the response cannot be parsed as JSON.
+pub fn parse_extract_response(response: &InferResponse) -> Result<serde_json::Value, EngineError> {
     let text = response.text().unwrap_or("");
     let trimmed = strip_json_fences(text);
     serde_json::from_str(trimmed).map_err(|err| EngineError::Halted {
@@ -401,15 +481,40 @@ pub async fn extract_cognitive_state_with<P: Provider>(
     })
 }
 
+/// Extract cognitive state with custom configuration.
+///
+/// The `config.prompt_template` must contain `{schema}` — it is replaced with
+/// the pretty-printed schema.
+pub async fn extract_cognitive_state_with<P: Provider>(
+    messages: &[Message],
+    provider: &P,
+    schema: &serde_json::Value,
+    config: &ExtractConfig,
+) -> Result<serde_json::Value, EngineError> {
+    let request = build_extract_request(messages, schema, config);
+    let response = provider.infer(request).await?;
+    parse_extract_response(&response)
+}
+
 /// Strip markdown code fences from a JSON response.
 ///
-/// Models often wrap JSON in ````json\n...\n```` even when instructed not to.
-fn strip_json_fences(text: &str) -> &str {
+/// Models often wrap JSON in ` ```json\n...\n``` ` even when instructed not to.
+/// This function removes those fences, returning the inner content trimmed.
+///
+/// Used internally by [`extract_cognitive_state_with()`]. Exposed as a primitive
+/// so developers who write their own extraction pipeline can reuse it.
+pub fn strip_json_fences(text: &str) -> &str {
     let trimmed = text.trim();
     if let Some(rest) = trimmed.strip_prefix("```json") {
-        rest.trim().strip_suffix("```").unwrap_or(rest.trim()).trim()
+        rest.trim()
+            .strip_suffix("```")
+            .unwrap_or(rest.trim())
+            .trim()
     } else if let Some(rest) = trimmed.strip_prefix("```") {
-        rest.trim().strip_suffix("```").unwrap_or(rest.trim()).trim()
+        rest.trim()
+            .strip_suffix("```")
+            .unwrap_or(rest.trim())
+            .trim()
     } else {
         trimmed
     }
@@ -620,8 +725,7 @@ mod tests {
     #[tokio::test]
     async fn extract_cognitive_state_parses_json() {
         let json_response = r#"{"goal": "test", "progress": 50}"#;
-        let provider =
-            TestProvider::with_responses(vec![make_text_response(json_response)]);
+        let provider = TestProvider::with_responses(vec![make_text_response(json_response)]);
         let messages: Vec<Message> = (0..3).map(|i| msg(&format!("msg {i}"))).collect();
         let schema = serde_json::json!({
             "type": "object",
@@ -639,8 +743,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_cognitive_state_invalid_json_errors() {
-        let provider =
-            TestProvider::with_responses(vec![make_text_response("not json at all")]);
+        let provider = TestProvider::with_responses(vec![make_text_response("not json at all")]);
         let messages: Vec<Message> = (0..3).map(|i| msg(&format!("msg {i}"))).collect();
         let schema = serde_json::json!({});
         let result = extract_cognitive_state(&messages, &provider, &schema).await;
@@ -674,15 +777,17 @@ mod tests {
 
     #[tokio::test]
     async fn extract_cognitive_state_with_custom_prompt() {
-        let provider = TestProvider::with_responses(vec![make_text_response(r#"{"key": "value"}"#)]);
+        let provider =
+            TestProvider::with_responses(vec![make_text_response(r#"{"key": "value"}"#)]);
         let messages = vec![msg("hello")];
         let config = ExtractConfig {
             prompt_template: "Custom extraction: {schema}".into(),
             ..ExtractConfig::default()
         };
-        let result = extract_cognitive_state_with(&messages, &provider, &serde_json::json!({}), &config)
-            .await
-            .unwrap();
+        let result =
+            extract_cognitive_state_with(&messages, &provider, &serde_json::json!({}), &config)
+                .await
+                .unwrap();
         assert_eq!(result["key"], "value");
     }
 
@@ -698,4 +803,104 @@ mod tests {
         assert_eq!(result.text_content(), "Model summary");
     }
 
+    #[test]
+    fn test_strip_json_fences_with_json_tag() {
+        let input = "```json\n{\"a\": 1}\n```";
+        assert_eq!(strip_json_fences(input), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn test_strip_json_fences_without_tag() {
+        let input = "```\n{\"a\": 1}\n```";
+        assert_eq!(strip_json_fences(input), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn test_strip_json_fences_no_fences() {
+        let input = "{\"a\": 1}";
+        assert_eq!(strip_json_fences(input), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn test_build_summarize_request_default() {
+        let messages = vec![msg("hello")];
+        let config = SummarizeConfig::default();
+        let request = build_summarize_request(&messages, &config);
+        assert_eq!(request.max_tokens, Some(2048));
+    }
+
+    #[test]
+    fn test_build_summarize_request_custom_model() {
+        let messages = vec![msg("hello")];
+        let config = SummarizeConfig {
+            model: Some("custom-model".into()),
+            ..SummarizeConfig::default()
+        };
+        let request = build_summarize_request(&messages, &config);
+        assert_eq!(request.model.as_deref(), Some("custom-model"));
+    }
+
+    #[test]
+    fn test_parse_summarize_response_empty() {
+        let response = make_text_response("");
+        let config = SummarizeConfig::default();
+        let result = parse_summarize_response(response, &config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_summarize_response_success() {
+        let response = make_text_response("Summary text");
+        let config = SummarizeConfig {
+            output_policy: CompactionPolicy::Normal,
+            ..SummarizeConfig::default()
+        };
+        let result = parse_summarize_response(response, &config).unwrap();
+        assert_eq!(result.text_content(), "Summary text");
+        assert_eq!(result.meta.policy, CompactionPolicy::Normal);
+        assert_eq!(result.role, Role::Assistant);
+    }
+
+    #[test]
+    fn test_build_extract_request_schema_substitution() {
+        let messages = vec![msg("hello")];
+        let schema = serde_json::json!({"type": "object"});
+        let config = ExtractConfig::default();
+        let request = build_extract_request(&messages, &schema, &config);
+        // The system prompt should contain the schema
+        let system = request.system.unwrap();
+        assert!(
+            system.contains("\"type\": \"object\""),
+            "system prompt should contain schema: {system}"
+        );
+    }
+
+    #[test]
+    fn test_parse_extract_response_valid_json() {
+        let response = make_text_response("{\"key\": \"value\"}");
+        let result = parse_extract_response(&response).unwrap();
+        assert_eq!(result["key"], "value");
+    }
+
+    #[test]
+    fn test_parse_extract_response_with_fences() {
+        let response = make_text_response("```json\n{\"key\": \"value\"}\n```");
+        let result = parse_extract_response(&response).unwrap();
+        assert_eq!(result["key"], "value");
+    }
+
+    #[test]
+    fn test_parse_extract_response_invalid() {
+        let response = make_text_response("not json");
+        let result = parse_extract_response(&response);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compaction_rule_custom_priority() {
+        let rule = CompactionRule::sliding_window(10)
+            .with_priority(99)
+            .into_rule();
+        assert_eq!(rule.priority, 99);
+    }
 }

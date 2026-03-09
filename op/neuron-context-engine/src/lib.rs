@@ -96,7 +96,10 @@ pub use error::EngineError;
 pub use op::ContextOp;
 pub use ops::*;
 pub use output::{OutputError, OutputMode, OutputSchema, extract_json_block};
-pub use react::{ReactLoopConfig, ToolFilter, react_loop, react_loop_structured};
+pub use react::{
+    ReactLoopConfig, ToolFilter, check_approval, check_exit, format_tool_error, react_loop,
+    react_loop_structured,
+};
 pub use rule::{Rule, Trigger};
 pub use rules::*;
 pub use stream_react::stream_react_loop;

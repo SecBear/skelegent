@@ -185,7 +185,10 @@ async fn search_returns_empty_vec() {
     let results = StateStore::search(&store, &scope, "xyzzy", 10)
         .await
         .unwrap();
-    assert!(results.is_empty(), "non-matching query must return empty vec");
+    assert!(
+        results.is_empty(),
+        "non-matching query must return empty vec"
+    );
 
     // Searching with a matching term returns the key.
     let results = StateStore::search(&store, &scope, "hello", 10)

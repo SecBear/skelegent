@@ -46,10 +46,7 @@ impl Orchestrator for LocalOrchestrator {
             .operators
             .get(operator.as_str())
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op
-            .execute(input)
-            .await
-            .map_err(OrchError::OperatorError)
+        op.execute(input).await.map_err(OrchError::OperatorError)
     }
 
     async fn dispatch_many(
@@ -71,9 +68,9 @@ impl Orchestrator for LocalOrchestrator {
                 }
                 None => {
                     let name = id.to_string();
-                    handles.push(tokio::spawn(
-                        async move { Err(OrchError::OperatorNotFound(name)) },
-                    ));
+                    handles.push(tokio::spawn(async move {
+                        Err(OrchError::OperatorNotFound(name))
+                    }));
                 }
             }
         }

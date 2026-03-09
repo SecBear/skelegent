@@ -121,9 +121,9 @@ impl Orchestrator for LocalOrch {
                 }
                 None => {
                     let name = operator_id.to_string();
-                    handles.push(tokio::spawn(
-                        async move { Err(OrchError::OperatorNotFound(name)) },
-                    ));
+                    handles.push(tokio::spawn(async move {
+                        Err(OrchError::OperatorNotFound(name))
+                    }));
                 }
             }
         }

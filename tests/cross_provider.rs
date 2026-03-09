@@ -8,16 +8,16 @@
 //! All tests require live API keys and are `#[ignore]` by default.
 //! They verify that OperatorOutput structure is consistent across providers.
 
+use layer0::OperatorId;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
-use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
-use layer0::OperatorId;
 use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
-use neuron_tool::{ToolCallContext, ToolRegistry};
+use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use neuron_provider_anthropic::AnthropicProvider;
 use neuron_provider_ollama::OllamaProvider;
 use neuron_provider_openai::OpenAIProvider;
+use neuron_tool::{ToolCallContext, ToolRegistry};
 use neuron_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use std::sync::{Arc, Mutex};
 
@@ -48,9 +48,12 @@ async fn anthropic_react_simple_prompt() {
     let provider = AnthropicProvider::new(api_key);
 
     let mut ctx = Context::new();
-    ctx.inject_message(Message::new(Role::User, Content::text("Say hello in exactly 3 words.")))
-        .await
-        .unwrap();
+    ctx.inject_message(Message::new(
+        Role::User,
+        Content::text("Say hello in exactly 3 words."),
+    ))
+    .await
+    .unwrap();
 
     let tools = ToolRegistry::new();
     let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
@@ -165,9 +168,12 @@ async fn openai_react_simple_prompt() {
     let provider = OpenAIProvider::new(api_key);
 
     let mut ctx = Context::new();
-    ctx.inject_message(Message::new(Role::User, Content::text("Say hello in exactly 3 words.")))
-        .await
-        .unwrap();
+    ctx.inject_message(Message::new(
+        Role::User,
+        Content::text("Say hello in exactly 3 words."),
+    ))
+    .await
+    .unwrap();
 
     let tools = ToolRegistry::new();
     let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
@@ -268,9 +274,12 @@ async fn ollama_react_simple_prompt() {
     let provider = OllamaProvider::new();
 
     let mut ctx = Context::new();
-    ctx.inject_message(Message::new(Role::User, Content::text("Say hello in exactly 3 words.")))
-        .await
-        .unwrap();
+    ctx.inject_message(Message::new(
+        Role::User,
+        Content::text("Say hello in exactly 3 words."),
+    ))
+    .await
+    .unwrap();
 
     let tools = ToolRegistry::new();
     let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
@@ -336,7 +345,6 @@ async fn ollama_streaming_text() {
     );
 }
 
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Context engineering integration tests
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -351,20 +359,47 @@ async fn anthropic_summarize_live() {
 
     // Build a conversation worth summarizing
     let messages = vec![
-        Message::new(Role::User, Content::text("I'm building an agent framework in Rust called neuron.")),
-        Message::new(Role::Assistant, Content::text("That sounds interesting! What are the key design decisions?")),
-        Message::new(Role::User, Content::text("We use a 6-layer architecture: layer0 (types), turn (inference), tool, context-engine, orch, and neuron (top-level). Provider is RPITIT, not object-safe.")),
-        Message::new(Role::Assistant, Content::text("The RPITIT approach for Provider gives you zero-cost generics. What about context management?")),
-        Message::new(Role::User, Content::text("Context engineering is composable ops. ContextOp trait, rules with triggers, pure functions like sliding_window and policy_trim, plus async strategies like summarize that take a Provider.")),
+        Message::new(
+            Role::User,
+            Content::text("I'm building an agent framework in Rust called neuron."),
+        ),
+        Message::new(
+            Role::Assistant,
+            Content::text("That sounds interesting! What are the key design decisions?"),
+        ),
+        Message::new(
+            Role::User,
+            Content::text(
+                "We use a 6-layer architecture: layer0 (types), turn (inference), tool, context-engine, orch, and neuron (top-level). Provider is RPITIT, not object-safe.",
+            ),
+        ),
+        Message::new(
+            Role::Assistant,
+            Content::text(
+                "The RPITIT approach for Provider gives you zero-cost generics. What about context management?",
+            ),
+        ),
+        Message::new(
+            Role::User,
+            Content::text(
+                "Context engineering is composable ops. ContextOp trait, rules with triggers, pure functions like sliding_window and policy_trim, plus async strategies like summarize that take a Provider.",
+            ),
+        ),
     ];
 
-    let summary = summarize(&messages, &provider).await.expect("summarize should succeed");
+    let summary = summarize(&messages, &provider)
+        .await
+        .expect("summarize should succeed");
 
     // Verify the summary is a valid message
     assert_eq!(summary.role, Role::Assistant);
     let text = summary.text_content();
     assert!(!text.is_empty(), "summary should not be empty");
-    println!("Summary ({} chars): {}", text.len(), &text[..text.len().min(200)]);
+    println!(
+        "Summary ({} chars): {}",
+        text.len(),
+        &text[..text.len().min(200)]
+    );
 
     // Summary should be pinned (survives further compaction)
     assert_eq!(
@@ -383,9 +418,22 @@ async fn anthropic_extract_cognitive_state_live() {
     let provider = AnthropicProvider::new(api_key);
 
     let messages = vec![
-        Message::new(Role::User, Content::text("We decided to use SQLite for the state store. The API design is complete but testing is still pending.")),
-        Message::new(Role::Assistant, Content::text("Good choice. SQLite gives you FTS5 for text search. What about vector search?")),
-        Message::new(Role::User, Content::text("Vector search will be optional behind a feature flag using sqlite-vec.")),
+        Message::new(
+            Role::User,
+            Content::text(
+                "We decided to use SQLite for the state store. The API design is complete but testing is still pending.",
+            ),
+        ),
+        Message::new(
+            Role::Assistant,
+            Content::text(
+                "Good choice. SQLite gives you FTS5 for text search. What about vector search?",
+            ),
+        ),
+        Message::new(
+            Role::User,
+            Content::text("Vector search will be optional behind a feature flag using sqlite-vec."),
+        ),
     ];
 
     let schema = serde_json::json!({
@@ -401,14 +449,19 @@ async fn anthropic_extract_cognitive_state_live() {
         .await
         .expect("extract_cognitive_state should succeed");
 
-    println!("Cognitive state: {}", serde_json::to_string_pretty(&state).unwrap());
+    println!(
+        "Cognitive state: {}",
+        serde_json::to_string_pretty(&state).unwrap()
+    );
 
     // Should be a JSON object
     assert!(state.is_object(), "cognitive state should be a JSON object");
     // Should have at least some of the schema fields
     let obj = state.as_object().unwrap();
     assert!(
-        obj.contains_key("decisions") || obj.contains_key("open_questions") || obj.contains_key("current_status"),
+        obj.contains_key("decisions")
+            || obj.contains_key("open_questions")
+            || obj.contains_key("current_status"),
         "cognitive state should contain at least one schema field"
     );
 }

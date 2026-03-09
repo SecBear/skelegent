@@ -13,14 +13,12 @@ use crate::context::Context;
 use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
 use crate::ops::tool::ExecuteTool;
-use crate::react::ReactLoopConfig;
+use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error};
 use layer0::duration::DurationMs;
-use layer0::effect::Effect;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use neuron_tool::{ToolCallContext, ToolRegistry};
 use neuron_turn::infer::InferResponse;
 use neuron_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
-use neuron_turn::types::StopReason;
 
 /// Run the streaming ReAct loop.
 ///
@@ -68,30 +66,16 @@ pub async fn stream_react_loop<P: StreamProvider>(
 
         // Phase 4: Check if model is done
         if !response.has_tool_calls() {
-            let exit = match response.stop_reason {
-                StopReason::ContentFilter => ExitReason::SafetyStop {
-                    reason: "content filter triggered".into(),
-                },
-                _ => ExitReason::Complete,
-            };
+            let exit = check_exit(&response.stop_reason);
             return Ok(make_output(response, exit, ctx));
         }
 
         // Phase 5: Check tool approval
         let tool_calls = response.tool_calls.clone();
-        let needs_approval: Vec<_> = tool_calls
-            .iter()
-            .filter(|call| tools.get(&call.name).is_some_and(|t| t.requires_approval()))
-            .collect();
+        let approval_effects = check_approval(&tool_calls, tools);
 
-        if !needs_approval.is_empty() {
-            for call in &needs_approval {
-                ctx.effects.push(Effect::ToolApprovalRequired {
-                    tool_name: call.name.clone(),
-                    call_id: call.id.clone(),
-                    input: call.input.clone(),
-                });
-            }
+        if !approval_effects.is_empty() {
+            ctx.effects.extend(approval_effects);
             return Ok(make_output(response, ExitReason::AwaitingApproval, ctx));
         }
 
@@ -106,7 +90,7 @@ pub async fn stream_react_loop<P: StreamProvider>(
                 .await
             {
                 Ok(s) => s,
-                Err(e) => format!("Error: {e}"),
+                Err(e) => format_tool_error(&e),
             };
 
             let result_msg =

@@ -69,8 +69,8 @@ pub mod test_utils;
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
 pub use context::{
-    OperatorContext, Context, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message,
-    MessageMeta, Position, Role, WatcherVerdict,
+    Context, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message, MessageMeta,
+    OperatorContext, Position, Role, WatcherVerdict,
 };
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};

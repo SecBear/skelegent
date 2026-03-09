@@ -30,7 +30,6 @@ pub enum InjectionPosition {
     At(usize),
 }
 
-
 /// Extract content from context messages and write it to a [`StateStore`].
 ///
 /// The extractor function transforms the current messages into a JSON value.
@@ -181,11 +180,7 @@ impl ContextOp for InjectFromStore {
 
         let insert_at = match &self.position {
             InjectionPosition::AfterSystemPrompt => {
-                if ctx
-                    .messages
-                    .first()
-                    .is_some_and(|m| m.role == Role::System)
-                {
+                if ctx.messages.first().is_some_and(|m| m.role == Role::System) {
                     1
                 } else {
                     0
@@ -251,11 +246,7 @@ mod tests {
             Ok(())
         }
 
-        async fn list(
-            &self,
-            _scope: &Scope,
-            prefix: &str,
-        ) -> Result<Vec<String>, StateError> {
+        async fn list(&self, _scope: &Scope, prefix: &str) -> Result<Vec<String>, StateError> {
             let data = self.data.read().unwrap();
             Ok(data
                 .keys()
@@ -422,8 +413,10 @@ mod tests {
         }
 
         let mut ctx = Context::new();
-        ctx.messages.push(Message::new(Role::System, Content::text("system")));
-        ctx.messages.push(Message::new(Role::User, Content::text("user msg")));
+        ctx.messages
+            .push(Message::new(Role::System, Content::text("system")));
+        ctx.messages
+            .push(Message::new(Role::User, Content::text("user msg")));
 
         ctx.run(
             InjectFromStore::new(store.clone(), Scope::Global, "mem", 10)
@@ -447,7 +440,8 @@ mod tests {
         }
 
         let mut ctx = Context::new();
-        ctx.messages.push(Message::new(Role::User, Content::text("hello")));
+        ctx.messages
+            .push(Message::new(Role::User, Content::text("hello")));
 
         ctx.run(
             InjectFromStore::new(store.clone(), Scope::Global, "fact", 10)
@@ -459,7 +453,10 @@ mod tests {
 
         // Should be injected at position 0 (no system message), with Role::User
         assert_eq!(ctx.messages[0].role, Role::User);
-        assert_eq!(ctx.messages[0].text_content(), "Fact (fact_1): \"the sky is blue\"");
+        assert_eq!(
+            ctx.messages[0].text_content(),
+            "Fact (fact_1): \"the sky is blue\""
+        );
     }
 
     #[tokio::test]

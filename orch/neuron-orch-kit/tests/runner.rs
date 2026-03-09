@@ -53,8 +53,8 @@ impl Orchestrator for SimpleOrch {
         tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, OrchError>> {
         let mut results = Vec::with_capacity(tasks.len());
-            for (operator, input) in tasks {
-                results.push(self.dispatch(&operator, input).await);
+        for (operator, input) in tasks {
+            results.push(self.dispatch(&operator, input).await);
         }
         results
     }

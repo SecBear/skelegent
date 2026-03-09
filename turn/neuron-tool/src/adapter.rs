@@ -12,7 +12,7 @@ use layer0::effect::SignalPayload;
 use layer0::operator::Operator;
 use layer0::orchestrator::QueryPayload;
 use layer0::{
-    OperatorId, Content, DurationMs, ExitReason, OperatorError, OperatorInput, OperatorOutput,
+    Content, DurationMs, ExitReason, OperatorError, OperatorId, OperatorInput, OperatorOutput,
     OrchError, Orchestrator, SubDispatchRecord, ToolMetadata, WorkflowId,
 };
 
@@ -149,7 +149,7 @@ mod tests {
     use super::*;
     use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
     use layer0::operator::TriggerType;
-    use layer0::{OperatorId, Content, ExitReason, OperatorError, OperatorInput, OrchError};
+    use layer0::{Content, ExitReason, OperatorError, OperatorId, OperatorInput, OrchError};
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;
@@ -273,7 +273,10 @@ mod tests {
 
         let operator = OperatorId::new("echo");
         let input = make_input(r#"{"x": 42}"#);
-        let output = orch.dispatch(&operator, input).await.expect("should succeed");
+        let output = orch
+            .dispatch(&operator, input)
+            .await
+            .expect("should succeed");
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let text = output.message.as_text().expect("should be text");
@@ -288,7 +291,10 @@ mod tests {
 
         let operator = OperatorId::new("unknown_tool");
         let input = make_input("{}");
-        let err = orch.dispatch(&operator, input).await.expect_err("should fail");
+        let err = orch
+            .dispatch(&operator, input)
+            .await
+            .expect_err("should fail");
 
         match err {
             OrchError::OperatorNotFound(name) => {

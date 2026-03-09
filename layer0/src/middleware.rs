@@ -234,7 +234,9 @@ impl DispatchNext for DispatchChain<'_> {
             index: self.index + 1,
             terminal: self.terminal,
         };
-        self.layers[self.index].dispatch(operator, input, &next).await
+        self.layers[self.index]
+            .dispatch(operator, input, &next)
+            .await
     }
 }
 

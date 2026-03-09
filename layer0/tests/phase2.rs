@@ -198,7 +198,10 @@ async fn local_orchestrator_dispatch_to_echo() {
     let mut orch = LocalOrchestrator::new();
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
     let input = simple_input("dispatch test");
-    let output = orch.dispatch(&OperatorId::new("echo"), input).await.unwrap();
+    let output = orch
+        .dispatch(&OperatorId::new("echo"), input)
+        .await
+        .unwrap();
     assert_eq!(output.message, Content::text("dispatch test"));
 }
 
@@ -208,7 +211,12 @@ async fn local_orchestrator_dispatch_agent_not_found() {
     let input = simple_input("nobody home");
     let result = orch.dispatch(&OperatorId::new("missing"), input).await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("operator not found"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("operator not found")
+    );
 }
 
 #[tokio::test]

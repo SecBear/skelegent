@@ -7,6 +7,19 @@ use async_trait::async_trait;
 use neuron_tool::{ToolCallContext, ToolRegistry};
 use neuron_turn::infer::ToolCall;
 
+/// Convert a tool result JSON value to a string for the model.
+///
+/// String values are returned as-is. All other JSON types are serialized
+/// with `to_string()`. This is the default formatting used by [`ExecuteTool`].
+///
+/// Override this by calling the tool directly and formatting the result yourself.
+pub fn format_tool_result(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// Execute a single tool call via the [`ToolRegistry`].
 ///
 /// This is a context operation so rules can observe/intercept tool dispatch.
@@ -51,11 +64,34 @@ impl ContextOp for ExecuteTool {
         ctx.metrics.tool_calls_total += 1;
 
         // Convert JSON value to string representation for the model
-        let result_str = match &result_json {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
+        let result_str = format_tool_result(&result_json);
 
         Ok(result_str)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_format_tool_result_string() {
+        let value = serde_json::Value::String("hello world".into());
+        assert_eq!(format_tool_result(&value), "hello world");
+    }
+
+    #[test]
+    fn test_format_tool_result_json() {
+        let value = json!({ "key": "value" });
+        let result = format_tool_result(&value);
+        assert!(result.contains("key"));
+        assert!(result.contains("value"));
+    }
+
+    #[test]
+    fn test_format_tool_result_null() {
+        let value = serde_json::Value::Null;
+        assert_eq!(format_tool_result(&value), "null");
     }
 }

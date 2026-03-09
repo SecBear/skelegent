@@ -380,7 +380,11 @@ impl StateStore for FsStore {
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
         Ok(results)
     }
@@ -792,7 +796,11 @@ mod tests {
         assert_eq!(results.len(), 1, "case-insensitive match should find Hello");
 
         let results2 = store.search(&scope, "WORLD", 10).await.unwrap();
-        assert_eq!(results2.len(), 1, "case-insensitive match should find World");
+        assert_eq!(
+            results2.len(),
+            1,
+            "case-insensitive match should find World"
+        );
     }
 
     #[tokio::test]
@@ -803,7 +811,11 @@ mod tests {
 
         for i in 0..10 {
             store
-                .write(&scope, &format!("key{i}"), json!(format!("needle content {i}")))
+                .write(
+                    &scope,
+                    &format!("key{i}"),
+                    json!(format!("needle content {i}")),
+                )
                 .await
                 .unwrap();
         }
@@ -823,10 +835,7 @@ mod tests {
             .await
             .unwrap();
 
-        let results = store
-            .search(&scope, "xyzzy_nonexistent", 10)
-            .await
-            .unwrap();
+        let results = store.search(&scope, "xyzzy_nonexistent", 10).await.unwrap();
         assert!(results.is_empty());
     }
 }

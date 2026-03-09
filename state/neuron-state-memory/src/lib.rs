@@ -182,8 +182,7 @@ impl StateStore for MemoryStore {
             return Ok(vec![]);
         }
 
-        let scope_prefix =
-            serde_json::to_string(scope).unwrap_or_else(|_| "unknown".to_string());
+        let scope_prefix = serde_json::to_string(scope).unwrap_or_else(|_| "unknown".to_string());
         let query_lower = query.to_lowercase();
 
         let data = self.data.read().await;
@@ -366,7 +365,10 @@ mod tests {
         let store = MemoryStore::new();
         let scope = Scope::Global;
 
-        store.write(&scope, "k1", json!("hello world")).await.unwrap();
+        store
+            .write(&scope, "k1", json!("hello world"))
+            .await
+            .unwrap();
         let results = store.search(&scope, "xyzzy", 10).await.unwrap();
         assert!(results.is_empty());
     }
@@ -436,8 +438,16 @@ mod tests {
             store.write(&scope, k, json!(k)).await.unwrap();
         }
 
-        assert_eq!(store.read(&scope, "a").await.unwrap(), None, "a should be evicted");
-        assert_eq!(store.read(&scope, "b").await.unwrap(), None, "b should be evicted");
+        assert_eq!(
+            store.read(&scope, "a").await.unwrap(),
+            None,
+            "a should be evicted"
+        );
+        assert_eq!(
+            store.read(&scope, "b").await.unwrap(),
+            None,
+            "b should be evicted"
+        );
         assert_eq!(store.read(&scope, "c").await.unwrap(), Some(json!("c")));
         assert_eq!(store.read(&scope, "d").await.unwrap(), Some(json!("d")));
         assert_eq!(store.read(&scope, "e").await.unwrap(), Some(json!("e")));
@@ -458,10 +468,23 @@ mod tests {
         // Write "d" — should evict "b" (now at front), not "a".
         store.write(&scope, "d", json!("d")).await.unwrap();
 
-        assert_eq!(store.read(&scope, "b").await.unwrap(), None, "b should be evicted");
-        assert!(store.read(&scope, "a").await.unwrap().is_some(), "a should survive");
-        assert!(store.read(&scope, "c").await.unwrap().is_some(), "c should survive");
-        assert!(store.read(&scope, "d").await.unwrap().is_some(), "d should survive");
+        assert_eq!(
+            store.read(&scope, "b").await.unwrap(),
+            None,
+            "b should be evicted"
+        );
+        assert!(
+            store.read(&scope, "a").await.unwrap().is_some(),
+            "a should survive"
+        );
+        assert!(
+            store.read(&scope, "c").await.unwrap().is_some(),
+            "c should survive"
+        );
+        assert!(
+            store.read(&scope, "d").await.unwrap().is_some(),
+            "d should survive"
+        );
     }
 
     #[tokio::test]
@@ -488,8 +511,14 @@ mod tests {
         let store = MemoryStore::new();
         let scope = Scope::Global;
 
-        store.write(&scope, "k1", json!("hello world")).await.unwrap();
-        store.write(&scope, "k2", json!("goodbye world")).await.unwrap();
+        store
+            .write(&scope, "k1", json!("hello world"))
+            .await
+            .unwrap();
+        store
+            .write(&scope, "k2", json!("goodbye world"))
+            .await
+            .unwrap();
         store.write(&scope, "k3", json!(42)).await.unwrap();
 
         let results = store.search(&scope, "world", 10).await.unwrap();
@@ -504,7 +533,10 @@ mod tests {
         let store = MemoryStore::new();
         let scope = Scope::Global;
 
-        store.write(&scope, "k1", json!("Hello World")).await.unwrap();
+        store
+            .write(&scope, "k1", json!("Hello World"))
+            .await
+            .unwrap();
         store.write(&scope, "k2", json!("HELLO")).await.unwrap();
         store.write(&scope, "k3", json!("unrelated")).await.unwrap();
 

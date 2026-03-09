@@ -35,9 +35,9 @@ impl ToolCallContext {
     /// Create a new context with the given operator ID and no deps.
     pub fn new(operator_id: OperatorId) -> Self {
         Self {
-                    operator_id,
-                    deps: Arc::new(()),
-                }
+            operator_id,
+            deps: Arc::new(()),
+        }
     }
 
     /// Create a context with typed dependencies.

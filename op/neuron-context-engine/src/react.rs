@@ -19,7 +19,7 @@ use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use neuron_tool::{ToolCallContext, ToolDyn, ToolRegistry};
-use neuron_turn::infer::InferResponse;
+use neuron_turn::infer::{InferResponse, ToolCall};
 use neuron_turn::provider::Provider;
 use neuron_turn::types::{StopReason, ToolSchema};
 use serde_json::Value;
@@ -102,6 +102,57 @@ impl ReactLoopConfig {
     }
 }
 
+/// Map a provider stop reason to an operator exit reason.
+///
+/// This is the decision point for determining why an agent loop ended.
+/// The default mapping used by [`react_loop()`]:
+/// - `StopReason::ContentFilter` → `ExitReason::SafetyStop`
+/// - Everything else → `ExitReason::Complete`
+///
+/// Override this by writing your own loop and using a different mapping.
+pub fn check_exit(stop_reason: &StopReason) -> ExitReason {
+    match stop_reason {
+        StopReason::ContentFilter => ExitReason::SafetyStop {
+            reason: "content filter triggered".into(),
+        },
+        _ => ExitReason::Complete,
+    }
+}
+
+/// Check which tool calls require approval and return the corresponding effects.
+///
+/// Returns a vec of `Effect::ToolApprovalRequired` for each tool call where
+/// `tool.requires_approval()` is true. Returns an empty vec if no tools
+/// require approval.
+///
+/// This is the decision point for human-in-the-loop approval. The caller
+/// decides what to do with the effects (emit them, filter them, etc.).
+pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<Effect> {
+    tool_calls
+        .iter()
+        .filter(|call| {
+            registry
+                .get(&call.name)
+                .is_some_and(|t| t.requires_approval())
+        })
+        .map(|call| Effect::ToolApprovalRequired {
+            tool_name: call.name.clone(),
+            call_id: call.id.clone(),
+            input: call.input.clone(),
+        })
+        .collect()
+}
+
+/// Format a tool execution error as a string for the model.
+///
+/// Default: `format!("Error: {e}")`. This is the formatting used by
+/// [`react_loop()`] when a tool call fails.
+///
+/// Override this by writing your own dispatch loop and formatting errors yourself.
+pub fn format_tool_error(e: &EngineError) -> String {
+    format!("Error: {e}")
+}
+
 /// Run the ReAct (Reasoning + Acting) loop.
 ///
 /// This is the ReAct *pattern* expressed as composition of context engine
@@ -144,30 +195,16 @@ pub async fn react_loop<P: Provider>(
 
         // Phase 3: Check if model is done
         if !result.has_tool_calls() {
-            let exit = match result.response.stop_reason {
-                StopReason::ContentFilter => ExitReason::SafetyStop {
-                    reason: "content filter triggered".into(),
-                },
-                _ => ExitReason::Complete,
-            };
+            let exit = check_exit(&result.response.stop_reason);
             return Ok(make_output(result.response, exit, ctx));
         }
 
         // Phase 4: Check tool approval
         let tool_calls = result.response.tool_calls.clone();
-        let needs_approval: Vec<_> = tool_calls
-            .iter()
-            .filter(|call| tools.get(&call.name).is_some_and(|t| t.requires_approval()))
-            .collect();
+        let approval_effects = check_approval(&tool_calls, tools);
 
-        if !needs_approval.is_empty() {
-            for call in &needs_approval {
-                ctx.effects.push(Effect::ToolApprovalRequired {
-                    tool_name: call.name.clone(),
-                    call_id: call.id.clone(),
-                    input: call.input.clone(),
-                });
-            }
+        if !approval_effects.is_empty() {
+            ctx.effects.extend(approval_effects);
             return Ok(make_output(
                 result.response,
                 ExitReason::AwaitingApproval,
@@ -186,7 +223,7 @@ pub async fn react_loop<P: Provider>(
                 .await
             {
                 Ok(s) => s,
-                Err(e) => format!("Error: {e}"),
+                Err(e) => format_tool_error(&e),
             };
 
             // Append tool result to context
@@ -360,12 +397,7 @@ pub async fn react_loop_structured<P: Provider>(
                     continue;
                 }
                 // No tool calls, no structured output — model is done without output
-                let exit = match result.response.stop_reason {
-                    StopReason::ContentFilter => ExitReason::SafetyStop {
-                        reason: "content filter triggered".into(),
-                    },
-                    _ => ExitReason::Complete,
-                };
+                let exit = check_exit(&result.response.stop_reason);
                 return Err(EngineError::Halted {
                     reason: format!(
                         "model completed without producing structured output (exit: {exit:?})"
@@ -388,22 +420,17 @@ async fn dispatch_function_tools(
     tool_ctx: &ToolCallContext,
     output_tool_name: &str,
 ) -> Result<bool, EngineError> {
-    // Check for approval-required tools first
-    let needs_approval: Vec<_> = response
+    // Check for approval-required tools first (excluding output tool)
+    let function_calls: Vec<_> = response
         .tool_calls
         .iter()
         .filter(|call| call.name != output_tool_name)
-        .filter(|call| tools.get(&call.name).is_some_and(|t| t.requires_approval()))
+        .cloned()
         .collect();
+    let approval_effects = check_approval(&function_calls, tools);
 
-    if !needs_approval.is_empty() {
-        for call in &needs_approval {
-            ctx.effects.push(Effect::ToolApprovalRequired {
-                tool_name: call.name.clone(),
-                call_id: call.id.clone(),
-                input: call.input.clone(),
-            });
-        }
+    if !approval_effects.is_empty() {
+        ctx.effects.extend(approval_effects);
         return Ok(true); // Caller should exit with AwaitingApproval
     }
 
@@ -420,7 +447,7 @@ async fn dispatch_function_tools(
             .await
         {
             Ok(s) => s,
-            Err(e) => format!("Error: {e}"),
+            Err(e) => format_tool_error(&e),
         };
         let result_msg =
             InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
@@ -981,5 +1008,75 @@ mod tests {
             }
             other => panic!("expected ToolApprovalRequired, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_check_exit_content_filter() {
+        let exit = check_exit(&StopReason::ContentFilter);
+        match exit {
+            ExitReason::SafetyStop { reason } => {
+                assert_eq!(reason, "content filter triggered");
+            }
+            other => panic!("expected SafetyStop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_check_exit_normal() {
+        let exit = check_exit(&StopReason::EndTurn);
+        assert_eq!(exit, ExitReason::Complete);
+    }
+
+    #[test]
+    fn test_check_approval_none_required() {
+        let tools = ToolRegistry::new();
+        let tool_calls: Vec<neuron_turn::infer::ToolCall> = vec![];
+        let effects = check_approval(&tool_calls, &tools);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn test_check_approval_some_required() {
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(ApprovalTool));
+        tools.register(Arc::new(MockTool { name: "safe" }));
+
+        let tool_calls = vec![
+            neuron_turn::infer::ToolCall {
+                id: "c1".into(),
+                name: "dangerous_tool".into(),
+                input: json!({ "x": 1 }),
+            },
+            neuron_turn::infer::ToolCall {
+                id: "c2".into(),
+                name: "safe".into(),
+                input: json!({ "y": 2 }),
+            },
+        ];
+
+        let effects = check_approval(&tool_calls, &tools);
+        assert_eq!(effects.len(), 1);
+        match &effects[0] {
+            Effect::ToolApprovalRequired {
+                tool_name,
+                call_id,
+                input,
+            } => {
+                assert_eq!(tool_name, "dangerous_tool");
+                assert_eq!(call_id, "c1");
+                assert_eq!(input, &json!({ "x": 1 }));
+            }
+            other => panic!("expected ToolApprovalRequired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_format_tool_error() {
+        let err = EngineError::Halted {
+            reason: "something broke".into(),
+        };
+        let formatted = format_tool_error(&err);
+        assert!(formatted.starts_with("Error: "));
+        assert!(formatted.contains("something broke"));
     }
 }

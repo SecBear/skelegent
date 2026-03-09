@@ -128,7 +128,9 @@ where
                     self.orch.signal(target, payload.clone()).await?;
                 }
                 Effect::Delegate { operator, input } => {
-                    self.orch.dispatch(operator, (*input.clone()).clone()).await?;
+                    self.orch
+                        .dispatch(operator, (*input.clone()).clone())
+                        .await?;
                 }
                 Effect::Handoff { operator, state } => {
                     // Serialize handoff state into the message body with a semantic flag.
