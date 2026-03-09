@@ -315,6 +315,43 @@ impl Default for SummarizeConfig {
     }
 }
 
+impl SummarizeConfig {
+    /// Build an [`InferRequest`] for summarization.
+    ///
+    /// This is the request that [`summarize_with()`] sends to the provider.
+    /// Use this to inspect or modify the request before calling the provider yourself.
+    pub fn build_request(&self, messages: &[Message]) -> InferRequest {
+        let mut request = InferRequest::new(messages.to_vec())
+            .with_system(&self.prompt)
+            .with_max_tokens(self.max_tokens);
+        if let Some(ref model) = self.model {
+            request = request.with_model(model);
+        }
+        request
+    }
+
+    /// Parse a provider response into a summarization message.
+    ///
+    /// Validates the response is non-empty and wraps it as a [`Message`] with
+    /// the configured [`CompactionPolicy`]. This is the parsing step that
+    /// [`summarize_with()`] applies after inference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Halted`] if the response text is empty.
+    pub fn parse_response(&self, response: InferResponse) -> Result<Message, EngineError> {
+        let is_empty = response.text().is_none_or(str::is_empty);
+        if is_empty {
+            return Err(EngineError::Halted {
+                reason: "summarization produced empty response".into(),
+            });
+        }
+        let mut msg = Message::new(Role::Assistant, response.content);
+        msg.meta.policy = self.output_policy;
+        Ok(msg)
+    }
+}
+
 /// Summarize messages using the default prompt and policy.
 /// See [`summarize_with`] for full configuration.
 pub async fn summarize<P: Provider>(
@@ -334,62 +371,14 @@ pub async fn summarize<P: Provider>(
 ///
 /// Returns [`EngineError::Halted`] if the provider returns an empty response.
 /// Returns [`EngineError::Provider`] if the provider call fails.
-/// Build an [`InferRequest`] for summarization.
-///
-/// This is the request that [`summarize_with()`] sends to the provider.
-/// Use this to inspect or modify the request before calling the provider yourself.
-pub fn build_summarize_request(messages: &[Message], config: &SummarizeConfig) -> InferRequest {
-    let mut request = InferRequest::new(messages.to_vec())
-        .with_system(&config.prompt)
-        .with_max_tokens(config.max_tokens);
-    if let Some(ref model) = config.model {
-        request = request.with_model(model);
-    }
-    request
-}
-
-/// Parse a provider response into a summarization message.
-///
-/// Validates the response is non-empty and wraps it as a [`Message`] with
-/// the configured [`CompactionPolicy`]. This is the parsing step that
-/// [`summarize_with()`] applies after inference.
-///
-/// # Errors
-///
-/// Returns [`EngineError::Halted`] if the response text is empty.
-pub fn parse_summarize_response(
-    response: InferResponse,
-    config: &SummarizeConfig,
-) -> Result<Message, EngineError> {
-    let is_empty = response.text().is_none_or(str::is_empty);
-    if is_empty {
-        return Err(EngineError::Halted {
-            reason: "summarization produced empty response".into(),
-        });
-    }
-    let mut msg = Message::new(Role::Assistant, response.content);
-    msg.meta.policy = config.output_policy;
-    Ok(msg)
-}
-
-/// Summarize messages with custom configuration.
-///
-/// Use [`SummarizeConfig`] to control the prompt, max tokens, and output
-/// compaction policy. The returned message has the configured
-/// [`SummarizeConfig::output_policy`].
-///
-/// # Errors
-///
-/// Returns [`EngineError::Halted`] if the provider returns an empty response.
-/// Returns [`EngineError::Provider`] if the provider call fails.
 pub async fn summarize_with<P: Provider>(
     messages: &[Message],
     provider: &P,
     config: &SummarizeConfig,
 ) -> Result<Message, EngineError> {
-    let request = build_summarize_request(messages, config);
+    let request = config.build_request(messages);
     let response = provider.infer(request).await?;
-    parse_summarize_response(response, config)
+    config.parse_response(response)
 }
 
 /// Default system prompt template for [`extract_cognitive_state`].
@@ -419,6 +408,44 @@ impl Default for ExtractConfig {
     }
 }
 
+impl ExtractConfig {
+    /// Build an [`InferRequest`] for cognitive state extraction.
+    ///
+    /// Substitutes `{schema}` in the prompt template with the pretty-printed schema.
+    /// This is the request that [`extract_cognitive_state_with()`] sends to the provider.
+    pub fn build_request(&self, messages: &[Message], schema: &serde_json::Value) -> InferRequest {
+        let schema_pretty =
+            serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
+        let system = self.prompt_template.replace("{schema}", &schema_pretty);
+        let mut request = InferRequest::new(messages.to_vec())
+            .with_system(system)
+            .with_max_tokens(self.max_tokens);
+        if let Some(ref model) = self.model {
+            request = request.with_model(model);
+        }
+        request
+    }
+
+    /// Parse a provider response into a cognitive state JSON value.
+    ///
+    /// Strips markdown JSON fences via [`strip_json_fences()`] and parses
+    /// the result as JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Halted`] if the response cannot be parsed as JSON.
+    pub fn parse_response(
+        &self,
+        response: &InferResponse,
+    ) -> Result<serde_json::Value, EngineError> {
+        let text = response.text().unwrap_or("");
+        let trimmed = strip_json_fences(text);
+        serde_json::from_str(trimmed).map_err(|err| EngineError::Halted {
+            reason: format!("cognitive state extraction failed to parse: {err}"),
+        })
+    }
+}
+
 /// Extract the current cognitive state from a slice of messages as JSON.
 ///
 /// Calls the provider with a system prompt instructing it to return JSON matching
@@ -444,56 +471,20 @@ pub async fn extract_cognitive_state<P: Provider>(
 ///
 /// The `config.prompt_template` must contain `{schema}` — it is replaced with
 /// the pretty-printed schema.
-/// Build an [`InferRequest`] for cognitive state extraction.
-///
-/// Substitutes `{schema}` in the prompt template with the pretty-printed schema.
-/// This is the request that [`extract_cognitive_state_with()`] sends to the provider.
-pub fn build_extract_request(
-    messages: &[Message],
-    schema: &serde_json::Value,
-    config: &ExtractConfig,
-) -> InferRequest {
-    let schema_pretty = serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
-    let system = config.prompt_template.replace("{schema}", &schema_pretty);
-    let mut request = InferRequest::new(messages.to_vec())
-        .with_system(system)
-        .with_max_tokens(config.max_tokens);
-    if let Some(ref model) = config.model {
-        request = request.with_model(model);
-    }
-    request
-}
-
-/// Parse a provider response into a cognitive state JSON value.
-///
-/// Strips markdown JSON fences via [`strip_json_fences()`] and parses
-/// the result as JSON. This is the parsing step that
-/// [`extract_cognitive_state_with()`] applies after inference.
 ///
 /// # Errors
 ///
 /// Returns [`EngineError::Halted`] if the response cannot be parsed as JSON.
-pub fn parse_extract_response(response: &InferResponse) -> Result<serde_json::Value, EngineError> {
-    let text = response.text().unwrap_or("");
-    let trimmed = strip_json_fences(text);
-    serde_json::from_str(trimmed).map_err(|err| EngineError::Halted {
-        reason: format!("cognitive state extraction failed to parse: {err}"),
-    })
-}
-
-/// Extract cognitive state with custom configuration.
-///
-/// The `config.prompt_template` must contain `{schema}` — it is replaced with
-/// the pretty-printed schema.
+/// Returns [`EngineError::Provider`] if the provider call fails.
 pub async fn extract_cognitive_state_with<P: Provider>(
     messages: &[Message],
     provider: &P,
     schema: &serde_json::Value,
     config: &ExtractConfig,
 ) -> Result<serde_json::Value, EngineError> {
-    let request = build_extract_request(messages, schema, config);
+    let request = config.build_request(messages, schema);
     let response = provider.infer(request).await?;
-    parse_extract_response(&response)
+    config.parse_response(&response)
 }
 
 /// Strip markdown code fences from a JSON response.
@@ -825,7 +816,7 @@ mod tests {
     fn test_build_summarize_request_default() {
         let messages = vec![msg("hello")];
         let config = SummarizeConfig::default();
-        let request = build_summarize_request(&messages, &config);
+        let request = config.build_request(&messages);
         assert_eq!(request.max_tokens, Some(2048));
     }
 
@@ -836,7 +827,7 @@ mod tests {
             model: Some("custom-model".into()),
             ..SummarizeConfig::default()
         };
-        let request = build_summarize_request(&messages, &config);
+        let request = config.build_request(&messages);
         assert_eq!(request.model.as_deref(), Some("custom-model"));
     }
 
@@ -844,7 +835,7 @@ mod tests {
     fn test_parse_summarize_response_empty() {
         let response = make_text_response("");
         let config = SummarizeConfig::default();
-        let result = parse_summarize_response(response, &config);
+        let result = config.parse_response(response);
         assert!(result.is_err());
     }
 
@@ -855,7 +846,7 @@ mod tests {
             output_policy: CompactionPolicy::Normal,
             ..SummarizeConfig::default()
         };
-        let result = parse_summarize_response(response, &config).unwrap();
+        let result = config.parse_response(response).unwrap();
         assert_eq!(result.text_content(), "Summary text");
         assert_eq!(result.meta.policy, CompactionPolicy::Normal);
         assert_eq!(result.role, Role::Assistant);
@@ -866,7 +857,7 @@ mod tests {
         let messages = vec![msg("hello")];
         let schema = serde_json::json!({"type": "object"});
         let config = ExtractConfig::default();
-        let request = build_extract_request(&messages, &schema, &config);
+        let request = config.build_request(&messages, &schema);
         // The system prompt should contain the schema
         let system = request.system.unwrap();
         assert!(
@@ -878,21 +869,21 @@ mod tests {
     #[test]
     fn test_parse_extract_response_valid_json() {
         let response = make_text_response("{\"key\": \"value\"}");
-        let result = parse_extract_response(&response).unwrap();
+        let result = ExtractConfig::default().parse_response(&response).unwrap();
         assert_eq!(result["key"], "value");
     }
 
     #[test]
     fn test_parse_extract_response_with_fences() {
         let response = make_text_response("```json\n{\"key\": \"value\"}\n```");
-        let result = parse_extract_response(&response).unwrap();
+        let result = ExtractConfig::default().parse_response(&response).unwrap();
         assert_eq!(result["key"], "value");
     }
 
     #[test]
     fn test_parse_extract_response_invalid() {
         let response = make_text_response("not json");
-        let result = parse_extract_response(&response);
+        let result = ExtractConfig::default().parse_response(&response);
         assert!(result.is_err());
     }
 
