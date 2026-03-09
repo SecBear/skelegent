@@ -227,12 +227,14 @@ src/
     compact.rs    — Compact, CompactResult
     response.rs   — AppendResponse
     tool.rs       — ExecuteTool
+    store.rs      — FlushToStore, InjectFromStore
   rules/
     mod.rs        — re-exports
     budget.rs     — BudgetGuard
-    compact.rs    — AutoCompact
-    telemetry.rs  — TelemetryRecorder
+    compaction.rs — CompactionRule, CompactionStrategy, sliding_window, policy_trim, summarize, extract_cognitive_state
+    telemetry.rs  — TelemetryRule, TelemetryConfig
   react.rs        — react_loop(), ReactLoopConfig
+  stream_react.rs — stream_react_loop()
 ```
 
 
@@ -249,12 +251,12 @@ internally.
 `rules/compaction.rs` provides `CompactionRule` — a `Rule` that wraps a named strategy and
 fires via a `When` trigger (predicate on message count or estimated token budget):
 
-| Strategy | Provider needed | StateStore needed | What it does |
+|Strategy|Provider needed|StateStore needed|What it does|
 |---|---|---|---|
-| `sliding_window` | no | no | Retains the N most recent messages; drops older ones |
-| `policy_trim` | no | no | Drops messages by `CompactionPolicy` (`DiscardWhenDone` first, then `CompressFirst`) |
-| `summarize` | yes | no | Summarizes a window of messages into a single assistant message |
-| `cognitive_state_extract` | yes | yes | Extracts facts/summaries and writes them to `StateStore`; retrieval happens at assembly time |
+|`sliding_window`|no|no|Retains the N most recent messages; drops older ones|
+|`policy_trim`|no|no|Drops messages by `CompactionPolicy` (`DiscardWhenDone` first, then `CompressFirst`)|
+|`summarize`|yes|no|Calls LLM to summarize messages into a single Pinned assistant message|
+|`extract_cognitive_state`|yes|no|Calls LLM to extract structured JSON state from conversation per a schema|
 
 `CompactionRule` fires when its `When` predicate returns true. Typical predicates: message
 count exceeds a threshold, or estimated token count crosses a fraction of the model's context
@@ -267,3 +269,25 @@ the context engine already imports. Moving them to a separate crate would add a 
 boundary without adding isolation: the dependency footprint is identical and the type universe
 is shared. The activation mechanism (`Rule` + `Trigger`) is defined in the context engine
 itself. All of this belongs together.
+
+## Store Integration
+
+Two ContextOps bridge context and `StateStore`:
+
+| Op | Direction | What it does |
+|---|---|---|
+| `FlushToStore` | context → store | Extracts messages via a user-provided closure, writes JSON to StateStore |
+| `InjectFromStore` | store → context | Searches StateStore, injects matching results as system messages |
+
+Both use `Arc<dyn StateStore>` so the store outlives any single call. Store errors
+map to `EngineError::Custom`.
+
+### Async strategies vs store ops
+
+Async strategies (`summarize`, `extract_cognitive_state`) are standalone functions that
+take `&[Message]` and a `Provider`. They return a value — the caller decides what to do.
+
+Store ops (`FlushToStore`, `InjectFromStore`) are ContextOps that mutate the context
+directly. They take an `Arc<dyn StateStore>` and operate on `ctx.messages`.
+
+The developer composes these freely: summarize then flush, inject then infer, etc.

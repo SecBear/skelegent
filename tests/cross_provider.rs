@@ -12,6 +12,9 @@ use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
 use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
+use layer0::AgentId;
+use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
+use neuron_tool::{ToolCallContext, ToolRegistry};
 use neuron_provider_anthropic::AnthropicProvider;
 use neuron_provider_ollama::OllamaProvider;
 use neuron_provider_openai::OpenAIProvider;
@@ -41,7 +44,31 @@ fn simple_input(text: &str) -> OperatorInput {
 #[tokio::test]
 #[ignore]
 async fn anthropic_react_simple_prompt() {
-    // TODO: migrate to context-engine using react_loop() + Context::new()
+    let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
+    let provider = AnthropicProvider::new(api_key);
+
+    let mut ctx = Context::new();
+    ctx.inject_message(Message::new(Role::User, Content::text("Say hello in exactly 3 words.")))
+        .await
+        .unwrap();
+
+    let tools = ToolRegistry::new();
+    let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+    let config = ReactLoopConfig {
+        system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
+        model: Some("claude-haiku-4-5-20251001".into()),
+        max_tokens: Some(256),
+        temperature: None,
+        tool_filter: None,
+    };
+
+    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+        .await
+        .expect("react_loop should succeed");
+
+    let text = output.message.as_text().unwrap_or("");
+    println!("Anthropic react_loop response: {text}");
+    assert!(!text.is_empty(), "response should not be empty");
 }
 
 #[tokio::test]
@@ -134,7 +161,31 @@ async fn anthropic_streaming_text() {
 #[tokio::test]
 #[ignore]
 async fn openai_react_simple_prompt() {
-    // TODO: migrate to context-engine using react_loop() + Context::new()
+    let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let provider = OpenAIProvider::new(api_key);
+
+    let mut ctx = Context::new();
+    ctx.inject_message(Message::new(Role::User, Content::text("Say hello in exactly 3 words.")))
+        .await
+        .unwrap();
+
+    let tools = ToolRegistry::new();
+    let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+    let config = ReactLoopConfig {
+        system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
+        model: Some("gpt-4o-mini".into()),
+        max_tokens: Some(256),
+        temperature: None,
+        tool_filter: None,
+    };
+
+    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+        .await
+        .expect("react_loop should succeed");
+
+    let text = output.message.as_text().unwrap_or("");
+    println!("OpenAI react_loop response: {text}");
+    assert!(!text.is_empty(), "response should not be empty");
 }
 
 #[tokio::test]
@@ -214,7 +265,30 @@ async fn openai_streaming_text() {
 #[tokio::test]
 #[ignore]
 async fn ollama_react_simple_prompt() {
-    // TODO: migrate to context-engine using react_loop() + Context::new()
+    let provider = OllamaProvider::new();
+
+    let mut ctx = Context::new();
+    ctx.inject_message(Message::new(Role::User, Content::text("Say hello in exactly 3 words.")))
+        .await
+        .unwrap();
+
+    let tools = ToolRegistry::new();
+    let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+    let config = ReactLoopConfig {
+        system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
+        model: Some("llama3.2:1b".into()),
+        max_tokens: Some(256),
+        temperature: None,
+        tool_filter: None,
+    };
+
+    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+        .await
+        .expect("react_loop should succeed");
+
+    let text = output.message.as_text().unwrap_or("");
+    println!("Ollama react_loop response: {text}");
+    assert!(!text.is_empty(), "response should not be empty");
 }
 
 #[tokio::test]
