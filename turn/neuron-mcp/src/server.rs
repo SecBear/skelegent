@@ -265,7 +265,7 @@ impl ServerHandler for McpServerHandler {
         match tool
             .call(
                 input,
-                &neuron_tool::ToolCallContext::new(layer0::AgentId::new("mcp-server")),
+                &neuron_tool::ToolCallContext::new(layer0::OperatorId::new("mcp-server")),
             )
             .await
         {
@@ -614,7 +614,7 @@ mod tests {
         registry.register(Arc::new(TestTool { tool_name: "echo" }));
 
         let tool = registry.get("echo").unwrap();
-        let ctx = neuron_tool::ToolCallContext::new(layer0::AgentId::new("test"));
+        let ctx = neuron_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
         let result = tool.call(json!({"msg": "hello"}), &ctx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), json!({"echoed": {"msg": "hello"}}));
@@ -626,7 +626,7 @@ mod tests {
         registry.register(Arc::new(FailingTool));
 
         let tool = registry.get("fail_tool").unwrap();
-        let ctx = neuron_tool::ToolCallContext::new(layer0::AgentId::new("test"));
+        let ctx = neuron_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
         let result = tool.call(json!({}), &ctx).await;
         assert!(result.is_err());
     }
@@ -756,7 +756,7 @@ mod tests {
         assert_eq!(adapter.input_schema(), schema);
 
         // call roundtrip: input is serialized → operator echoes JSON string → parsed back
-        let ctx = neuron_tool::ToolCallContext::new(layer0::AgentId::new("test"));
+        let ctx = neuron_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
         let result = adapter.call(json!({"query": "hello"}), &ctx).await.unwrap();
         assert_eq!(result, json!({"result": "ok"}));
     }

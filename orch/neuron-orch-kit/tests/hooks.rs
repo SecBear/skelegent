@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use layer0::effect::{Effect, Scope};
 use layer0::error::StateError;
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
 use layer0::state::{StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
@@ -91,7 +91,7 @@ async fn interpreter_no_hooks_writes_normally() {
         ttl: None,
     };
 
-    let mut followups: Vec<(AgentId, layer0::operator::OperatorInput)> = vec![];
+    let mut followups: Vec<(OperatorId, layer0::operator::OperatorInput)> = vec![];
     let mut trace = ExecutionTrace::new();
 
     interp

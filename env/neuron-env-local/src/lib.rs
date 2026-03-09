@@ -196,7 +196,7 @@ impl LocalEnv {
         event.lease_id = lease_id;
         event.lease_ttl_secs = lease_ttl_secs;
         event.workflow_id = correlation.workflow_id.clone();
-        event.agent_id = correlation.agent_id.clone();
+        event.operator_id = correlation.operator_id.clone();
         event.trace_id = correlation.trace_id.clone();
         sink.emit_secret_access(event);
     }
@@ -365,7 +365,7 @@ fn unix_time_ms() -> u64 {
 #[derive(Default)]
 struct CorrelationContext {
     workflow_id: Option<String>,
-    agent_id: Option<String>,
+    operator_id: Option<String>,
     trace_id: Option<String>,
 }
 
@@ -376,8 +376,8 @@ impl CorrelationContext {
                 .get("workflow_id")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
-            agent_id: metadata
-                .get("agent_id")
+            operator_id: metadata
+                .get("operator_id")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
             trace_id: metadata

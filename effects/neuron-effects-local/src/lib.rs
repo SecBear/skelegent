@@ -127,15 +127,15 @@ where
                 Effect::Signal { target, payload } => {
                     self.orch.signal(target, payload.clone()).await?;
                 }
-                Effect::Delegate { agent, input } => {
-                    self.orch.dispatch(agent, (*input.clone()).clone()).await?;
+                Effect::Delegate { operator, input } => {
+                    self.orch.dispatch(operator, (*input.clone()).clone()).await?;
                 }
-                Effect::Handoff { agent, state } => {
+                Effect::Handoff { operator, state } => {
                     // Serialize handoff state into the message body with a semantic flag.
                     let mut input =
                         OperatorInput::new(Content::text(state.to_string()), TriggerType::Task);
                     input.metadata = json!({ "handoff": true });
-                    self.orch.dispatch(agent, input).await?;
+                    self.orch.dispatch(operator, input).await?;
                 }
                 // Known but non-executing effects: treat as unknown for policy handling.
                 Effect::Log { .. } | Effect::Custom { .. } => match self.unknown_policy {

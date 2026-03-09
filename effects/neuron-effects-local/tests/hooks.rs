@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OrchError, StateError};
-use layer0::id::{AgentId, WorkflowId};
+use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
 use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
@@ -21,7 +21,7 @@ struct NoOpOrch;
 impl Orchestrator for NoOpOrch {
     async fn dispatch(
         &self,
-        _agent: &AgentId,
+        _operator: &OperatorId,
         _input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError> {
         Ok(OperatorOutput::new(
@@ -32,7 +32,7 @@ impl Orchestrator for NoOpOrch {
 
     async fn dispatch_many(
         &self,
-        tasks: Vec<(AgentId, OperatorInput)>,
+        tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, OrchError>> {
         tasks
             .into_iter()

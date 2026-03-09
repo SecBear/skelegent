@@ -7,8 +7,8 @@
 //!
 //! | Protocol | Trait | What it does |
 //! |----------|-------|-------------|
-//! | ① Operator | [`Operator`] | What one agent does per cycle |
-//! | ② Orchestration | [`Orchestrator`] | How agents compose + durability |
+//! | ① Operator | [`Operator`] | What one operator does per cycle |
+//! | ② Orchestration | [`Orchestrator`] | How operators compose + durability |
 //! | ③ State | [`StateStore`] | How data persists across turns |
 //! | ④ Environment | [`Environment`] | Isolation, credentials, resources |
 //!
@@ -69,14 +69,14 @@ pub mod test_utils;
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
 pub use context::{
-    AgentContext, Context, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message,
+    OperatorContext, Context, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message,
     MessageMeta, Position, Role, WatcherVerdict,
 };
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
-pub use id::{AgentId, ScopeId, SessionId, WorkflowId};
+pub use id::{OperatorId, ScopeId, SessionId, WorkflowId};
 pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy};
 pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,

@@ -1,31 +1,31 @@
-//! LocalOrchestrator — in-process orchestrator with a HashMap of agents.
+//! LocalOrchestrator — in-process orchestrator with a HashMap of operators.
 
 use crate::effect::SignalPayload;
 use crate::error::OrchError;
-use crate::id::{AgentId, WorkflowId};
+use crate::id::{OperatorId, WorkflowId};
 use crate::operator::{Operator, OperatorInput, OperatorOutput};
 use crate::orchestrator::{Orchestrator, QueryPayload};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// In-process orchestrator that dispatches operator invocations to registered agents.
+/// In-process orchestrator that dispatches operator invocations to registered operators.
 /// Uses `Arc<dyn Operator>` for true concurrent dispatch via `tokio::spawn`.
 pub struct LocalOrchestrator {
-    agents: HashMap<String, Arc<dyn Operator>>,
+    operators: HashMap<String, Arc<dyn Operator>>,
 }
 
 impl LocalOrchestrator {
     /// Create a new empty orchestrator.
     pub fn new() -> Self {
         Self {
-            agents: HashMap::new(),
+            operators: HashMap::new(),
         }
     }
 
-    /// Register an agent with the orchestrator.
-    pub fn register(&mut self, id: AgentId, operator: Arc<dyn Operator>) {
-        self.agents.insert(id.0, operator);
+    /// Register an operator with the orchestrator.
+    pub fn register(&mut self, id: OperatorId, operator: Arc<dyn Operator>) {
+        self.operators.insert(id.0, operator);
     }
 }
 
@@ -39,14 +39,14 @@ impl Default for LocalOrchestrator {
 impl Orchestrator for LocalOrchestrator {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError> {
-        let operator = self
-            .agents
-            .get(agent.as_str())
-            .ok_or_else(|| OrchError::AgentNotFound(agent.to_string()))?;
-        operator
+        let op = self
+            .operators
+            .get(operator.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
+        op
             .execute(input)
             .await
             .map_err(OrchError::OperatorError)
@@ -54,12 +54,12 @@ impl Orchestrator for LocalOrchestrator {
 
     async fn dispatch_many(
         &self,
-        tasks: Vec<(AgentId, OperatorInput)>,
+        tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, OrchError>> {
         let mut handles = Vec::with_capacity(tasks.len());
 
-        for (agent_id, input) in tasks {
-            match self.agents.get(agent_id.as_str()) {
+        for (id, input) in tasks {
+            match self.operators.get(id.as_str()) {
                 Some(operator) => {
                     let operator = Arc::clone(operator);
                     handles.push(tokio::spawn(async move {
@@ -70,9 +70,9 @@ impl Orchestrator for LocalOrchestrator {
                     }));
                 }
                 None => {
-                    let name = agent_id.to_string();
+                    let name = id.to_string();
                     handles.push(tokio::spawn(
-                        async move { Err(OrchError::AgentNotFound(name)) },
+                        async move { Err(OrchError::OperatorNotFound(name)) },
                     ));
                 }
             }

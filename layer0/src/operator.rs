@@ -1,4 +1,4 @@
-//! The Operator protocol — what one agent does per cycle.
+//! The Operator protocol — what one operator does per cycle.
 
 use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
 use async_trait::async_trait;
@@ -290,7 +290,7 @@ impl ToolMetadata {
 
 /// Protocol ① — The Operator
 ///
-/// What one agent does per cycle. Receives input, assembles context,
+/// What one operator does per cycle. Receives input, assembles context,
 /// reasons (model call), acts (tool execution), produces output.
 ///
 /// The ReAct while-loop, the agentic loop, the augmented LLM —

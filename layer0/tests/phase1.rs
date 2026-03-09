@@ -74,7 +74,7 @@ fn environment_is_object_safe_send_sync() {
 
 #[test]
 fn agent_id_from_str() {
-    let id = AgentId::from("agent-1");
+    let id = OperatorId::from("agent-1");
     assert_eq!(id.as_str(), "agent-1");
     assert_eq!(id.to_string(), "agent-1");
 }
@@ -100,9 +100,9 @@ fn scope_id_equality() {
 
 #[test]
 fn typed_id_serde_round_trip() {
-    let id = AgentId::new("test-agent");
+    let id = OperatorId::new("test-agent");
     let json = serde_json::to_string(&id).unwrap();
-    let back: AgentId = serde_json::from_str(&json).unwrap();
+    let back: OperatorId = serde_json::from_str(&json).unwrap();
     assert_eq!(id, back);
 }
 
@@ -340,7 +340,7 @@ fn effect_signal_round_trip() {
 #[test]
 fn effect_delegate_round_trip() {
     let e = Effect::Delegate {
-        agent: AgentId::new("helper"),
+        operator: OperatorId::new("helper"),
         input: Box::new(sample_operator_input()),
     };
     let json = serde_json::to_string(&e).unwrap();
@@ -375,9 +375,9 @@ fn scope_session_round_trip() {
 
 #[test]
 fn scope_agent_round_trip() {
-    let s = Scope::Agent {
+    let s = Scope::Operator {
         workflow: WorkflowId::new("wf-1"),
-        agent: AgentId::new("a-1"),
+        operator: OperatorId::new("a-1"),
     };
     let json = serde_json::to_string(&s).unwrap();
     let back: Scope = serde_json::from_str(&json).unwrap();
@@ -494,7 +494,7 @@ fn environment_spec_round_trip() {
 #[test]
 fn budget_event_cost_incurred_round_trip() {
     let e = BudgetEvent::CostIncurred {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         cost: Decimal::new(5, 3),
         cumulative: Decimal::new(150, 3),
     };
@@ -507,7 +507,7 @@ fn budget_event_cost_incurred_round_trip() {
 #[test]
 fn compaction_event_round_trip() {
     let e = CompactionEvent::ContextPressure {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         fill_percent: 0.85,
         tokens_used: 85000,
         tokens_available: 15000,
@@ -776,8 +776,8 @@ fn operator_error_display() {
 
 #[test]
 fn orch_error_display() {
-    let e = OrchError::AgentNotFound("missing-agent".into());
-    assert_eq!(e.to_string(), "agent not found: missing-agent");
+    let e = OrchError::OperatorNotFound("missing-agent".into());
+    assert_eq!(e.to_string(), "operator not found: missing-agent");
 }
 
 #[test]
@@ -913,7 +913,7 @@ fn effect_log_round_trip() {
 #[test]
 fn effect_handoff_round_trip() {
     let e = Effect::Handoff {
-        agent: AgentId::new("specialist"),
+        operator: OperatorId::new("specialist"),
         state: json!({"context": "user needs help with billing"}),
     };
     let json = serde_json::to_string(&e).unwrap();
@@ -1120,7 +1120,7 @@ fn credential_injection_variants_round_trip() {
 #[test]
 fn compaction_pre_flush_round_trip() {
     let e = CompactionEvent::PreCompactionFlush {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         scope: Scope::Session(SessionId::new("s1")),
     };
     let json = serde_json::to_string(&e).unwrap();
@@ -1132,7 +1132,7 @@ fn compaction_pre_flush_round_trip() {
 #[test]
 fn compaction_complete_round_trip() {
     let e = CompactionEvent::CompactionComplete {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         strategy: "sliding_window".into(),
         tokens_freed: 50000,
     };
@@ -1145,7 +1145,7 @@ fn compaction_complete_round_trip() {
 #[test]
 fn compaction_provider_managed_round_trip() {
     let e = CompactionEvent::ProviderManaged {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         provider: "anthropic".into(),
         tokens_before: 100000,
         tokens_after: 50000,
@@ -1160,7 +1160,7 @@ fn compaction_provider_managed_round_trip() {
 #[test]
 fn compaction_failed_round_trip() {
     let e = CompactionEvent::CompactionFailed {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         error: "timeout during summarization".into(),
         strategy: "sliding_window".into(),
     };
@@ -1173,7 +1173,7 @@ fn compaction_failed_round_trip() {
 #[test]
 fn compaction_skipped_round_trip() {
     let e = CompactionEvent::CompactionSkipped {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         reason: "below threshold".into(),
     };
     let json = serde_json::to_string(&e).unwrap();
@@ -1185,7 +1185,7 @@ fn compaction_skipped_round_trip() {
 #[test]
 fn flush_failed_round_trip() {
     let e = CompactionEvent::FlushFailed {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         scope: Scope::Session(SessionId::new("s1")),
         key: "notes".into(),
         error: "write timeout".into(),
@@ -1199,7 +1199,7 @@ fn flush_failed_round_trip() {
 #[test]
 fn compaction_quality_round_trip() {
     let e = CompactionEvent::CompactionQuality {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         tokens_before: 80000,
         tokens_after: 40000,
         items_preserved: 10,
@@ -1249,7 +1249,7 @@ fn budget_event_all_variants_round_trip() {
 #[test]
 fn budget_event_step_limit_approaching_round_trip() {
     let e = BudgetEvent::StepLimitApproaching {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         current: 8,
         max: 10,
     };
@@ -1262,7 +1262,7 @@ fn budget_event_step_limit_approaching_round_trip() {
 #[test]
 fn budget_event_step_limit_reached_round_trip() {
     let e = BudgetEvent::StepLimitReached {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         total_sub_dispatches: 10,
     };
     let json = serde_json::to_string(&e).unwrap();
@@ -1274,7 +1274,7 @@ fn budget_event_step_limit_reached_round_trip() {
 #[test]
 fn budget_event_loop_detected_round_trip() {
     let e = BudgetEvent::LoopDetected {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         operator_name: "search".to_string(),
         consecutive_count: 3,
         max: 3,
@@ -1288,7 +1288,7 @@ fn budget_event_loop_detected_round_trip() {
 #[test]
 fn budget_event_timeout_approaching_round_trip() {
     let e = BudgetEvent::TimeoutApproaching {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         elapsed: DurationMs::from_millis(8000),
         max_duration: DurationMs::from_millis(10000),
     };
@@ -1301,7 +1301,7 @@ fn budget_event_timeout_approaching_round_trip() {
 #[test]
 fn budget_event_timeout_reached_round_trip() {
     let e = BudgetEvent::TimeoutReached {
-        agent: AgentId::new("a1"),
+        operator: OperatorId::new("a1"),
         elapsed: DurationMs::from_millis(10050),
     };
     let json = serde_json::to_string(&e).unwrap();
@@ -1431,7 +1431,7 @@ fn secret_access_event_with_all_fields() {
     event.lease_ttl_secs = Some(3600);
     event.reason = Some("policy: requires mfa".into());
     event.workflow_id = Some("wf-001".into());
-    event.agent_id = Some("agent-research".into());
+    event.operator_id = Some("agent-research".into());
     event.trace_id = Some("trace-xyz".into());
 
     let json = serde_json::to_string(&event).unwrap();
@@ -1440,7 +1440,7 @@ fn secret_access_event_with_all_fields() {
     assert_eq!(back.lease_ttl_secs, Some(3600));
     assert_eq!(back.reason.as_deref(), Some("policy: requires mfa"));
     assert_eq!(back.workflow_id.as_deref(), Some("wf-001"));
-    assert_eq!(back.agent_id.as_deref(), Some("agent-research"));
+    assert_eq!(back.operator_id.as_deref(), Some("agent-research"));
     assert_eq!(back.trace_id.as_deref(), Some("trace-xyz"));
 }
 

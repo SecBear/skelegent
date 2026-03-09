@@ -3,7 +3,7 @@ use layer0::middleware::{StoreStack, StoreWriteNext};
 use async_trait::async_trait;
 use layer0::effect::{Effect, Scope};
 use layer0::error::{OrchError, StateError};
-use layer0::id::{AgentId, WorkflowId};
+use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::Orchestrator;
 use layer0::state::{StateStore, StoreOptions};
@@ -33,8 +33,8 @@ pub enum KitError {
 pub enum ExecutionEvent {
     /// An agent was dispatched.
     Dispatched {
-        /// Agent id that was dispatched.
-        agent: AgentId,
+        /// Operator id that was dispatched.
+        operator: OperatorId,
     },
     /// A memory write was executed.
     MemoryWritten {
@@ -48,13 +48,13 @@ pub enum ExecutionEvent {
     },
     /// A delegate task was enqueued.
     DelegateEnqueued {
-        /// Agent id enqueued for follow-up dispatch.
-        agent: AgentId,
+        /// Operator id enqueued for follow-up dispatch.
+        operator: OperatorId,
     },
     /// A handoff task was enqueued.
     HandoffEnqueued {
-        /// Agent id enqueued for follow-up dispatch.
-        agent: AgentId,
+        /// Operator id enqueued for follow-up dispatch.
+        operator: OperatorId,
     },
     /// A signal was sent.
     Signaled {
@@ -100,7 +100,7 @@ pub trait EffectInterpreter: Send + Sync {
     async fn execute_effect(
         &self,
         effect: &Effect,
-        followups: &mut Vec<(AgentId, OperatorInput)>,
+        followups: &mut Vec<(OperatorId, OperatorInput)>,
         trace: &mut ExecutionTrace,
     ) -> Result<(), KitError>;
 }
@@ -163,7 +163,7 @@ impl<S: StateStore + ?Sized + 'static> EffectInterpreter for LocalEffectInterpre
     async fn execute_effect(
         &self,
         effect: &Effect,
-        followups: &mut Vec<(AgentId, OperatorInput)>,
+        followups: &mut Vec<(OperatorId, OperatorInput)>,
         trace: &mut ExecutionTrace,
     ) -> Result<(), KitError> {
         match effect {
@@ -220,22 +220,22 @@ impl<S: StateStore + ?Sized + 'static> EffectInterpreter for LocalEffectInterpre
                 });
                 // The runner sends signals via the Orchestrator; this executor only records.
             }
-            Effect::Delegate { agent, input } => {
-                followups.push((agent.clone(), input.as_ref().clone()));
+            Effect::Delegate { operator, input } => {
+                followups.push((operator.clone(), input.as_ref().clone()));
                 trace.events.push(ExecutionEvent::DelegateEnqueued {
-                    agent: agent.clone(),
+                    operator: operator.clone(),
                 });
             }
-            Effect::Handoff { agent, state } => {
+            Effect::Handoff { operator, state } => {
                 // v0 semantics: handoff state is serialized into a new task input.
                 let mut input = OperatorInput::new(
                     layer0::content::Content::text(state.to_string()),
                     TriggerType::Task,
                 );
                 input.metadata = serde_json::Value::Null;
-                followups.push((agent.clone(), input));
+                followups.push((operator.clone(), input));
                 trace.events.push(ExecutionEvent::HandoffEnqueued {
-                    agent: agent.clone(),
+                    operator: operator.clone(),
                 });
             }
             Effect::Log { .. } | Effect::Custom { .. } => {
@@ -276,24 +276,24 @@ impl<E: EffectInterpreter> OrchestratedRunner<E> {
         self
     }
 
-    /// Dispatch an agent and interpret its effects until completion.
+    /// Dispatch an operator and interpret its effects until completion.
     pub async fn run(
         &self,
-        agent: AgentId,
+        operator: OperatorId,
         input: OperatorInput,
     ) -> Result<ExecutionTrace, KitError> {
         let mut trace = ExecutionTrace::new();
-        let mut queue: Vec<(AgentId, OperatorInput)> = vec![(agent, input)];
+        let mut queue: Vec<(OperatorId, OperatorInput)> = vec![(operator, input)];
         let mut followups_executed = 0usize;
 
-        while let Some((agent_id, agent_input)) = queue.pop() {
+        while let Some((op_id, op_input)) = queue.pop() {
             trace.events.push(ExecutionEvent::Dispatched {
-                agent: agent_id.clone(),
+                operator: op_id.clone(),
             });
-            let output = self.orch.dispatch(&agent_id, agent_input).await?;
+            let output = self.orch.dispatch(&op_id, op_input).await?;
 
             // Interpret effects into state updates + followups.
-            let mut followups: Vec<(AgentId, OperatorInput)> = vec![];
+            let mut followups: Vec<(OperatorId, OperatorInput)> = vec![];
             for effect in &output.effects {
                 // For signals, we want the orchestrator call to be owned here so
                 // products can override executor behavior without losing transport.

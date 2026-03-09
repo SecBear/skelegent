@@ -12,7 +12,7 @@
 
 use layer0::content::Content;
 use layer0::effect::Scope;
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::Orchestrator;
 use layer0::state::StateStore;
@@ -75,7 +75,7 @@ impl<P: neuron_turn::provider::Provider> ContextEngineOperator<P> {
             provider,
             config,
             tools,
-            tool_ctx: neuron_tool::ToolCallContext::new(layer0::id::AgentId::from("test")),
+            tool_ctx: neuron_tool::ToolCallContext::new(layer0::id::OperatorId::from("test")),
         }
     }
 }
@@ -415,13 +415,13 @@ async fn multi_agent_dispatch_single() {
     ));
     let echo: Arc<dyn Operator> = Arc::new(EchoOperator);
 
-    orch.register(AgentId::new("summarizer"), summarizer);
-    orch.register(AgentId::new("classifier"), classifier);
-    orch.register(AgentId::new("echo"), echo);
+    orch.register(OperatorId::new("summarizer"), summarizer);
+    orch.register(OperatorId::new("classifier"), classifier);
+    orch.register(OperatorId::new("echo"), echo);
 
     // Dispatch to individual agents
     let summary = orch
-        .dispatch(&AgentId::new("summarizer"), simple_input("Hello there!"))
+        .dispatch(&OperatorId::new("summarizer"), simple_input("Hello there!"))
         .await
         .unwrap();
     assert_eq!(summary.exit_reason, ExitReason::Complete);
@@ -431,7 +431,7 @@ async fn multi_agent_dispatch_single() {
     );
 
     let classification = orch
-        .dispatch(&AgentId::new("classifier"), simple_input("Hello there!"))
+        .dispatch(&OperatorId::new("classifier"), simple_input("Hello there!"))
         .await
         .unwrap();
     assert_eq!(classification.exit_reason, ExitReason::Complete);
@@ -441,7 +441,7 @@ async fn multi_agent_dispatch_single() {
     );
 
     let echoed = orch
-        .dispatch(&AgentId::new("echo"), simple_input("Hello there!"))
+        .dispatch(&OperatorId::new("echo"), simple_input("Hello there!"))
         .await
         .unwrap();
     assert_eq!(echoed.message.as_text().unwrap(), "Hello there!");
@@ -453,25 +453,25 @@ async fn multi_agent_parallel_dispatch() {
 
     // Register multiple agents
     orch.register(
-        AgentId::new("agent_a"),
+        OperatorId::new("agent_a"),
         Arc::new(make_react_operator(TestProvider::with_responses(vec![
             make_text_response("Result from A"),
         ]))),
     );
     orch.register(
-        AgentId::new("agent_b"),
+        OperatorId::new("agent_b"),
         Arc::new(SingleShotOperator::new(
             TestProvider::with_responses(vec![make_text_response("Result from B")]),
             SingleShotConfig::default(),
         )),
     );
-    orch.register(AgentId::new("agent_c"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("agent_c"), Arc::new(EchoOperator));
 
     // Parallel dispatch to all three
     let tasks = vec![
-        (AgentId::new("agent_a"), simple_input("Task for A")),
-        (AgentId::new("agent_b"), simple_input("Task for B")),
-        (AgentId::new("agent_c"), simple_input("Task for C")),
+        (OperatorId::new("agent_a"), simple_input("Task for A")),
+        (OperatorId::new("agent_b"), simple_input("Task for B")),
+        (OperatorId::new("agent_c"), simple_input("Task for C")),
     ];
 
     let results = orch.dispatch_many(tasks).await;
@@ -496,13 +496,13 @@ async fn multi_agent_with_state_storage() {
     let state = MemoryStore::new();
 
     orch.register(
-        AgentId::new("researcher"),
+        OperatorId::new("researcher"),
         Arc::new(make_react_operator(TestProvider::with_responses(vec![
             make_text_response("Research findings: Rust is fast and safe."),
         ]))),
     );
     orch.register(
-        AgentId::new("writer"),
+        OperatorId::new("writer"),
         Arc::new(make_react_operator(TestProvider::with_responses(vec![
             make_text_response("Draft: Rust combines speed with memory safety."),
         ]))),
@@ -511,7 +511,7 @@ async fn multi_agent_with_state_storage() {
     // Step 1: Dispatch research task
     let research = orch
         .dispatch(
-            &AgentId::new("researcher"),
+            &OperatorId::new("researcher"),
             simple_input("Research Rust programming"),
         )
         .await
@@ -534,7 +534,7 @@ async fn multi_agent_with_state_storage() {
     // Step 3: Dispatch writing task
     let draft = orch
         .dispatch(
-            &AgentId::new("writer"),
+            &OperatorId::new("writer"),
             simple_input("Write about Rust based on research"),
         )
         .await
@@ -579,12 +579,12 @@ async fn multi_agent_with_state_storage() {
 #[tokio::test]
 async fn multi_agent_missing_agent_handled_gracefully() {
     let mut orch = LocalOrch::new();
-    orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
     // Dispatch to a mix of existing and missing agents
     let tasks = vec![
-        (AgentId::new("echo"), simple_input("exists")),
-        (AgentId::new("nonexistent"), simple_input("missing")),
+        (OperatorId::new("echo"), simple_input("exists")),
+        (OperatorId::new("nonexistent"), simple_input("missing")),
     ];
 
     let results = orch.dispatch_many(tasks).await;
@@ -592,12 +592,12 @@ async fn multi_agent_missing_agent_handled_gracefully() {
     assert!(results[0].is_ok());
     assert!(results[1].is_err());
 
-    // The error is an OrchError::AgentNotFound
+    // The error is an OrchError::OperatorNotFound
     match results[1].as_ref().unwrap_err() {
-        layer0::OrchError::AgentNotFound(name) => {
+        layer0::OrchError::OperatorNotFound(name) => {
             assert_eq!(name, "nonexistent");
         }
-        other => panic!("expected AgentNotFound, got {:?}", other),
+        other => panic!("expected OperatorNotFound, got {:?}", other),
     }
 }
 
@@ -631,13 +631,13 @@ async fn combined_all_patterns() {
         },
     ));
 
-    orch.register(AgentId::new("analyst"), agent_react);
-    orch.register(AgentId::new("rater"), agent_ss);
+    orch.register(OperatorId::new("analyst"), agent_react);
+    orch.register(OperatorId::new("rater"), agent_ss);
 
     // Parallel dispatch (orchestration pattern)
     let tasks = vec![
-        (AgentId::new("analyst"), simple_input("Evaluate Rust")),
-        (AgentId::new("rater"), simple_input("Evaluate Rust")),
+        (OperatorId::new("analyst"), simple_input("Evaluate Rust")),
+        (OperatorId::new("rater"), simple_input("Evaluate Rust")),
     ];
     let results = orch.dispatch_many(tasks).await;
 

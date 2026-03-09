@@ -1,26 +1,26 @@
-//! Context management for agent message histories.
+//! Context management for operator message histories.
 //!
-//! This module provides [`AgentContext`] — a typed, watcher-guarded container for
-//! an agent's message history. Context is a first-class primitive: it tracks messages,
+//! This module provides [`OperatorContext`] — a typed, watcher-guarded container for
+//! an operator's message history. Context is a first-class primitive: it tracks messages,
 //! metadata, system prompts, and routes every mutation through registered [`ContextWatcher`]s
 //! for observation and approval.
 //!
 //! ## Core types
 //!
-//! - [`AgentContext`] — the mutable container (own this, pass it to the turn loop)
+//! - [`OperatorContext`] — the mutable container (own this, pass it to the turn loop)
 //! - [`ContextMessage`] — a message paired with its [`MessageMeta`]
 //! - [`ContextWatcher`] — observer / gatekeeper trait
 //! - [`ContextSnapshot`] — read-only introspection view
 //! - [`ContextError`] — mutation errors (rejected or out-of-bounds)
 
 use crate::content::Content;
-use crate::id::AgentId;
+use crate::id::OperatorId;
 use crate::lifecycle::CompactionPolicy;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
-/// Per-message annotation attached to every message in an [`AgentContext`].
+/// Per-message annotation attached to every message in an [`OperatorContext`].
 ///
 /// All fields are public and directly settable. The [`Default`] implementation
 /// uses [`CompactionPolicy::Normal`] and zeros/nones for everything else.
@@ -38,7 +38,7 @@ pub struct MessageMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub salience: Option<f64>,
 
-    /// Monotonic version counter, incremented on each mutation via [`AgentContext::transform`].
+    /// Monotonic version counter, incremented on each mutation via [`OperatorContext::transform`].
     pub version: u64,
 }
 
@@ -95,7 +95,7 @@ pub enum Role {
     },
 }
 
-/// A message in an agent's context window.
+/// A message in an operator's context window.
 ///
 /// Concrete type — not generic. Every message has a role, content,
 /// and per-message metadata (compaction policy, salience, source).
@@ -171,7 +171,7 @@ impl Message {
 
 /// A message paired with its metadata.
 ///
-/// Parameterised over `M`, the concrete message type used by a particular agent.
+/// Parameterised over `M`, the concrete message type used by a particular operator.
 /// Both fields are public so callers can construct messages directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextMessage<M> {
@@ -182,7 +182,7 @@ pub struct ContextMessage<M> {
     pub meta: MessageMeta,
 }
 
-/// Where to inject a message into an [`AgentContext`].
+/// Where to inject a message into an [`OperatorContext`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Position {
@@ -213,7 +213,7 @@ pub enum WatcherVerdict {
     },
 }
 
-/// Observer and gatekeeper for mutations to an [`AgentContext`].
+/// Observer and gatekeeper for mutations to an [`OperatorContext`].
 ///
 /// All methods have default implementations that approve the operation (Allow or no-op).
 /// Implementors override only the methods they care about.
@@ -248,7 +248,7 @@ pub trait ContextWatcher: Send + Sync {
         WatcherVerdict::Allow
     }
 
-    /// Called before a [`AgentContext::replace_messages`] compaction runs.
+    /// Called before a [`OperatorContext::replace_messages`] compaction runs.
     ///
     /// `message_count` is the number of messages currently in the context.
     /// Return [`WatcherVerdict::Reject`] to abort the compaction.
@@ -257,7 +257,7 @@ pub trait ContextWatcher: Send + Sync {
         WatcherVerdict::Allow
     }
 
-    /// Called after a [`AgentContext::replace_messages`] compaction completes.
+    /// Called after a [`OperatorContext::replace_messages`] compaction completes.
     ///
     /// `removed` is the number of messages dropped (`old_count - new_count`, clamped to 0).
     /// `remaining` is the count of messages now in the context.
@@ -266,7 +266,7 @@ pub trait ContextWatcher: Send + Sync {
     }
 }
 
-/// Read-only snapshot of an [`AgentContext`] for introspection and logging.
+/// Read-only snapshot of an [`OperatorContext`] for introspection and logging.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextSnapshot {
@@ -279,8 +279,8 @@ pub struct ContextSnapshot {
     /// Whether a system prompt is currently set.
     pub has_system: bool,
 
-    /// The agent this context belongs to.
-    pub agent_id: AgentId,
+    /// The operator this context belongs to.
+    pub operator_id: OperatorId,
 
     /// Rough token estimate derived from the debug representation length of messages.
     ///
@@ -289,7 +289,7 @@ pub struct ContextSnapshot {
     pub estimated_tokens: usize,
 }
 
-/// Errors returned by [`AgentContext`] mutation methods.
+/// Errors returned by [`OperatorContext`] mutation methods.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ContextError {
@@ -311,10 +311,10 @@ pub enum ContextError {
     },
 }
 
-/// A watcher-guarded, typed container for an agent's message history.
+/// A watcher-guarded, typed container for an operator's message history.
 ///
-/// `AgentContext<M>` is the first-class primitive for managing what messages an
-/// agent sees. Every structural mutation (inject, truncate, remove, compact) routes
+/// `OperatorContext<M>` is the first-class primitive for managing what messages an
+/// operator sees. Every structural mutation (inject, truncate, remove, compact) routes
 /// through the registered [`ContextWatcher`]s in registration order before taking
 /// effect. A single `Reject` verdict from any watcher aborts the operation and
 /// returns [`ContextError::Rejected`].
@@ -329,18 +329,18 @@ pub enum ContextError {
 ///
 /// Watchers are invoked in registration order (first registered, first called).
 /// The first watcher to return `Reject` wins; later watchers are not consulted.
-pub struct AgentContext<M: Clone + fmt::Debug> {
-    agent_id: AgentId,
+pub struct OperatorContext<M: Clone + fmt::Debug> {
+    operator_id: OperatorId,
     messages: Vec<ContextMessage<M>>,
     system: Option<String>,
     watchers: Vec<Arc<dyn ContextWatcher>>,
 }
 
-impl<M: Clone + fmt::Debug> AgentContext<M> {
-    /// Create an empty context for the given agent.
-    pub fn new(agent_id: AgentId) -> Self {
+impl<M: Clone + fmt::Debug> OperatorContext<M> {
+    /// Create an empty context for the given operator.
+    pub fn new(operator_id: OperatorId) -> Self {
         Self {
-            agent_id,
+            operator_id,
             messages: Vec::new(),
             system: None,
             watchers: Vec::new(),
@@ -372,9 +372,9 @@ impl<M: Clone + fmt::Debug> AgentContext<M> {
         self.system.as_deref()
     }
 
-    /// The agent this context belongs to.
-    pub fn agent_id(&self) -> &AgentId {
-        &self.agent_id
+    /// The operator this context belongs to.
+    pub fn operator_id(&self) -> &OperatorId {
+        &self.operator_id
     }
 
     /// Build a read-only snapshot for introspection or logging.
@@ -394,7 +394,7 @@ impl<M: Clone + fmt::Debug> AgentContext<M> {
             message_count: self.messages.len(),
             message_metas: self.messages.iter().map(|m| m.meta.clone()).collect(),
             has_system: self.system.is_some(),
-            agent_id: self.agent_id.clone(),
+            operator_id: self.operator_id.clone(),
             estimated_tokens,
         }
     }
@@ -593,12 +593,12 @@ impl<M: Clone + fmt::Debug> AgentContext<M> {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Context — concrete replacement for AgentContext<M>
+// Context — concrete replacement for OperatorContext<M>
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// A concrete, watcher-guarded container for an agent's message history.
+/// A concrete, watcher-guarded container for an operator's message history.
 ///
-/// `Context` replaces the generic `AgentContext<M>` with a concrete type
+/// `Context` replaces the generic `OperatorContext<M>` with a concrete type
 /// using [`Message`] directly. Every structural mutation routes through
 /// registered [`ContextWatcher`]s before taking effect.
 ///
@@ -609,16 +609,16 @@ impl<M: Clone + fmt::Debug> AgentContext<M> {
 /// - [`compact_by_policy`](Context::compact_by_policy) — remove Normal, keep Pinned
 /// - [`compact_with`](Context::compact_with) — caller-supplied closure
 pub struct Context {
-    agent_id: AgentId,
+    operator_id: OperatorId,
     messages: Vec<Message>,
     watchers: Vec<Arc<dyn ContextWatcher>>,
 }
 
 impl Context {
-    /// Create an empty context for the given agent.
-    pub fn new(agent_id: AgentId) -> Self {
+    /// Create an empty context for the given operator.
+    pub fn new(operator_id: OperatorId) -> Self {
         Self {
-            agent_id,
+            operator_id,
             messages: Vec::new(),
             watchers: Vec::new(),
         }
@@ -644,9 +644,9 @@ impl Context {
         self.messages.is_empty()
     }
 
-    /// The agent this context belongs to.
-    pub fn agent_id(&self) -> &AgentId {
-        &self.agent_id
+    /// The operator this context belongs to.
+    pub fn operator_id(&self) -> &OperatorId {
+        &self.operator_id
     }
 
     /// Rough token estimate for the entire context.
@@ -779,7 +779,7 @@ impl Context {
             message_count: self.messages.len(),
             message_metas: self.messages.iter().map(|m| m.meta.clone()).collect(),
             has_system: self.messages.iter().any(|m| matches!(m.role, Role::System)),
-            agent_id: self.agent_id.clone(),
+            operator_id: self.operator_id.clone(),
             estimated_tokens,
         }
     }
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn new_context_is_empty() {
-        let ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("agent-1"));
+        let ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("agent-1"));
         assert!(ctx.is_empty());
         assert_eq!(ctx.len(), 0);
         assert!(ctx.messages().is_empty());
@@ -811,7 +811,7 @@ mod tests {
 
     #[test]
     fn inject_back_appends_in_order() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("first"), Position::Back).unwrap();
         ctx.inject(make_msg("second"), Position::Back).unwrap();
         assert_eq!(ctx.messages()[0].message, "first");
@@ -820,7 +820,7 @@ mod tests {
 
     #[test]
     fn inject_front_prepends() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("first"), Position::Back).unwrap();
         ctx.inject(make_msg("second"), Position::Front).unwrap();
         assert_eq!(ctx.messages()[0].message, "second");
@@ -829,7 +829,7 @@ mod tests {
 
     #[test]
     fn inject_at_inserts_at_index() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("a"), Position::Back).unwrap();
         ctx.inject(make_msg("c"), Position::Back).unwrap();
         ctx.inject(make_msg("b"), Position::At(1)).unwrap();
@@ -840,7 +840,7 @@ mod tests {
 
     #[test]
     fn inject_out_of_bounds_returns_error() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         let err = ctx.inject(make_msg("x"), Position::At(5)).unwrap_err();
         assert!(matches!(
             err,
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn truncate_back_removes_from_end() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("a"), Position::Back).unwrap();
         ctx.inject(make_msg("b"), Position::Back).unwrap();
         ctx.inject(make_msg("c"), Position::Back).unwrap();
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn truncate_back_out_of_bounds_returns_error() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("a"), Position::Back).unwrap();
         let err = ctx.truncate_back(5).unwrap_err();
         assert!(matches!(
@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn truncate_front_removes_from_start() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("a"), Position::Back).unwrap();
         ctx.inject(make_msg("b"), Position::Back).unwrap();
         ctx.inject(make_msg("c"), Position::Back).unwrap();
@@ -894,7 +894,7 @@ mod tests {
 
     #[test]
     fn truncate_front_out_of_bounds_returns_error() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("a"), Position::Back).unwrap();
         let err = ctx.truncate_front(5).unwrap_err();
         assert!(matches!(
@@ -916,7 +916,7 @@ mod tests {
             }
         }
 
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.add_watcher(Arc::new(RejectAll));
 
         let err = ctx.inject(make_msg("blocked"), Position::Back).unwrap_err();
@@ -927,20 +927,20 @@ mod tests {
 
     #[test]
     fn snapshot_captures_state() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("my-agent"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("my-agent"));
         ctx.set_system("You are helpful.");
         ctx.inject(make_msg("hello"), Position::Back).unwrap();
 
         let snap = ctx.snapshot();
         assert_eq!(snap.message_count, 1);
         assert!(snap.has_system);
-        assert_eq!(snap.agent_id.as_str(), "my-agent");
+        assert_eq!(snap.operator_id.as_str(), "my-agent");
         assert_eq!(snap.message_metas.len(), 1);
     }
 
     #[test]
     fn transform_increments_version() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("msg"), Position::Back).unwrap();
         assert_eq!(ctx.messages()[0].meta.version, 0);
 
@@ -972,7 +972,7 @@ mod tests {
             }
         }
 
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.add_watcher(Arc::new(CompactWatcher {
             pre: Arc::clone(&pre_called),
             post: Arc::clone(&post_called),
@@ -996,7 +996,7 @@ mod tests {
 
     #[test]
     fn remove_where_filters_correctly() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("keep"), Position::Back).unwrap();
         ctx.inject(make_msg("remove_me"), Position::Back).unwrap();
         ctx.inject(make_msg("also keep"), Position::Back).unwrap();
@@ -1011,7 +1011,7 @@ mod tests {
 
     #[test]
     fn extract_is_non_destructive() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         ctx.inject(make_msg("a"), Position::Back).unwrap();
         ctx.inject(make_msg("b"), Position::Back).unwrap();
         ctx.inject(make_msg("c"), Position::Back).unwrap();
@@ -1026,7 +1026,7 @@ mod tests {
 
     #[test]
     fn system_prompt_lifecycle() {
-        let mut ctx: AgentContext<TestMsg> = AgentContext::new(AgentId::from("a"));
+        let mut ctx: OperatorContext<TestMsg> = OperatorContext::new(OperatorId::from("a"));
         assert!(ctx.system().is_none());
 
         ctx.set_system("Hello, system!");
@@ -1099,7 +1099,7 @@ mod tests {
     fn context_push_and_read() {
         use crate::content::Content;
 
-        let mut ctx = Context::new(AgentId::from("agent-1"));
+        let mut ctx = Context::new(OperatorId::from("agent-1"));
         ctx.push(Message::new(Role::User, Content::text("hello")))
             .unwrap();
         ctx.push(Message::new(Role::Assistant, Content::text("hi")))
@@ -1113,7 +1113,7 @@ mod tests {
     fn context_compact_truncate() {
         use crate::content::Content;
 
-        let mut ctx = Context::new(AgentId::from("a"));
+        let mut ctx = Context::new(OperatorId::from("a"));
         for i in 0..10 {
             ctx.push(Message::new(
                 Role::User,
@@ -1130,7 +1130,7 @@ mod tests {
     fn context_compact_by_policy_preserves_pinned() {
         use crate::content::Content;
 
-        let mut ctx = Context::new(AgentId::from("a"));
+        let mut ctx = Context::new(OperatorId::from("a"));
         ctx.push(Message::pinned(
             Role::System,
             Content::text("you are helpful"),
@@ -1153,7 +1153,7 @@ mod tests {
     fn context_compact_with_closure() {
         use crate::content::Content;
 
-        let mut ctx = Context::new(AgentId::from("a"));
+        let mut ctx = Context::new(OperatorId::from("a"));
         for i in 0..6 {
             ctx.push(Message::new(
                 Role::User,
@@ -1177,7 +1177,7 @@ mod tests {
     fn context_snapshot() {
         use crate::content::Content;
 
-        let mut ctx = Context::new(AgentId::from("my-agent"));
+        let mut ctx = Context::new(OperatorId::from("my-agent"));
         ctx.push(Message::pinned(Role::System, Content::text("system")))
             .unwrap();
         ctx.push(Message::new(Role::User, Content::text("hello")))
@@ -1186,7 +1186,7 @@ mod tests {
         let snap = ctx.snapshot();
         assert_eq!(snap.message_count, 2);
         assert!(snap.has_system);
-        assert_eq!(snap.agent_id.as_str(), "my-agent");
+        assert_eq!(snap.operator_id.as_str(), "my-agent");
         assert_eq!(snap.message_metas.len(), 2);
     }
 
@@ -1194,7 +1194,7 @@ mod tests {
     fn context_estimated_tokens() {
         use crate::content::Content;
 
-        let mut ctx = Context::new(AgentId::from("a"));
+        let mut ctx = Context::new(OperatorId::from("a"));
         // 20 chars / 4 = 5, + 4 overhead = 9 per message
         ctx.push(Message::new(
             Role::User,

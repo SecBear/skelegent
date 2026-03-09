@@ -17,32 +17,32 @@ use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
 
-use layer0::id::AgentId;
+use layer0::id::OperatorId;
 
 /// Context available to tools during execution.
 ///
-/// Carries agent identity, typed dependencies (via Any downcasting),
+/// Carries operator identity, typed dependencies (via Any downcasting),
 /// and metadata for the current tool call.
 #[derive(Clone)]
 pub struct ToolCallContext {
-    /// Identity of the agent making the tool call.
-    pub agent_id: AgentId,
+    /// Identity of the operator making the tool call.
+    pub operator_id: OperatorId,
     /// Typed dependencies, downcast at the call site.
     pub deps: Arc<dyn Any + Send + Sync>,
 }
 
 impl ToolCallContext {
-    /// Create a new context with the given agent ID and no deps.
-    pub fn new(agent_id: AgentId) -> Self {
+    /// Create a new context with the given operator ID and no deps.
+    pub fn new(operator_id: OperatorId) -> Self {
         Self {
-            agent_id,
-            deps: Arc::new(()),
-        }
+                    operator_id,
+                    deps: Arc::new(()),
+                }
     }
 
     /// Create a context with typed dependencies.
-    pub fn with_deps(agent_id: AgentId, deps: Arc<dyn Any + Send + Sync>) -> Self {
-        Self { agent_id, deps }
+    pub fn with_deps(operator_id: OperatorId, deps: Arc<dyn Any + Send + Sync>) -> Self {
+        Self { operator_id, deps }
     }
 
     /// Downcast deps to a specific type.
@@ -359,7 +359,7 @@ mod tests {
         let result = tool
             .call(
                 json!({"msg": "hello"}),
-                &ToolCallContext::new(AgentId::new("test")),
+                &ToolCallContext::new(OperatorId::new("test")),
             )
             .await
             .unwrap();
@@ -377,7 +377,7 @@ mod tests {
         let result = tool
             .call(
                 json!({"msg": "hi"}),
-                &ToolCallContext::new(AgentId::new("test")),
+                &ToolCallContext::new(OperatorId::new("test")),
             )
             .await
             .unwrap();
@@ -391,7 +391,7 @@ mod tests {
 
         let tool = reg.get("fail").unwrap();
         let result = tool
-            .call(json!({}), &ToolCallContext::new(AgentId::new("test")))
+            .call(json!({}), &ToolCallContext::new(OperatorId::new("test")))
             .await;
         assert!(result.is_err());
     }
@@ -461,7 +461,7 @@ mod tests {
             c2.fetch_add(1, Ordering::SeqCst);
             s2.lock().unwrap().push(c.to_string());
         });
-        let ctx = ToolCallContext::new(AgentId::new("test"));
+        let ctx = ToolCallContext::new(OperatorId::new("test"));
         let res = tool
             .call_streaming(serde_json::json!({}), &ctx, on_chunk)
             .await;

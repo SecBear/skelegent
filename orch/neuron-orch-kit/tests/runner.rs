@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
-use layer0::id::{AgentId, WorkflowId};
+use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::state::{SearchResult, StateStore};
@@ -38,23 +38,23 @@ impl SimpleOrch {
 impl Orchestrator for SimpleOrch {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError> {
         let op = self
             .agents
-            .get(agent.as_str())
-            .ok_or_else(|| OrchError::AgentNotFound(agent.to_string()))?;
+            .get(operator.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
         op.execute(input).await.map_err(OrchError::OperatorError)
     }
 
     async fn dispatch_many(
         &self,
-        tasks: Vec<(AgentId, OperatorInput)>,
+        tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, OrchError>> {
         let mut results = Vec::with_capacity(tasks.len());
-        for (agent, input) in tasks {
-            results.push(self.dispatch(&agent, input).await);
+            for (operator, input) in tasks {
+                results.push(self.dispatch(&operator, input).await);
         }
         results
     }
@@ -167,7 +167,7 @@ impl Operator for DelegateOperator {
     async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("delegating"), ExitReason::Complete);
         output.effects.push(Effect::Delegate {
-            agent: AgentId::new("child"),
+            operator: OperatorId::new("child"),
             input: Box::new(OperatorInput::new(
                 Content::text("child task"),
                 TriggerType::Task,
@@ -197,7 +197,7 @@ impl Operator for HandoffOperator {
     async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
         output.effects.push(Effect::Handoff {
-            agent: AgentId::new("handoff_target"),
+            operator: OperatorId::new("handoff_target"),
             state: json!({"ticket": 123}),
         });
         Ok(output)
@@ -236,14 +236,14 @@ impl Operator for FullPipelineRootOperator {
             ttl: None,
         });
         output.effects.push(Effect::Delegate {
-            agent: AgentId::new("child"),
+            operator: OperatorId::new("child"),
             input: Box::new(OperatorInput::new(
                 Content::text("child task"),
                 TriggerType::Task,
             )),
         });
         output.effects.push(Effect::Handoff {
-            agent: AgentId::new("handoff_target"),
+            operator: OperatorId::new("handoff_target"),
             state: json!({"ticket": 123}),
         });
         output.effects.push(Effect::Signal {
@@ -273,7 +273,7 @@ async fn runner_executes_memory_and_signal_effects() {
 
     let trace = runner
         .run(
-            AgentId::new("root"),
+            OperatorId::new("root"),
             OperatorInput::new(Content::text("go"), TriggerType::User),
         )
         .await
@@ -304,7 +304,7 @@ async fn runner_enqueues_and_executes_delegate() {
 
     let trace = runner
         .run(
-            AgentId::new("root"),
+            OperatorId::new("root"),
             OperatorInput::new(Content::text("go"), TriggerType::User),
         )
         .await
@@ -328,7 +328,7 @@ async fn runner_enqueues_and_executes_handoff() {
 
     let trace = runner
         .run(
-            AgentId::new("root"),
+            OperatorId::new("root"),
             OperatorInput::new(Content::text("go"), TriggerType::User),
         )
         .await
@@ -355,14 +355,14 @@ async fn unknown_agent_returns_agent_not_found() {
     let runner = kit.local_runner().unwrap();
     let err = runner
         .run(
-            AgentId::new("missing"),
+            OperatorId::new("missing"),
             OperatorInput::new(Content::text("go"), TriggerType::User),
         )
         .await
         .unwrap_err();
     match err {
-        KitError::Orchestrator(OrchError::AgentNotFound(name)) => assert_eq!(name, "missing"),
-        other => panic!("expected AgentNotFound, got {other:?}"),
+        KitError::Orchestrator(OrchError::OperatorNotFound(name)) => assert_eq!(name, "missing"),
+        other => panic!("expected OperatorNotFound, got {other:?}"),
     }
 }
 
@@ -374,7 +374,7 @@ async fn runner_has_safety_bound_for_infinite_followups() {
         async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
             let mut output = OperatorOutput::new(Content::text("loop"), ExitReason::Complete);
             output.effects.push(Effect::Delegate {
-                agent: AgentId::new("root"),
+                operator: OperatorId::new("root"),
                 input: Box::new(OperatorInput::new(Content::text("loop"), TriggerType::Task)),
             });
             Ok(output)
@@ -392,7 +392,7 @@ async fn runner_has_safety_bound_for_infinite_followups() {
 
     let err = runner
         .run(
-            AgentId::new("root"),
+            OperatorId::new("root"),
             OperatorInput::new(Content::text("go"), TriggerType::User),
         )
         .await
@@ -417,7 +417,7 @@ async fn runner_effect_pipeline_end_to_end() {
 
     let trace = runner
         .run(
-            AgentId::new("root"),
+            OperatorId::new("root"),
             OperatorInput::new(Content::text("go"), TriggerType::User),
         )
         .await

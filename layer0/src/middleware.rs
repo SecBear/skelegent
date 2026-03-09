@@ -11,7 +11,7 @@
 use crate::effect::Scope;
 use crate::environment::EnvironmentSpec;
 use crate::error::{EnvError, OrchError, StateError};
-use crate::id::AgentId;
+use crate::id::OperatorId;
 use crate::operator::{OperatorInput, OperatorOutput};
 use crate::state::StoreOptions;
 use async_trait::async_trait;
@@ -30,7 +30,7 @@ pub trait DispatchNext: Send + Sync {
     /// Forward the dispatch to the next layer.
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError>;
 }
@@ -45,7 +45,7 @@ pub trait DispatchMiddleware: Send + Sync {
     /// Intercept a dispatch call.
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError>;
@@ -168,19 +168,19 @@ impl DispatchStack {
     /// Dispatch through the middleware chain, ending at `terminal`.
     pub async fn dispatch_with(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
         terminal: &dyn DispatchNext,
     ) -> Result<OperatorOutput, OrchError> {
         if self.layers.is_empty() {
-            return terminal.dispatch(agent, input).await;
+            return terminal.dispatch(operator, input).await;
         }
         let chain = DispatchChain {
             layers: &self.layers,
             index: 0,
             terminal,
         };
-        chain.dispatch(agent, input).await
+        chain.dispatch(operator, input).await
     }
 }
 
@@ -223,18 +223,18 @@ struct DispatchChain<'a> {
 impl DispatchNext for DispatchChain<'_> {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError> {
         if self.index >= self.layers.len() {
-            return self.terminal.dispatch(agent, input).await;
+            return self.terminal.dispatch(operator, input).await;
         }
         let next = DispatchChain {
             layers: self.layers,
             index: self.index + 1,
             terminal: self.terminal,
         };
-        self.layers[self.index].dispatch(agent, input, &next).await
+        self.layers[self.index].dispatch(operator, input, &next).await
     }
 }
 
@@ -506,12 +506,12 @@ mod tests {
         impl DispatchMiddleware for TagMiddleware {
             async fn dispatch(
                 &self,
-                agent: &AgentId,
+                operator: &OperatorId,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
             ) -> Result<OperatorOutput, OrchError> {
                 input.metadata = serde_json::json!({"tagged": true});
-                next.dispatch(agent, input).await
+                next.dispatch(operator, input).await
             }
         }
 
@@ -570,12 +570,12 @@ mod tests {
         impl DispatchMiddleware for CountObserver {
             async fn dispatch(
                 &self,
-                agent: &AgentId,
+                operator: &OperatorId,
                 input: OperatorInput,
                 next: &dyn DispatchNext,
             ) -> Result<OperatorOutput, OrchError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                next.dispatch(agent, input).await
+                next.dispatch(operator, input).await
             }
         }
 
@@ -585,7 +585,7 @@ mod tests {
         impl DispatchMiddleware for HaltGuard {
             async fn dispatch(
                 &self,
-                _agent: &AgentId,
+                _operator: &OperatorId,
                 _input: OperatorInput,
                 _next: &dyn DispatchNext,
             ) -> Result<OperatorOutput, OrchError> {
@@ -604,7 +604,7 @@ mod tests {
         impl DispatchNext for EchoTerminal {
             async fn dispatch(
                 &self,
-                _agent: &AgentId,
+                _operator: &OperatorId,
                 input: OperatorInput,
             ) -> Result<OperatorOutput, OrchError> {
                 Ok(OperatorOutput::new(
@@ -619,7 +619,7 @@ mod tests {
             crate::operator::TriggerType::User,
         );
         let result = stack
-            .dispatch_with(&AgentId::from("a"), input, &EchoTerminal)
+            .dispatch_with(&OperatorId::from("a"), input, &EchoTerminal)
             .await;
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -633,12 +633,12 @@ mod tests {
         impl DispatchMiddleware for Uppercaser {
             async fn dispatch(
                 &self,
-                agent: &AgentId,
+                operator: &OperatorId,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
             ) -> Result<OperatorOutput, OrchError> {
                 input.metadata = serde_json::json!({"transformed": true});
-                next.dispatch(agent, input).await
+                next.dispatch(operator, input).await
             }
         }
 
@@ -648,7 +648,7 @@ mod tests {
         impl DispatchNext for EchoTerminal {
             async fn dispatch(
                 &self,
-                _agent: &AgentId,
+                _operator: &OperatorId,
                 input: OperatorInput,
             ) -> Result<OperatorOutput, OrchError> {
                 Ok(OperatorOutput::new(
@@ -667,7 +667,7 @@ mod tests {
             crate::operator::TriggerType::User,
         );
         let result = stack
-            .dispatch_with(&AgentId::from("a"), input, &EchoTerminal)
+            .dispatch_with(&OperatorId::from("a"), input, &EchoTerminal)
             .await;
         assert!(result.is_ok());
     }
@@ -714,9 +714,9 @@ mod tests {
             .observe(Arc::new(CountWrites(write_count.clone())))
             .build();
 
-        let scope = Scope::Agent {
+        let scope = Scope::Operator {
             workflow: crate::id::WorkflowId::from("w"),
-            agent: AgentId::from("a"),
+            operator: OperatorId::from("a"),
         };
         stack
             .write_with(&scope, "k", serde_json::json!(1), None, &NoOpStore)

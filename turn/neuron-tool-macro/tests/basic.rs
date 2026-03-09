@@ -37,7 +37,7 @@ async fn test_basic_tool_schema() {
 #[tokio::test]
 async fn test_basic_tool_call() {
     let tool = GetWeatherTool::new();
-    let ctx = ToolCallContext::new(layer0::AgentId::new("test-agent"));
+    let ctx = ToolCallContext::new(layer0::OperatorId::new("test-agent"));
     let input = json!({"location": "San Francisco"});
     let result = tool.call(input, &ctx).await.expect("call must succeed");
     assert_eq!(result["location"], "San Francisco");
@@ -70,7 +70,7 @@ async fn test_optional_param_schema() {
 #[tokio::test]
 async fn test_optional_param_absent_deserialises_as_none() {
     let tool = SearchTool::new();
-    let ctx = ToolCallContext::new(layer0::AgentId::new("test-agent"));
+    let ctx = ToolCallContext::new(layer0::OperatorId::new("test-agent"));
     // `limit` is not present in the input JSON
     let input = json!({"query": "rust proc macros"});
     let result = tool.call(input, &ctx).await.expect("call must succeed");
@@ -82,7 +82,7 @@ async fn test_optional_param_absent_deserialises_as_none() {
 #[tokio::test]
 async fn test_optional_param_present_deserialises_correctly() {
     let tool = SearchTool::new();
-    let ctx = ToolCallContext::new(layer0::AgentId::new("test-agent"));
+    let ctx = ToolCallContext::new(layer0::OperatorId::new("test-agent"));
     let input = json!({"query": "rust", "limit": 10});
     let result = tool.call(input, &ctx).await.expect("call must succeed");
     assert_eq!(result["query"], "rust");
@@ -93,8 +93,8 @@ async fn test_optional_param_present_deserialises_correctly() {
 
 #[neuron_tool(name = "agent_info", description = "Returns agent info from context")]
 async fn agent_info(ctx: &ToolCallContext, label: String) -> Result<Value, ToolError> {
-    let agent_str = ctx.agent_id.to_string();
-    Ok(json!({"agent": agent_str, "label": label}))
+    let operator_str = ctx.operator_id.to_string();
+    Ok(json!({"agent": operator_str, "label": label}))
 }
 
 #[tokio::test]
@@ -114,7 +114,7 @@ async fn test_ctx_param_excluded_from_schema() {
 #[tokio::test]
 async fn test_ctx_param_passed_through_to_function() {
     let tool = AgentInfoTool::new();
-    let ctx = ToolCallContext::new(layer0::AgentId::new("my-agent"));
+    let ctx = ToolCallContext::new(layer0::OperatorId::new("my-agent"));
     let input = json!({"label": "hello"});
     let result = tool.call(input, &ctx).await.expect("call must succeed");
     assert_eq!(result["label"], "hello");
@@ -163,7 +163,7 @@ async fn test_zero_param_schema_is_empty_object() {
 #[tokio::test]
 async fn test_zero_param_call() {
     let tool = PingTool::new();
-    let ctx = ToolCallContext::new(layer0::AgentId::new("test-agent"));
+    let ctx = ToolCallContext::new(layer0::OperatorId::new("test-agent"));
     let result = tool.call(json!({}), &ctx).await.expect("call must succeed");
     assert_eq!(result["pong"], true);
 }

@@ -42,9 +42,9 @@ pub enum OperatorError {
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum OrchError {
-    /// The requested agent was not found.
-    #[error("agent not found: {0}")]
-    AgentNotFound(String),
+    /// The requested operator was not found.
+    #[error("operator not found: {0}")]
+    OperatorNotFound(String),
 
     /// The requested workflow was not found.
     #[error("workflow not found: {0}")]

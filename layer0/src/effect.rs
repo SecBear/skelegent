@@ -54,7 +54,7 @@ pub enum Effect {
         key: String,
     },
 
-    /// Send a fire-and-forget signal to another agent or workflow.
+    /// Send a fire-and-forget signal to another operator or workflow.
     Signal {
         /// The target workflow to signal.
         target: WorkflowId,
@@ -62,24 +62,24 @@ pub enum Effect {
         payload: SignalPayload,
     },
 
-    /// Request that the orchestrator dispatch another agent.
+    /// Request that the orchestrator dispatch another operator.
     /// This is how delegation works — the operator doesn't call the
-    /// other agent directly, it asks the orchestrator to do it.
+    /// other operator directly, it asks the orchestrator to do it.
     Delegate {
-        /// The agent to delegate to.
-        agent: AgentId,
-        /// The input to send to the delegated agent.
+        /// The operator to delegate to.
+        operator: OperatorId,
+        /// The input to send to the delegated operator.
         input: Box<OperatorInput>,
     },
 
-    /// Hand off the conversation to another agent. Unlike Delegate,
-    /// the current operator is done — the next agent takes over.
+    /// Hand off the conversation to another operator. Unlike Delegate,
+    /// the current operator is done — the next operator takes over.
     Handoff {
-        /// The agent to hand off to.
-        agent: AgentId,
-        /// State to pass to the next agent. This is NOT the full
-        /// conversation — it's whatever the current agent thinks
-        /// the next agent needs to continue.
+        /// The operator to hand off to.
+        operator: OperatorId,
+        /// State to pass to the next operator. This is NOT the full
+        /// conversation — it's whatever the current operator thinks
+        /// the next operator needs to continue.
         state: serde_json::Value,
     },
 
@@ -149,12 +149,12 @@ pub enum Scope {
     Session(SessionId),
     /// Per-workflow-execution.
     Workflow(WorkflowId),
-    /// Per-agent within a workflow.
-    Agent {
-        /// The workflow this agent belongs to.
+    /// Per-operator within a workflow.
+    Operator {
+        /// The workflow this operator belongs to.
         workflow: WorkflowId,
-        /// The agent within the workflow.
-        agent: AgentId,
+        /// The operator within the workflow.
+        operator: OperatorId,
     },
     /// Shared across all workflows.
     Global,
@@ -162,7 +162,7 @@ pub enum Scope {
     Custom(String),
 }
 
-/// Payload for inter-agent/workflow signals.
+/// Payload for inter-operator/workflow signals.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalPayload {

@@ -12,7 +12,7 @@ use layer0::effect::SignalPayload;
 use layer0::operator::Operator;
 use layer0::orchestrator::QueryPayload;
 use layer0::{
-    AgentId, Content, DurationMs, ExitReason, OperatorError, OperatorInput, OperatorOutput,
+    OperatorId, Content, DurationMs, ExitReason, OperatorError, OperatorInput, OperatorOutput,
     OrchError, Orchestrator, SubDispatchRecord, ToolMetadata, WorkflowId,
 };
 
@@ -57,7 +57,7 @@ impl Operator for ToolOperator {
         let tool_input: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| OperatorError::NonRetryable(format!("invalid tool input JSON: {e}")))?;
 
-        let ctx = ToolCallContext::new(AgentId::new("agent"));
+        let ctx = ToolCallContext::new(OperatorId::new("agent"));
         match self.tool.call(tool_input, &ctx).await {
             Ok(result) => {
                 let mut output =
@@ -99,18 +99,18 @@ impl ToolRegistryOrchestrator {
 
 #[async_trait]
 impl Orchestrator for ToolRegistryOrchestrator {
-    /// Dispatch by looking up `agent` as a tool name in the registry.
+    /// Dispatch by looking up `operator` as a tool name in the registry.
     ///
-    /// Returns `OrchError::AgentNotFound` when the name is not registered.
+    /// Returns `OrchError::OperatorNotFound` when the name is not registered.
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError> {
         let tool = self
             .registry
-            .get(agent.as_str())
-            .ok_or_else(|| OrchError::AgentNotFound(agent.to_string()))?;
+            .get(operator.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
 
         let operator = ToolOperator::new(Arc::clone(tool));
         operator.execute(input).await.map_err(OrchError::from)
@@ -120,11 +120,11 @@ impl Orchestrator for ToolRegistryOrchestrator {
     /// tasks, so each invocation runs to completion before the next starts.
     async fn dispatch_many(
         &self,
-        tasks: Vec<(AgentId, OperatorInput)>,
+        tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, OrchError>> {
         let mut results = Vec::with_capacity(tasks.len());
-        for (agent, input) in tasks {
-            results.push(self.dispatch(&agent, input).await);
+        for (operator, input) in tasks {
+            results.push(self.dispatch(&operator, input).await);
         }
         results
     }
@@ -149,7 +149,7 @@ mod tests {
     use super::*;
     use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
     use layer0::operator::TriggerType;
-    use layer0::{AgentId, Content, ExitReason, OperatorError, OperatorInput, OrchError};
+    use layer0::{OperatorId, Content, ExitReason, OperatorError, OperatorInput, OrchError};
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;
@@ -271,9 +271,9 @@ mod tests {
         reg.register(Arc::new(EchoTool));
         let orch = ToolRegistryOrchestrator::new(reg);
 
-        let agent = AgentId::new("echo");
+        let operator = OperatorId::new("echo");
         let input = make_input(r#"{"x": 42}"#);
-        let output = orch.dispatch(&agent, input).await.expect("should succeed");
+        let output = orch.dispatch(&operator, input).await.expect("should succeed");
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let text = output.message.as_text().expect("should be text");
@@ -286,15 +286,15 @@ mod tests {
         let reg = ToolRegistry::new(); // empty
         let orch = ToolRegistryOrchestrator::new(reg);
 
-        let agent = AgentId::new("unknown_tool");
+        let operator = OperatorId::new("unknown_tool");
         let input = make_input("{}");
-        let err = orch.dispatch(&agent, input).await.expect_err("should fail");
+        let err = orch.dispatch(&operator, input).await.expect_err("should fail");
 
         match err {
-            OrchError::AgentNotFound(name) => {
+            OrchError::OperatorNotFound(name) => {
                 assert_eq!(name, "unknown_tool");
             }
-            other => panic!("expected AgentNotFound, got {other:?}"),
+            other => panic!("expected OperatorNotFound, got {other:?}"),
         }
     }
 }

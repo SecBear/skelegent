@@ -433,7 +433,7 @@ async fn dispatch_function_tools(
 mod tests {
     use super::*;
     use crate::output::OutputSchema;
-    use layer0::id::AgentId;
+    use layer0::id::OperatorId;
     use neuron_tool::{ToolDyn, ToolError};
     use neuron_turn::test_utils::TestProvider;
     use serde_json::json;
@@ -500,7 +500,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let (value, output) = react_loop_structured(
@@ -542,7 +542,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let (value, _) = react_loop_structured(
@@ -579,7 +579,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let err = react_loop_structured(
@@ -611,7 +611,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         let schema = OutputSchema::text_json(json!({}), city_validator);
 
         let (value, _) = react_loop_structured(
@@ -640,7 +640,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         // ToolCall mode: model returns text instead of calling return_result
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
@@ -683,7 +683,7 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(MockTool { name: "search" }));
 
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let (value, _) = react_loop_structured(
@@ -716,7 +716,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), |v| Ok(v.clone()));
 
         let _ = react_loop_structured(
@@ -746,7 +746,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         let schema = OutputSchema::text_json(json!({}), |v| Ok(v.clone()));
 
         let _ = react_loop_structured(
@@ -831,7 +831,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
         let config = ReactLoopConfig {
             system_prompt: "test".into(),
             model: None,
@@ -895,7 +895,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
 
         let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await
@@ -937,7 +937,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
 
         let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await
@@ -966,7 +966,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
 
         let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await

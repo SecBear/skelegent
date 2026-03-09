@@ -12,7 +12,7 @@ use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
 use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
-use layer0::AgentId;
+use layer0::OperatorId;
 use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
 use neuron_tool::{ToolCallContext, ToolRegistry};
 use neuron_provider_anthropic::AnthropicProvider;
@@ -53,7 +53,7 @@ async fn anthropic_react_simple_prompt() {
         .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("claude-haiku-4-5-20251001".into()),
@@ -170,7 +170,7 @@ async fn openai_react_simple_prompt() {
         .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("gpt-4o-mini".into()),
@@ -273,7 +273,7 @@ async fn ollama_react_simple_prompt() {
         .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("llama3.2:1b".into()),

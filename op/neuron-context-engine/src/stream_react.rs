@@ -141,7 +141,7 @@ mod tests {
     use crate::context::Context;
     use layer0::content::Content;
     use layer0::context::{Message, Role};
-    use layer0::id::AgentId;
+    use layer0::id::OperatorId;
     use neuron_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
     use neuron_turn::stream::{StreamEvent, StreamProvider, StreamRequest, infer_stream_fallback};
     use neuron_turn::test_utils::TestProvider;
@@ -231,7 +231,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
 
         let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
         let events_clone = Arc::clone(&events);
@@ -277,7 +277,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(AgentId::from("test"));
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
 
         let output = stream_react_loop(
             &mut ctx,

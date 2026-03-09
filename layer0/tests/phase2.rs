@@ -196,9 +196,9 @@ async fn local_environment_is_usable_as_dyn_environment() {
 #[tokio::test]
 async fn local_orchestrator_dispatch_to_echo() {
     let mut orch = LocalOrchestrator::new();
-    orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
     let input = simple_input("dispatch test");
-    let output = orch.dispatch(&AgentId::new("echo"), input).await.unwrap();
+    let output = orch.dispatch(&OperatorId::new("echo"), input).await.unwrap();
     assert_eq!(output.message, Content::text("dispatch test"));
 }
 
@@ -206,20 +206,20 @@ async fn local_orchestrator_dispatch_to_echo() {
 async fn local_orchestrator_dispatch_agent_not_found() {
     let orch = LocalOrchestrator::new();
     let input = simple_input("nobody home");
-    let result = orch.dispatch(&AgentId::new("missing"), input).await;
+    let result = orch.dispatch(&OperatorId::new("missing"), input).await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("agent not found"));
+    assert!(result.unwrap_err().to_string().contains("operator not found"));
 }
 
 #[tokio::test]
 async fn local_orchestrator_dispatch_many_concurrent() {
     let mut orch = LocalOrchestrator::new();
-    orch.register(AgentId::new("a"), Arc::new(EchoOperator));
-    orch.register(AgentId::new("b"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("a"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("b"), Arc::new(EchoOperator));
 
     let tasks = vec![
-        (AgentId::new("a"), simple_input("msg-a")),
-        (AgentId::new("b"), simple_input("msg-b")),
+        (OperatorId::new("a"), simple_input("msg-a")),
+        (OperatorId::new("b"), simple_input("msg-b")),
     ];
 
     let results = orch.dispatch_many(tasks).await;
@@ -231,12 +231,12 @@ async fn local_orchestrator_dispatch_many_concurrent() {
 #[tokio::test]
 async fn local_orchestrator_dispatch_many_partial_failure() {
     let mut orch = LocalOrchestrator::new();
-    orch.register(AgentId::new("a"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("a"), Arc::new(EchoOperator));
     // "b" is not registered
 
     let tasks = vec![
-        (AgentId::new("a"), simple_input("ok")),
-        (AgentId::new("b"), simple_input("fail")),
+        (OperatorId::new("a"), simple_input("ok")),
+        (OperatorId::new("b"), simple_input("fail")),
     ];
 
     let results = orch.dispatch_many(tasks).await;
@@ -247,10 +247,10 @@ async fn local_orchestrator_dispatch_many_partial_failure() {
 #[tokio::test]
 async fn local_orchestrator_is_usable_as_dyn_orchestrator() {
     let mut orch = LocalOrchestrator::new();
-    orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
     let orch: Box<dyn Orchestrator> = Box::new(orch);
     let output = orch
-        .dispatch(&AgentId::new("echo"), simple_input("dyn"))
+        .dispatch(&OperatorId::new("echo"), simple_input("dyn"))
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("dyn"));
@@ -287,8 +287,8 @@ async fn orchestrator_query_returns_null() {
 async fn integration_compose_all_implementations() {
     // 1. Set up orchestrator with two agents
     let mut orch = LocalOrchestrator::new();
-    orch.register(AgentId::new("agent-a"), Arc::new(EchoOperator));
-    orch.register(AgentId::new("agent-b"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("agent-a"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("agent-b"), Arc::new(EchoOperator));
 
     // 2. Set up state store
     let store = InMemoryStore::new();
@@ -299,8 +299,8 @@ async fn integration_compose_all_implementations() {
 
     // 5. Dispatch two agents through the orchestrator
     let tasks = vec![
-        (AgentId::new("agent-a"), simple_input("task for A")),
-        (AgentId::new("agent-b"), simple_input("task for B")),
+        (OperatorId::new("agent-a"), simple_input("task for A")),
+        (OperatorId::new("agent-b"), simple_input("task for B")),
     ];
     let results = orch.dispatch_many(tasks).await;
 
