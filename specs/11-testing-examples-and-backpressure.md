@@ -33,10 +33,9 @@ Workspace tests:
 
 Wiring kit: `neuron-orch-kit` exists at `orch/neuron-orch-kit/`.
 
-Still required for "core complete":
+Future examples (not yet implemented):
 
 - `examples/daily_digest` — scheduled + state + signal composition proof
 - `examples/triage` — multi-agent escalation + policy controls proof
 - `examples/provider_parity` — provider swap with parity invariants as a standalone example
 - failure/edge-case matrix test suite proving error paths and policy edge behavior
-

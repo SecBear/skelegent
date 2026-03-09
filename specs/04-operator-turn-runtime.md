@@ -40,14 +40,15 @@ Exit reasons are explicit and stable. Orchestrators use them to decide what happ
 
 | Variant | Trigger | HTTP side | Retriable? |
 |---|---|---|---|
-| `Complete` | Model returns no sub-dispatch requests (natural end) | Provider HTTP 200, `EndTurn` | No |
+| `Complete` | Model returns no tool calls (natural end) | Provider HTTP 200, `EndTurn` | No |
 | `MaxTurns` | `max_turns` counter reached | — | Yes (new turn) |
-| `BudgetExhausted` | Cost limit or total sub-dispatch count (`max_sub_dispatches`) reached | — | No (without budget change) |
+| `BudgetExhausted` | Cost limit or tool-call count (`max_tool_calls`) reached | — | No (without budget change) |
 | `CircuitBreaker` | Consecutive failure counter trips | — | Possibly (with backoff) |
 | `Timeout` | Wall-clock elapsed ≥ `max_duration` | — | Yes (new invocation) |
-| `MiddlewareHalt { reason }` | ExitCheck middleware returned halt | — | No |
-| `Custom("stuck_detected")` | Identical consecutive sub-dispatches exceed `max_repeat_dispatches` | — | No (without context change) |
+| `InterceptorHalt { reason }` | Middleware/rule halted execution | — | No |
+| `AwaitingApproval` | Tool calls require human approval before execution | — | Yes (after approval) |
 | `Error` | Unrecoverable execution failure | — | Depends |
+| `Custom(String)` | Future/domain-specific exit reasons | — | Depends |
 
 ### SafetyStop
 
@@ -66,30 +67,19 @@ Provider mapping: Anthropic `refusal`, OpenAI `content_filter`, Google `SAFETY` 
 
 ### Exit Priority Ordering
 
-Priority is highest-first. ExitCheck middleware fires before all limit checks:
+Priority is highest-first:
 
-1. Middleware halts (PreInference, PostInference, ExitCheck) — `MiddlewareHalt`
-2. Step/loop limits:
-   - `max_sub_dispatches` reached → `BudgetExhausted` (also emits `BudgetEvent::StepLimitReached`)
-   - `max_repeat_dispatches` exceeded → `Custom("stuck_detected")` (also emits `BudgetEvent::LoopDetected`)
+1. Rule/interceptor halts — `InterceptorHalt`
+2. Tool approval required — `AwaitingApproval`
 3. Turn limit — `MaxTurns`
-4. Cost budget — `BudgetExhausted`
+4. Cost budget / tool-call limit — `BudgetExhausted`
 5. Timeout — `Timeout`
 
-Note: `BudgetExhausted` appears at both priority 2 and 4. Orchestrators that need to
-distinguish step exhaustion from cost exhaustion should inspect the `BudgetEvent` sink
-events rather than relying on `ExitReason` alone.
-
-See `specs/09` for full middleware dispatch semantics.
+Orchestrators that need to distinguish cost exhaustion from tool-call exhaustion should inspect the `BudgetEvent` lifecycle events.
 
 ## Steering Observability
 
-Steering (`SteeringSource`) is polled at defined boundaries. Middleware observes steering without owning it:
-
-- `PreSteeringInject`: fires after drain returns messages, before they enter context. Guardrail middleware can reject.
-- `PostSteeringSkip`: fires after tools are skipped due to steering. Observer middleware can log.
-
-Steering poll-and-dispatch logic is extracted into a helper (`poll_steering`) shared across the ~6 polling sites in the main loop.
+Steering (`SteeringSource` in `neuron-turn-kit`) is an optional source of mid-loop control messages. The `SteeringSource` trait provides a `drain()` method called between turns to inject new instructions or skip tool execution.
 
 ## Model Selection
 
@@ -97,13 +87,16 @@ Steering poll-and-dispatch logic is extracted into a helper (`poll_steering`) sh
 
 ## Context Budget
 
-Context budget management is handled by the `BudgetGuard` rule in `neuron-context-engine`. The guard checks cost, turn count, and duration limits before each inference call.
+Context budget management is handled by the `BudgetGuard` rule in `neuron-context-engine`. The guard checks four limits before each inference call:
 
-```
-effective_limit = max_tokens * 4 * (1 - compaction_reserve_pct)
-```
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `max_cost` | `Option<Decimal>` | `None` | Maximum cost in USD |
+| `max_turns` | `Option<u32>` | `Some(10)` | Maximum inference turns |
+| `max_duration` | `Option<Duration>` | `None` | Maximum wall-clock duration |
+| `max_tool_calls` | `Option<u32>` | `None` | Maximum total tool calls |
 
-`compaction_reserve_pct` is validated to be in `0.01..=0.50`.
+When any limit is exceeded, `BudgetGuard` returns `EngineError::Halted`, which the react loop maps to `ExitReason::BudgetExhausted`.
 
 ## Context Assembly
 
@@ -135,33 +128,30 @@ An unannotated `ProviderMessage` wrapped via `Message::from(msg)` behaves as if 
 
 ## Compaction Strategy
 
-### TieredStrategy
+Compaction in `neuron-context-engine` is handled via two mechanisms:
 
-`TieredStrategy` (in `neuron-context`) implements tiered compaction using a four-zone partition. It eliminates recursive-summarization degradation: the summary is always first-generation, derived from original messages, never from a previous summary.
+### Rule-based compaction
 
-**Zone model**:
+`CompactionRule` fires as a `When` trigger, checking message count against a threshold. When triggered, it runs one of two built-in strategies:
 
-| Zone | Messages | Compaction action |
-|---|---|---|
-| Pinned | `CompactionPolicy::Pinned` | Never compacted; survive indefinitely |
-| Active | Most-recent `active_zone_size` unpinned messages (default: 10) | Never compacted; always present |
-| Summary | One first-generation summary of older unpinned messages | Replaced wholesale each compaction cycle |
-| Noise | `DiscardWhenDone` or `CompressFirst` messages | Discarded on compaction |
+- **`sliding_window(n)`** — keeps the last `n` messages, respecting `CompactionPolicy::Pinned`
+- **`policy_trim`** — removes `DiscardWhenDone` and `CompressFirst` messages first, then oldest `Normal` messages
 
-**Configuration** (`TieredConfig`):
+### Async LLM-driven strategies
 
-| Field | Default | Meaning |
-|---|---|---|
-| `max_messages` | 40 | Compaction fires when `messages.len() > max_messages` |
-| `active_zone_size` | 10 | Number of most-recent unpinned messages kept as-is |
+Standalone async functions (not `ContextOp`s) called explicitly between turns:
 
-**Summariser**: Optional `Summariser` trait (`summarise(&[ProviderMessage]) -> Result<ProviderMessage, CompactionError>`). When absent, summary-candidate messages are discarded (lossy but no degradation). A real implementation wires in an LLM call.
+- **`summarize` / `summarize_with`** — summarizes messages via a provider; returns a `Pinned` summary message
+- **`extract_cognitive_state` / `extract_cognitive_state_with`** — extracts structured state from context via a provider; returns JSON
 
-**Failure modes**:
+These compose freely with `FlushToStore` (persist extracted state) and `InjectFromStore` (retrieve persisted state into context).
 
-- *Recursive summarization degradation* (mitigated): Summarizing a summary of a summary is a lossy telephone game — critical architectural decisions, file paths, and conventions are lost after 2–3 cycles. TieredStrategy prevents this by always summarizing from original messages, never from a prior summary.
-- `CompactionError::Transient` — API error during summarization; retriable.
-- `CompactionError::Semantic` — Bad summary quality; not retriable with the same strategy.
+### Store integration ops
+
+- **`FlushToStore`** — runs an extractor closure over context, writes results to a `StateStore`
+- **`InjectFromStore`** — searches a `StateStore`, injects results as system/user messages at configurable positions
+
+See `op/neuron-context-engine/DESIGN.md` for the full composition pattern.
 
 ### Pre-Compaction Flush
 
@@ -169,7 +159,7 @@ Pre-compaction flush is mandatory. Before compaction destroys in-memory context,
 
 Flow:
 1. Context pressure detected → `CompactionEvent::ContextPressure` emitted
-2. `CompactionEvent::PreCompactionFlush { agent, scope }` emitted — triggers memory flush
+2. `CompactionEvent::PreCompactionFlush { operator, scope }` emitted — triggers memory flush
 3. Operator/orchestrator writes important state to hot/warm memory tiers (via `Effect::WriteMemory`)
 4. Compaction runs; context shrinks
 5. New turns access persisted state via memory tools
@@ -188,17 +178,21 @@ Budget and compaction events are handled via the Rule system in `neuron-context-
 
 Implemented:
 - `neuron-op-single-shot` — functional.
-- `neuron-context-engine` — full ReAct loop; emits effects.
-- Steering integrated with boundary polling and skip semantics.
-- Middleware dispatch at PreInference, PostInference, PreSubDispatch, PostSubDispatch, ExitCheck, SubDispatchUpdate.
-- ExitCheck middleware fires before all limit checks.
-- Compaction reserve enforcement via `compaction_reserve_pct`.
-- Step/loop limits (`max_sub_dispatches`, `max_repeat_dispatches`) with BudgetEvent emission.
-- Model selector callback.
-- `TieredStrategy` with zone-partitioned compaction.
+- `neuron-context-engine` — full ReAct loop with streaming; emits effects.
+- `react_loop()` and `react_loop_structured()` for regular and structured output.
+- `stream_react_loop()` for streaming responses.
+- Steering integrated via `SteeringSource` trait.
+- Three middleware stacks at protocol boundaries: `DispatchMiddleware`, `ExecMiddleware`, `StoreMiddleware`.
+- `BudgetGuard` rule with cost, turn, duration, and tool-call limits.
+- `CompactionRule` with `sliding_window` and `policy_trim` strategies.
+- Async `summarize` and `extract_cognitive_state` functions.
+- `FlushToStore` and `InjectFromStore` context ops with configurable injection position.
+- `TelemetryRule` for turn-level metrics emission.
+- Model selection via `ReactLoopConfig.model` and per-request `InferRequest::with_model()`.
 - `Message` and `CompactionPolicy` enabling per-message compaction metadata.
-- `BudgetEventSink` and `CompactionEventSink` opt-in sinks on the react loop operator.
 - `ExitReason::SafetyStop`; maps `StopReason::ContentFilter` to it.
+- `ExitReason::AwaitingApproval` and `Effect::ToolApprovalRequired` for human-in-the-loop.
+- Dynamic tool availability via `ToolFilter` callback.
 
 Still required:
 - Stronger documentation/examples for building custom operators.

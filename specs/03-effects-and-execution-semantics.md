@@ -23,7 +23,7 @@ declares this effect and the executing layer handles delivery.
 
 ```rust
 Effect::WriteMemory {
-    scope: Scope,                      // where to write (session / workflow / agent / global)
+    scope: Scope,                      // where to write (session / workflow / operator / global)
     key: String,                       // storage key
     value: serde_json::Value,          // value to store
     tier: Option<MemoryTier>,          // advisory: hot / warm / cold
@@ -40,7 +40,7 @@ Effect::WriteMemory {
 
 | Field | Type | Description |
 |---|---|---|
-| `scope` | `Scope` | Scope hierarchy: `Session`, `Workflow`, `Agent { workflow, agent }`, `Global`, or `Custom`. |
+| `scope` | `Scope` | Scope hierarchy: `Session`, `Workflow`, `Operator { workflow, operator }`, `Global`, or `Custom`. |
 | `key` | `String` | Storage key within the scope. |
 | `value` | `serde_json::Value` | Value to write. Any JSON-serializable data. |
 | `tier` | `Option<MemoryTier>` | Storage tier hint. `Hot` (default) = low-latency; `Warm` = in-process/near cache; `Cold` = slow/cheap. |
@@ -175,9 +175,9 @@ Effects should be executed by orchestration/runtime glue, not by the operator it
 - Local orchestration may execute them immediately.
 - Durable orchestration may serialize and execute them inside workflow engines.
 
-### Scoped State Exception
+### Own-Scope State Access
 
-Operators may read and write their own state partition directly via an injected `ScopedState` capability. Own-scope state access does not cross the effects boundary — it is a direct, synchronous read/write within the operator’s own scope and is not queued for later execution. Cross-scope writes remain as `Effect::WriteMemory` and are handled by the executing layer. This exception exists because own-scope state is semantically local to the operator; routing it through the effect pipeline would add latency without providing meaningful isolation benefit.
+Operators that need to read/write their own state partition can do so via `FlushToStore` and `InjectFromStore` context ops in `neuron-context-engine`, or by receiving a `StateStore` reference at construction time. Own-scope reads are direct calls to `StateStore::read()` / `StateStore::search()` — they do not go through the effects pipeline. Cross-scope writes remain as `Effect::WriteMemory` and are handled by the executing layer.
 
 ## Executor Guidance: Threading Advisory Fields
 
