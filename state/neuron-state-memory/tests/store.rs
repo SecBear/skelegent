@@ -181,11 +181,18 @@ async fn search_returns_empty_vec() {
         .await
         .unwrap();
 
-    // In-memory store doesn't support semantic search
+    // Searching with a term that does not appear returns nothing.
+    let results = StateStore::search(&store, &scope, "xyzzy", 10)
+        .await
+        .unwrap();
+    assert!(results.is_empty(), "non-matching query must return empty vec");
+
+    // Searching with a matching term returns the key.
     let results = StateStore::search(&store, &scope, "hello", 10)
         .await
         .unwrap();
-    assert!(results.is_empty());
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].key, "key1");
 }
 
 // --- Object safety ---
