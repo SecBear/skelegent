@@ -3,10 +3,22 @@
 //! Provides two ready-to-use compaction strategies as pure functions and as a
 //! reactive rule that fires automatically when message count exceeds a threshold.
 //!
-//! Use the pure functions directly with the [`crate::ops::compact::Compact`] op,
-//! or register a [`CompactionRule`] to compact on a trigger.
+//! # DIY-First Design
 //!
-//! # Example
+//! Every compaction primitive is independently callable. [`CompactionRule`] is a
+//! convenience wrapper built FROM these primitives:
+//!
+//! | Primitive | What it does |
+//! |-----------|-------------|
+//! | [`sliding_window()`] | Keep N most recent non-pinned messages |
+//! | [`policy_trim()`] | Remove by [`CompactionPolicy`] priority |
+//! | [`SummarizeConfig::build_request()`] | Build LLM summarization request |
+//! | [`SummarizeConfig::parse_response()`] | Parse LLM response into summary [`Message`] |
+//! | [`ExtractConfig::build_request()`] | Build cognitive state extraction request |
+//! | [`ExtractConfig::parse_response()`] | Parse extraction response into JSON |
+//! | [`strip_json_fences()`] | Remove markdown code fences from JSON |
+//!
+//! # Using the convenience rule
 //!
 //! ```ignore
 //! use neuron_context_engine::rules::CompactionRule;
@@ -14,6 +26,27 @@
 //! let mut ctx = Context::new();
 //! ctx.add_rule(CompactionRule::sliding_window(50).into_rule());
 //! // Context compacts automatically whenever messages exceed 50.
+//! ```
+//!
+//! # Composing your own compaction
+//!
+//! ```ignore
+//! use neuron_context_engine::ops::Compact;
+//! use neuron_context_engine::rules::compaction::{sliding_window, policy_trim};
+//! use neuron_context_engine::rules::{SummarizeConfig};
+//!
+//! // Step 1: trim by policy, then sliding window
+//! ctx.run(Compact::new(|msgs| {
+//!     let trimmed = policy_trim(msgs, 100);
+//!     sliding_window(&trimmed, 50)
+//! })).await?;
+//!
+//! // Step 2: summarize with custom config
+//! let config = SummarizeConfig { max_tokens: 1024, ..Default::default() };
+//! let request = config.build_request(&ctx.messages);
+//! let response = provider.infer(request).await?;
+//! let summary = config.parse_response(response)?;
+//! ctx.messages = vec![summary];  // or prepend, or inject
 //! ```
 
 use crate::context::Context;

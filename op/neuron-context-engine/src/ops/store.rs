@@ -60,6 +60,18 @@ pub async fn fetch_search_results(
 ///
 /// The extractor function transforms the current messages into a JSON value.
 /// The result is written to the store under the given scope and key.
+///
+/// # DIY Alternative
+///
+/// `FlushToStore` is a convenience. For conditional writes or post-extraction
+/// transforms, call the extractor and store directly:
+///
+/// ```ignore
+/// let value = my_extractor(&ctx.messages);
+/// if should_write(&value) {
+///     store.write(&scope, "key", value).await?;
+/// }
+/// ```
 pub struct FlushToStore {
     store: Arc<dyn StateStore>,
     scope: Scope,
