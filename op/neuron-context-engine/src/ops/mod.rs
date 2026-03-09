@@ -9,5 +9,8 @@ pub mod tool;
 pub use compact::{Compact, CompactResult};
 pub use inject::{InjectMessage, InjectMessages, InjectSystem};
 pub use response::AppendResponse;
-pub use store::{FlushToStore, InjectFromStore, InjectionPosition};
+pub use store::{
+    FlushToStore, InjectFromStore, InjectSearchResults, InjectionPosition, LoadConversation,
+    SaveConversation, fetch_search_results,
+};
 pub use tool::{ExecuteTool, format_tool_result};

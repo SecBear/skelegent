@@ -8,7 +8,7 @@ use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::effect::Scope;
 use layer0::lifecycle::CompactionPolicy;
-use layer0::state::StateStore;
+use layer0::state::{SearchResult, StateStore};
 use std::sync::Arc;
 
 /// Type alias for the extractor closure used by [`FlushToStore`].
@@ -28,6 +28,32 @@ pub enum InjectionPosition {
     Append,
     /// At a specific index. Clamped to `ctx.messages.len()`.
     At(usize),
+}
+
+/// Batch-fetch values from a [`StateStore`] for a set of search results.
+///
+/// For each [`SearchResult`], reads the corresponding value. Returns
+/// `(key, value)` pairs for results that exist, silently skipping
+/// keys deleted between search and fetch.
+///
+/// This is the fetch step that [`InjectFromStore`] performs internally.
+/// Use it to inspect, filter, or rerank results before injection.
+pub async fn fetch_search_results(
+    store: &dyn StateStore,
+    scope: &Scope,
+    results: &[SearchResult],
+) -> Result<Vec<(String, serde_json::Value)>, EngineError> {
+    let mut fetched = Vec::with_capacity(results.len());
+    for result in results {
+        if let Some(value) = store
+            .read(scope, &result.key)
+            .await
+            .map_err(|e| EngineError::Custom(Box::new(e)))?
+        {
+            fetched.push((result.key.clone(), value));
+        }
+    }
+    Ok(fetched)
 }
 
 /// Extract content from context messages and write it to a [`StateStore`].
@@ -161,19 +187,14 @@ impl ContextOp for InjectFromStore {
             .await
             .map_err(|e| EngineError::Custom(Box::new(e)))?;
 
+        let fetched = fetch_search_results(&*self.store, &self.scope, &results).await?;
+
         let mut messages = Vec::new();
-        for result in &results {
-            if let Some(value) = self
-                .store
-                .read(&self.scope, &result.key)
-                .await
-                .map_err(|e| EngineError::Custom(Box::new(e)))?
-            {
-                let text = (self.formatter)(&result.key, &value);
-                let mut msg = Message::new(self.role.clone(), Content::text(text));
-                msg.meta.policy = self.policy;
-                messages.push(msg);
-            }
+        for (key, value) in &fetched {
+            let text = (self.formatter)(key, value);
+            let mut msg = Message::new(self.role.clone(), Content::text(text));
+            msg.meta.policy = self.policy;
+            messages.push(msg);
         }
 
         let count = messages.len();
@@ -196,6 +217,184 @@ impl ContextOp for InjectFromStore {
 
         tracing::info!(query = %self.query, injected = count, "neuron.inject_from_store");
         Ok(count)
+    }
+}
+
+/// Inject pre-fetched `(key, value)` pairs as messages into the context.
+///
+/// Use [`fetch_search_results`] to obtain the pairs, then optionally
+/// filter or rerank them before passing to this op.
+pub struct InjectSearchResults {
+    results: Vec<(String, serde_json::Value)>,
+    position: InjectionPosition,
+    role: Role,
+    policy: CompactionPolicy,
+    formatter: Formatter,
+}
+
+impl InjectSearchResults {
+    /// Create a new `InjectSearchResults` op from pre-fetched `(key, value)` pairs.
+    pub fn new(results: Vec<(String, serde_json::Value)>) -> Self {
+        Self {
+            results,
+            position: InjectionPosition::AfterSystemPrompt,
+            role: Role::System,
+            policy: CompactionPolicy::CompressFirst,
+            formatter: Arc::new(|key, value| format!("[Memory: {}] {}", key, value)),
+        }
+    }
+
+    /// Set where injected messages are inserted.
+    pub fn with_position(mut self, position: InjectionPosition) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// Set the role for injected messages (default: [`Role::System`]).
+    pub fn with_role(mut self, role: Role) -> Self {
+        self.role = role;
+        self
+    }
+
+    /// Set the compaction policy for injected messages (default: [`CompactionPolicy::CompressFirst`]).
+    pub fn with_policy(mut self, policy: CompactionPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Set a custom formatter for injected messages.
+    ///
+    /// The formatter receives `(key, value)` from the results and returns
+    /// the message text content.
+    pub fn with_formatter(
+        mut self,
+        formatter: impl Fn(&str, &serde_json::Value) -> String + Send + Sync + 'static,
+    ) -> Self {
+        self.formatter = Arc::new(formatter);
+        self
+    }
+}
+
+#[async_trait]
+impl ContextOp for InjectSearchResults {
+    type Output = usize;
+
+    async fn execute(&self, ctx: &mut Context) -> Result<usize, EngineError> {
+        let mut messages = Vec::new();
+        for (key, value) in &self.results {
+            let text = (self.formatter)(key, value);
+            let mut msg = Message::new(self.role.clone(), Content::text(text));
+            msg.meta.policy = self.policy;
+            messages.push(msg);
+        }
+
+        let count = messages.len();
+
+        let insert_at = match &self.position {
+            InjectionPosition::AfterSystemPrompt => {
+                if ctx.messages.first().is_some_and(|m| m.role == Role::System) {
+                    1
+                } else {
+                    0
+                }
+            }
+            InjectionPosition::Append => ctx.messages.len(),
+            InjectionPosition::At(idx) => (*idx).min(ctx.messages.len()),
+        };
+
+        for (i, msg) in messages.into_iter().enumerate() {
+            ctx.messages.insert(insert_at + i, msg);
+        }
+
+        tracing::info!(injected = count, "neuron.inject_search_results");
+        Ok(count)
+    }
+}
+
+/// Serialize the current conversation messages to a [`StateStore`].
+///
+/// Writes `ctx.messages` as a JSON array under the given scope and key.
+/// Pair with [`LoadConversation`] to restore.
+pub struct SaveConversation {
+    store: Arc<dyn StateStore>,
+    scope: Scope,
+    key: String,
+}
+
+impl SaveConversation {
+    /// Create a new `SaveConversation` op.
+    pub fn new(store: Arc<dyn StateStore>, scope: Scope, key: impl Into<String>) -> Self {
+        Self {
+            store,
+            scope,
+            key: key.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl ContextOp for SaveConversation {
+    type Output = ();
+
+    async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+        let value = serde_json::to_value(&ctx.messages)
+            .map_err(|e| EngineError::Custom(Box::new(e)))?;
+        self.store
+            .write(&self.scope, &self.key, value)
+            .await
+            .map_err(|e| EngineError::Custom(Box::new(e)))?;
+        tracing::info!(key = %self.key, "neuron.save_conversation");
+        Ok(())
+    }
+}
+
+/// Load conversation messages from a [`StateStore`] into the context.
+///
+/// Reads a JSON array of messages from the store and replaces `ctx.messages`.
+/// Returns `None` if the key does not exist (context unchanged).
+/// Returns `Some(count)` if loaded (previous messages replaced).
+pub struct LoadConversation {
+    store: Arc<dyn StateStore>,
+    scope: Scope,
+    key: String,
+}
+
+impl LoadConversation {
+    /// Create a new `LoadConversation` op.
+    pub fn new(store: Arc<dyn StateStore>, scope: Scope, key: impl Into<String>) -> Self {
+        Self {
+            store,
+            scope,
+            key: key.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl ContextOp for LoadConversation {
+    type Output = Option<usize>;
+
+    async fn execute(&self, ctx: &mut Context) -> Result<Option<usize>, EngineError> {
+        let value = self
+            .store
+            .read(&self.scope, &self.key)
+            .await
+            .map_err(|e| EngineError::Custom(Box::new(e)))?;
+
+        match value {
+            None => Ok(None),
+            Some(v) => {
+                let messages: Vec<Message> = serde_json::from_value(v).map_err(|err| {
+                    EngineError::Halted {
+                        reason: format!("failed to deserialize conversation: {err}"),
+                    }
+                })?;
+                let len = messages.len();
+                ctx.messages = messages;
+                tracing::info!(key = %self.key, count = len, "neuron.load_conversation");
+                Ok(Some(len))
+            }
+        }
     }
 }
 
@@ -476,5 +675,268 @@ mod tests {
         .unwrap();
 
         assert_eq!(ctx.messages[0].meta.policy, CompactionPolicy::Pinned);
+    }
+
+    // ── P2: fetch_search_results tests ──
+
+    #[tokio::test]
+    async fn test_fetch_search_results_basic() {
+        let store = MockStore::new();
+        {
+            let mut data = store.data.write().unwrap();
+            data.insert("key_a".to_string(), json!("value_a"));
+            data.insert("key_b".to_string(), json!("value_b"));
+        }
+
+        let results = vec![
+            SearchResult::new("key_a".to_string(), 1.0),
+            SearchResult::new("key_b".to_string(), 0.9),
+        ];
+
+        let fetched = fetch_search_results(&*store, &Scope::Global, &results)
+            .await
+            .unwrap();
+
+        assert_eq!(fetched.len(), 2);
+        assert_eq!(fetched[0].0, "key_a");
+        assert_eq!(fetched[0].1, json!("value_a"));
+        assert_eq!(fetched[1].0, "key_b");
+        assert_eq!(fetched[1].1, json!("value_b"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_search_results_missing_key() {
+        let store = MockStore::new();
+        {
+            let mut data = store.data.write().unwrap();
+            data.insert("exists".to_string(), json!(42));
+        }
+
+        let results = vec![
+            SearchResult::new("exists".to_string(), 1.0),
+            SearchResult::new("gone".to_string(), 0.5),
+        ];
+
+        let fetched = fetch_search_results(&*store, &Scope::Global, &results)
+            .await
+            .unwrap();
+
+        assert_eq!(fetched.len(), 1);
+        assert_eq!(fetched[0].0, "exists");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_search_results_empty() {
+        let store = MockStore::new();
+        let results: Vec<SearchResult> = vec![];
+
+        let fetched = fetch_search_results(&*store, &Scope::Global, &results)
+            .await
+            .unwrap();
+
+        assert!(fetched.is_empty());
+    }
+
+    // ── P2: InjectSearchResults tests ──
+
+    #[tokio::test]
+    async fn test_inject_search_results_basic() {
+        let results = vec![
+            ("key_a".to_string(), json!("value_a")),
+            ("key_b".to_string(), json!("value_b")),
+        ];
+
+        let mut ctx = Context::new();
+        ctx.messages
+            .push(Message::new(Role::System, Content::text("system prompt")));
+        ctx.messages
+            .push(Message::new(Role::User, Content::text("user msg")));
+
+        let count = ctx.run(InjectSearchResults::new(results)).await.unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(ctx.messages.len(), 4);
+        // System prompt still first.
+        assert_eq!(ctx.messages[0].text_content(), "system prompt");
+        // Injected after system prompt.
+        assert!(ctx.messages[1].text_content().contains("key_a"));
+        assert!(ctx.messages[2].text_content().contains("key_b"));
+        // User message shifted.
+        assert_eq!(ctx.messages[3].text_content(), "user msg");
+    }
+
+    #[tokio::test]
+    async fn test_inject_search_results_empty() {
+        let mut ctx = Context::new();
+        ctx.messages
+            .push(Message::new(Role::User, Content::text("hello")));
+
+        let count = ctx
+            .run(InjectSearchResults::new(vec![]))
+            .await
+            .unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(ctx.messages.len(), 1);
+    }
+
+    // ── P7: Conversation persistence tests ──
+
+    #[tokio::test]
+    async fn test_save_conversation() {
+        let store = MockStore::new();
+        let mut ctx = Context::new();
+        ctx.messages
+            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.messages
+            .push(Message::new(Role::Assistant, Content::text("hi")));
+
+        ctx.run(SaveConversation::new(
+            store.clone(),
+            Scope::Global,
+            "conv",
+        ))
+        .await
+        .unwrap();
+
+        let data = store.data.read().unwrap();
+        let stored = data.get("conv").unwrap();
+        let arr = stored.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_load_conversation_existing() {
+        let store = MockStore::new();
+        // Save messages via SaveConversation first.
+        {
+            let mut ctx = Context::new();
+            ctx.messages
+                .push(Message::new(Role::User, Content::text("saved msg")));
+            ctx.run(SaveConversation::new(
+                store.clone(),
+                Scope::Global,
+                "conv",
+            ))
+            .await
+            .unwrap();
+        }
+
+        let mut ctx = Context::new();
+        let result = ctx
+            .run(LoadConversation::new(
+                store.clone(),
+                Scope::Global,
+                "conv",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(result, Some(1));
+        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages[0].text_content(), "saved msg");
+    }
+
+    #[tokio::test]
+    async fn test_load_conversation_missing() {
+        let store = MockStore::new();
+        let mut ctx = Context::new();
+        ctx.messages
+            .push(Message::new(Role::User, Content::text("original")));
+
+        let result = ctx
+            .run(LoadConversation::new(
+                store.clone(),
+                Scope::Global,
+                "nonexistent",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(result, None);
+        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages[0].text_content(), "original");
+    }
+
+    #[tokio::test]
+    async fn test_save_load_roundtrip() {
+        let store = MockStore::new();
+
+        // Save
+        let mut ctx = Context::new();
+        ctx.messages
+            .push(Message::new(Role::System, Content::text("sys")));
+        ctx.messages
+            .push(Message::new(Role::User, Content::text("question")));
+        ctx.messages
+            .push(Message::new(Role::Assistant, Content::text("answer")));
+        ctx.run(SaveConversation::new(
+            store.clone(),
+            Scope::Global,
+            "roundtrip",
+        ))
+        .await
+        .unwrap();
+
+        // Load into fresh context
+        let mut ctx2 = Context::new();
+        let result = ctx2
+            .run(LoadConversation::new(
+                store.clone(),
+                Scope::Global,
+                "roundtrip",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(result, Some(3));
+        assert_eq!(ctx2.messages.len(), 3);
+        assert_eq!(ctx2.messages[0].role, Role::System);
+        assert_eq!(ctx2.messages[0].text_content(), "sys");
+        assert_eq!(ctx2.messages[1].role, Role::User);
+        assert_eq!(ctx2.messages[1].text_content(), "question");
+        assert_eq!(ctx2.messages[2].role, Role::Assistant);
+        assert_eq!(ctx2.messages[2].text_content(), "answer");
+    }
+
+    #[tokio::test]
+    async fn test_load_conversation_replaces() {
+        let store = MockStore::new();
+
+        // Save one message
+        {
+            let mut ctx = Context::new();
+            ctx.messages
+                .push(Message::new(Role::User, Content::text("new msg")));
+            ctx.run(SaveConversation::new(
+                store.clone(),
+                Scope::Global,
+                "replace",
+            ))
+            .await
+            .unwrap();
+        }
+
+        // Load into context that already has messages
+        let mut ctx = Context::new();
+        ctx.messages
+            .push(Message::new(Role::System, Content::text("old system")));
+        ctx.messages
+            .push(Message::new(Role::User, Content::text("old user")));
+        ctx.messages
+            .push(Message::new(Role::Assistant, Content::text("old assistant")));
+
+        let result = ctx
+            .run(LoadConversation::new(
+                store.clone(),
+                Scope::Global,
+                "replace",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(result, Some(1));
+        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages[0].text_content(), "new msg");
     }
 }
