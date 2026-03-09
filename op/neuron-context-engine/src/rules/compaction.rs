@@ -269,6 +269,8 @@ pub struct SummarizeConfig {
     pub max_tokens: u32,
     /// Compaction policy applied to the returned summary message.
     pub output_policy: CompactionPolicy,
+    /// Model to use for the summarization call. `None` uses the provider's default.
+    pub model: Option<String>,
 }
 
 impl Default for SummarizeConfig {
@@ -277,6 +279,7 @@ impl Default for SummarizeConfig {
             prompt: DEFAULT_SUMMARY_PROMPT.into(),
             max_tokens: 2048,
             output_policy: CompactionPolicy::Pinned,
+            model: None,
         }
     }
 }
@@ -305,9 +308,12 @@ pub async fn summarize_with<P: Provider>(
     provider: &P,
     config: &SummarizeConfig,
 ) -> Result<Message, EngineError> {
-    let request = InferRequest::new(messages.to_vec())
+    let mut request = InferRequest::new(messages.to_vec())
         .with_system(&config.prompt)
         .with_max_tokens(config.max_tokens);
+    if let Some(ref model) = config.model {
+        request = request.with_model(model);
+    }
     let response = provider.infer(request).await?;
     let is_empty = response.text().is_none_or(str::is_empty);
     if is_empty {
@@ -333,6 +339,8 @@ pub struct ExtractConfig {
     pub prompt_template: String,
     /// Maximum output tokens.
     pub max_tokens: u32,
+    /// Model to use for the extraction call. `None` uses the provider's default.
+    pub model: Option<String>,
 }
 
 impl Default for ExtractConfig {
@@ -340,6 +348,7 @@ impl Default for ExtractConfig {
         Self {
             prompt_template: DEFAULT_EXTRACT_PROMPT_TEMPLATE.into(),
             max_tokens: 4096,
+            model: None,
         }
     }
 }
@@ -378,9 +387,12 @@ pub async fn extract_cognitive_state_with<P: Provider>(
     let schema_pretty = serde_json::to_string_pretty(schema)
         .unwrap_or_else(|_| schema.to_string());
     let system = config.prompt_template.replace("{schema}", &schema_pretty);
-    let request = InferRequest::new(messages.to_vec())
+    let mut request = InferRequest::new(messages.to_vec())
         .with_system(system)
         .with_max_tokens(config.max_tokens);
+    if let Some(ref model) = config.model {
+        request = request.with_model(model);
+    }
     let response = provider.infer(request).await?;
     let text = response.text().unwrap_or("");
     let trimmed = strip_json_fences(text);
@@ -672,6 +684,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result["key"], "value");
+    }
+
+    #[tokio::test]
+    async fn summarize_with_model_selection() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Model summary")]);
+        let messages = vec![msg("hello")];
+        let config = SummarizeConfig {
+            model: Some("claude-haiku-4-5-20251001".into()),
+            ..SummarizeConfig::default()
+        };
+        let result = summarize_with(&messages, &provider, &config).await.unwrap();
+        assert_eq!(result.text_content(), "Model summary");
     }
 
 }

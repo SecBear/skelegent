@@ -291,3 +291,73 @@ Store ops (`FlushToStore`, `InjectFromStore`) are ContextOps that mutate the con
 directly. They take an `Arc<dyn StateStore>` and operate on `ctx.messages`.
 
 The developer composes these freely: summarize then flush, inject then infer, etc.
+
+## LLM-Driven Context Management
+
+Instead of heuristic rules deciding when to compact, the LLM can manage its own
+context by using compaction primitives as tools. The model already reasons about
+which tools to call — context management is just another tool.
+
+This is powerful because the model has the context to make good decisions: it knows
+when it's running low on space, which parts of the conversation are still relevant,
+and what should be saved to long-term memory before being trimmed.
+
+### Pattern: Compaction as tools
+
+Register compaction primitives alongside domain tools:
+
+```rust
+// pseudocode — adapt to your tool registration
+let summarize_tool = Tool::new(
+    "compact_summarize",
+    "Summarize older messages to free context space. \
+     Call this when the conversation is getting long.",
+).with_param("keep_recent", "messages to preserve", json!({"type": "integer"}));
+
+let remember_tool = Tool::new(
+    "save_to_memory",
+    "Save important information to long-term memory. \
+     Use this for facts, decisions, or context you'll need later.",
+).with_param("key", "memory key", json!({"type": "string"}))
+ .with_param("content", "what to remember", json!({"type": "string"}));
+
+// Register alongside domain tools
+tools.register(summarize_tool);
+tools.register(remember_tool);
+```
+
+Handle them in tool dispatch:
+
+```rust
+match tool_call.name.as_str() {
+    "compact_summarize" => {
+        let keep = tool_call.args["keep_recent"].as_u64().unwrap_or(10) as usize;
+        let pivot = ctx.messages.len().saturating_sub(keep);
+        let summary = summarize(&ctx.messages[..pivot], &provider).await?;
+        let recent = ctx.messages.split_off(pivot);
+        ctx.messages = vec![summary];
+        ctx.messages.extend(recent);
+        format!("Compacted. Summary + {keep} recent messages retained.")
+    }
+    "save_to_memory" => {
+        let key = tool_call.args["key"].as_str().unwrap();
+        let content = tool_call.args["content"].as_str().unwrap();
+        store.write(&scope, key, json!(content)).await
+            .map_err(|e| EngineError::Custom(Box::new(e)))?;
+        format!("Saved '{key}' to long-term memory.")
+    }
+    // ... domain tools ...
+}
+```
+
+### When to use which approach
+
+| Approach | When to use |
+|---|---|
+| Pure rules (`CompactionRule`) | Predictable, no LLM cost. Good for hard limits ("never exceed 200 messages"). |
+| Explicit calls between turns | Developer controls timing. Good for session boundaries, checkpoints. |
+| LLM-as-tool-user | Model manages its own context. Good for long-running autonomous agents that need to decide what's important. |
+| Hybrid | Rule sets a hard ceiling; model does intelligent compaction below it. |
+
+The hybrid pattern is often best: a `CompactionRule` with `sliding_window(200)` as a
+safety net, plus LLM tools for intelligent management within that budget.
