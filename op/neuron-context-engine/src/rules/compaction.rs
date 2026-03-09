@@ -23,6 +23,9 @@ use crate::rule::{Rule, Trigger};
 use async_trait::async_trait;
 use layer0::context::Message;
 use layer0::lifecycle::CompactionPolicy;
+use layer0::context::Role;
+use neuron_turn::infer::InferRequest;
+use neuron_turn::provider::Provider;
 
 /// A summary produced by a compaction operation.
 #[derive(Debug, Clone)]
@@ -254,6 +257,74 @@ impl ContextOp for CompactionRule {
     }
 }
 
+/// Summarize a slice of messages into a single pinned assistant message.
+///
+/// Calls the provider with a system prompt that instructs the model to produce
+/// a concise summary preserving key decisions, unresolved questions, facts
+/// established, and current task state. The returned message has
+/// [`CompactionPolicy::Pinned`] so it survives further compaction.
+///
+/// The caller decides where to inject the result; this function does not
+/// mutate any [`crate::context::Context`].
+///
+/// # Errors
+///
+/// Returns [`EngineError::Halted`] if the provider returns an empty response.
+/// Returns [`EngineError::Provider`] if the provider call fails.
+pub async fn summarize<P: Provider>(
+    messages: &[Message],
+    provider: &P,
+) -> Result<Message, EngineError> {
+    let request = InferRequest::new(messages.to_vec())
+        .with_system(
+            "Summarize the conversation so far. Preserve: (1) key decisions made, (2) unresolved questions, (3) facts established, (4) current task state. Be concise but lose no critical information.",
+        )
+        .with_max_tokens(2048);
+    let response = provider.infer(request).await?;
+    let is_empty = response.text().is_none_or(str::is_empty);
+    if is_empty {
+        return Err(EngineError::Halted {
+            reason: "summarization produced empty response".into(),
+        });
+    }
+    let mut msg = Message::new(Role::Assistant, response.content);
+    msg.meta.policy = CompactionPolicy::Pinned;
+    Ok(msg)
+}
+
+/// Extract the current cognitive state from a slice of messages as JSON.
+///
+/// Calls the provider with a system prompt instructing it to return JSON matching
+/// the provided schema. The response text is parsed as [`serde_json::Value`] and
+/// returned directly.
+///
+/// The caller decides what to do with the result; this function does not
+/// mutate any [`crate::context::Context`].
+///
+/// # Errors
+///
+/// Returns [`EngineError::Halted`] if the response cannot be parsed as JSON.
+/// Returns [`EngineError::Provider`] if the provider call fails.
+pub async fn extract_cognitive_state<P: Provider>(
+    messages: &[Message],
+    provider: &P,
+    schema: &serde_json::Value,
+) -> Result<serde_json::Value, EngineError> {
+    let schema_pretty = serde_json::to_string_pretty(schema)
+        .unwrap_or_else(|_| schema.to_string());
+    let system = format!(
+        "Extract the current cognitive state from this conversation according to the following JSON schema. Return ONLY valid JSON, no explanation.\n\nSchema:\n{schema_pretty}"
+    );
+    let request = InferRequest::new(messages.to_vec())
+        .with_system(system)
+        .with_max_tokens(4096);
+    let response = provider.infer(request).await?;
+    let text = response.text().unwrap_or("");
+    serde_json::from_str(text).map_err(|err| EngineError::Halted {
+        reason: format!("cognitive state extraction failed to parse: {err}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +333,7 @@ mod tests {
     use layer0::content::Content;
     use layer0::context::{Message, Role};
     use layer0::lifecycle::CompactionPolicy;
+    use neuron_turn::test_utils::{TestProvider, make_text_response};
 
     /// Build a normal (non-pinned) message.
     fn msg(text: &str) -> Message {
@@ -436,4 +508,53 @@ mod tests {
             "no compaction expected under the threshold"
         );
     }
+    #[tokio::test]
+    async fn summarize_produces_pinned_message() {
+        let provider =
+            TestProvider::with_responses(vec![make_text_response("Summary: key facts here")]);
+        let messages: Vec<Message> = (0..5).map(|i| msg(&format!("msg {i}"))).collect();
+        let result = summarize(&messages, &provider).await.unwrap();
+        assert_eq!(result.role, Role::Assistant);
+        assert_eq!(result.meta.policy, CompactionPolicy::Pinned);
+        assert_eq!(result.text_content(), "Summary: key facts here");
+    }
+
+    #[tokio::test]
+    async fn summarize_empty_response_errors() {
+        let provider = TestProvider::with_responses(vec![make_text_response("")]);
+        let messages: Vec<Message> = (0..5).map(|i| msg(&format!("msg {i}"))).collect();
+        let result = summarize(&messages, &provider).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn extract_cognitive_state_parses_json() {
+        let json_response = r#"{"goal": "test", "progress": 50}"#;
+        let provider =
+            TestProvider::with_responses(vec![make_text_response(json_response)]);
+        let messages: Vec<Message> = (0..3).map(|i| msg(&format!("msg {i}"))).collect();
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string"},
+                "progress": {"type": "number"}
+            }
+        });
+        let result = extract_cognitive_state(&messages, &provider, &schema)
+            .await
+            .unwrap();
+        assert_eq!(result["goal"], "test");
+        assert_eq!(result["progress"], 50);
+    }
+
+    #[tokio::test]
+    async fn extract_cognitive_state_invalid_json_errors() {
+        let provider =
+            TestProvider::with_responses(vec![make_text_response("not json at all")]);
+        let messages: Vec<Message> = (0..3).map(|i| msg(&format!("msg {i}"))).collect();
+        let schema = serde_json::json!({});
+        let result = extract_cognitive_state(&messages, &provider, &schema).await;
+        assert!(result.is_err());
+    }
+
 }
