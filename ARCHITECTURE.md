@@ -232,6 +232,10 @@ Recursive summarization degradation is a documented failure mode: summarizing
 summaries loses critical detail after 2-3 cycles; fresh summary replacement is
 the mitigation. Message-level metadata (`Message` from `layer0::context`, `CompactionPolicy`)
 enables per-message pin/compress/discard policies.
+Compaction strategies live in the context engine as rules. They are not a separate crate
+because they share the same dependency footprint and type universe as the context engine
+itself. Pre-built strategies (sliding window, policy-aware trim, summarize-and-replace)
+compose with any StateStore backend.
 
 **Crash recovery**: Entangled with orchestration by design. Local: no recovery,
 acceptable for short tasks. Durable: replay recovery. The same operator works

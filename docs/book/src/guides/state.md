@@ -161,3 +161,84 @@ pub enum StateError {
 ```
 
 Note that `read` returns `Ok(None)` for missing keys, not `Err(NotFound)`. The `NotFound` variant is for cases where a key was expected to exist (e.g., in a higher-level API that wraps the store).
+
+
+## State, Memory, and Compaction
+
+### State and memory are the same system at different timescales
+
+`Context` is the hot path: messages in the current inference window, each governed by a
+`CompactionPolicy` (`Pinned`, `Normal`, `CompressFirst`, `DiscardWhenDone`). `StateStore` is
+the persistence path: compacted summaries, extracted facts, cross-session memories, governed
+by `StoreOptions` (tier, lifetime, content_kind, salience, ttl).
+
+The flow:
+
+1. Messages enter `Context` via `inject_message`.
+2. Context grows until a compaction rule fires.
+3. Compaction summarizes old messages (optionally via a `Provider`).
+4. The summary is written to `StateStore`.
+5. On the next turn, `search()` retrieves relevant memories.
+6. Retrieved memories are injected back into `Context`.
+
+Context is ephemeral working memory. `StateStore` is long-term memory. They are the same
+information at different points in time.
+
+### Crate boundaries follow technology, not capability
+
+Name crates after what you `cargo add` — the library or database they wrap — not after the
+abstract capability they provide. `neuron-state-sqlite` wraps SQLite. `neuron-state-cozo`
+wraps CozoDB. Names like `neuron-state-search` or `neuron-state-vector` are wrong because
+they describe capability, not technology.
+
+A single technology can provide multiple capabilities: SQLite provides KV storage, full-text
+search (FTS5), and vector search in a single crate. The `StateStore` trait defines what
+capabilities exist; each implementation does what its underlying technology supports natively.
+`search()` returning an empty `Vec` is the correct behavior for backends that do not support
+search — not an error.
+
+| Crate | KV | Text search | Vector search | Graph |
+|---|---|---|---|---|
+| `state-memory` | ✓ | ✗ | ✗ | ✗ |
+| `state-fs` | ✓ | ✗ | ✗ | ✗ |
+| `state-sqlite` (extras) | ✓ | ✓ (FTS5) | ✗ | ✗ |
+| `state-cozo` (extras) | ✓ | ✓ | ✓ (HNSW) | ✓ (Datalog) |
+
+### Compaction strategies are ContextOps, not crates
+
+Compaction strategies implement `ContextOp`, live in
+`neuron-context-engine/src/rules/compaction.rs`, and activate via `Rule` + `Trigger` — the
+same mechanism as `BudgetGuard` and `TelemetryRecorder`. They are not a separate crate
+because they share the same dependency footprint, the same type universe (`Context`,
+`Message`, `CompactionPolicy`), and the same activation mechanism as the rest of the context
+engine. Strategies optionally accept a `Provider` for summarization and a `StateStore` for
+persistence.
+
+The `Compact` op in `ops/compact.rs` is the closure-based primitive. Pre-built strategies in
+`rules/compaction.rs` — sliding window, policy-aware trim, summarize-and-replace, cognitive
+state extract — compose on top of it.
+
+### Patterns decompose into strategy + storage + rule
+
+Patterns like memory-augmented generation or cognitive state extraction are not crates. They
+are configurations: a compaction strategy + a `StateStore` backend + an assembly rule. Users
+compose them at construction time:
+
+```rust,no_run
+ctx.add_rule(CompactionRule::new(
+    CompactionConfig {
+        strategy: Strategy::SummarizeAndReplace { provider: provider.clone() },
+        store: Some(state_store.clone()),
+        ..Default::default()
+    }
+));
+```
+
+The framework provides the primitives. The application assembles the pattern.
+
+### Format is configuration, not crate boundary
+
+JSON versus markdown on the filesystem is a constructor parameter on `FsStore`, not a reason
+for a separate crate. HashMap versus LRU eviction in memory is a constructor parameter on
+`MemoryStore`. If two behaviors differ only in a parameter value, they belong in the same
+crate with a richer constructor — not in separate crates.

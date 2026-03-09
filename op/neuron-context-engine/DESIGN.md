@@ -234,3 +234,36 @@ src/
     telemetry.rs  — TelemetryRecorder
   react.rs        — react_loop(), ReactLoopConfig
 ```
+
+
+## Compaction
+
+### The primitive
+
+`Compact` in `ops/compact.rs` takes a closure `FnMut(&[Message]) -> Vec<Message>` and applies
+it to the context's message list. This is the building block all pre-built strategies use
+internally.
+
+### Pre-built strategies
+
+`rules/compaction.rs` provides `CompactionRule` — a `Rule` that wraps a named strategy and
+fires via a `When` trigger (predicate on message count or estimated token budget):
+
+| Strategy | Provider needed | StateStore needed | What it does |
+|---|---|---|---|
+| `sliding_window` | no | no | Retains the N most recent messages; drops older ones |
+| `policy_trim` | no | no | Drops messages by `CompactionPolicy` (`DiscardWhenDone` first, then `CompressFirst`) |
+| `summarize` | yes | no | Summarizes a window of messages into a single assistant message |
+| `cognitive_state_extract` | yes | yes | Extracts facts/summaries and writes them to `StateStore`; retrieval happens at assembly time |
+
+`CompactionRule` fires when its `When` predicate returns true. Typical predicates: message
+count exceeds a threshold, or estimated token count crosses a fraction of the model's context
+window.
+
+### Why not a separate crate
+
+Strategies share `Context`, `Message`, and `CompactionPolicy` from `layer0` — the same types
+the context engine already imports. Moving them to a separate crate would add a crate
+boundary without adding isolation: the dependency footprint is identical and the type universe
+is shared. The activation mechanism (`Rule` + `Trigger`) is defined in the context engine
+itself. All of this belongs together.
