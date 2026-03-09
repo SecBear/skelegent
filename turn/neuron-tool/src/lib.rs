@@ -120,6 +120,17 @@ pub trait ToolDyn: Send + Sync {
         None
     }
 
+    /// Whether this tool requires human approval before execution.
+    ///
+    /// When `true`, the ReAct loop will emit [`Effect::ToolApprovalRequired`]
+    /// and exit with [`ExitReason::AwaitingApproval`] instead of executing
+    /// the tool directly. The calling layer decides how to handle approval.
+    ///
+    /// Default is `false` — tools execute immediately.
+    fn requires_approval(&self) -> bool {
+        false
+    }
+
     /// Optional concurrency hint used by planners/deciders.
     ///
     /// Default is Exclusive to preserve backward-compatible behavior.
@@ -173,6 +184,10 @@ impl ToolDyn for AliasedTool {
         self.inner.call(input, ctx)
     }
 
+    fn requires_approval(&self) -> bool {
+        self.inner.requires_approval()
+    }
+
     fn concurrency_hint(&self) -> ToolConcurrencyHint {
         self.inner.concurrency_hint()
     }
@@ -218,6 +233,20 @@ impl ToolRegistry {
     /// Whether the registry is empty.
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+
+    /// Create a new registry containing only tools that pass the predicate.
+    ///
+    /// Useful for dynamic tool availability — filter tools per-turn based on
+    /// conversation state, user permissions, or task phase.
+    pub fn filtered(&self, predicate: impl Fn(&dyn ToolDyn) -> bool) -> ToolRegistry {
+        let tools = self
+            .tools
+            .iter()
+            .filter(|(_, tool)| predicate(tool.as_ref()))
+            .map(|(name, tool)| (name.clone(), Arc::clone(tool)))
+            .collect();
+        ToolRegistry { tools }
     }
 }
 

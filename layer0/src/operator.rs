@@ -124,6 +124,12 @@ pub enum ExitReason {
         /// Human-readable reason string supplied by the provider or runtime.
         reason: String,
     },
+    /// One or more tool calls require human approval before execution.
+    /// The calling layer should inspect [`OperatorOutput::effects`] for
+    /// [`Effect::ToolApprovalRequired`] entries, obtain approval, then
+    /// either execute the tools and re-enter the loop, or inject a denial
+    /// message and re-enter.
+    AwaitingApproval,
     /// Future exit reasons.
     Custom(String),
 }

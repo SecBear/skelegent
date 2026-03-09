@@ -65,6 +65,32 @@ impl TestProvider {
         self
     }
 
+    /// Queue a response with multiple tool calls.
+    pub fn respond_with_tool_calls(
+        &self,
+        calls: Vec<(&str, &str, serde_json::Value)>,
+    ) -> &Self {
+        let tool_calls = calls
+            .into_iter()
+            .map(|(name, id, input)| crate::infer::ToolCall {
+                id: id.into(),
+                name: name.into(),
+                input,
+            })
+            .collect();
+        let response = InferResponse {
+            content: Content::text(""),
+            tool_calls,
+            stop_reason: StopReason::ToolUse,
+            usage: TokenUsage::default(),
+            model: "test-model".into(),
+            cost: None,
+            truncated: None,
+        };
+        self.responses.lock().unwrap().push_back(response);
+        self
+    }
+
     /// How many times `infer()` has been called.
     pub fn call_count(&self) -> usize {
         self.call_count.load(Ordering::SeqCst)

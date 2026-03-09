@@ -141,6 +141,7 @@ impl BuiltAgent {
             model: Some(self.model.clone()),
             max_tokens: Some(self.max_tokens),
             temperature: None,
+            tool_filter: None,
         };
 
         self.provider

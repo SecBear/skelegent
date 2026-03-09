@@ -118,6 +118,7 @@ fn react_config() -> ReactLoopConfig {
         model: Some("mock-model".into()),
         max_tokens: Some(256),
         temperature: None,
+        tool_filter: None,
     }
 }
 

@@ -113,6 +113,18 @@ pub enum Effect {
         relation: String,
     },
 
+    /// A tool call requires human approval before execution.
+    /// The operator loop should exit with [`ExitReason::AwaitingApproval`]
+    /// and the calling layer decides whether to approve, deny, or modify.
+    ToolApprovalRequired {
+        /// Name of the tool requesting approval.
+        tool_name: String,
+        /// Provider-assigned call ID for correlation.
+        call_id: String,
+        /// The input the model wants to send to the tool.
+        input: serde_json::Value,
+    },
+
     /// Future effect types. Named string + arbitrary payload.
     /// Use this for domain-specific effects that aren't general
     /// enough for a named variant.
