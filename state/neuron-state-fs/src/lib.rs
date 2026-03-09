@@ -2,7 +2,7 @@
 //! Filesystem-backed implementation of layer0's StateStore trait.
 //!
 //! Each scope maps to a subdirectory under the root. Keys are
-//! URL-encoded and stored as `.json` files within the scope directory.
+//! URL-encoded and stored as `.json` or `.md` files within the scope directory.
 //! Provides true persistence across process restarts.
 
 use async_trait::async_trait;
@@ -12,29 +12,66 @@ use layer0::state::{SearchResult, StateStore, StoreOptions};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Serialization format for stored values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Format {
+    /// JSON (default). Values stored as `.json` files.
+    #[default]
+    Json,
+    /// Markdown. Values stored as `.md` files.
+    ///
+    /// String values are written as raw text. All other JSON types are
+    /// serialized as a fenced JSON code block (` ```json … ``` `).
+    /// On read, content that parses as valid JSON is returned as-is;
+    /// content that does not is wrapped as a JSON string value.
+    Markdown,
+}
+
+impl Format {
+    /// Returns the file extension for data files in this format, without the leading dot.
+    fn ext(self) -> &'static str {
+        match self {
+            Format::Json => "json",
+            Format::Markdown => "md",
+        }
+    }
+}
+
 /// Filesystem-backed state store.
 ///
 /// Directory layout:
 /// ```text
 /// root/
 ///   <scope-hash>/
-///     <url-encoded-key>.json
-///     <url-encoded-key>_meta.json  (optional TTL sidecar)
+///     <url-encoded-key>.json        (or .md when using Format::Markdown)
+///     <url-encoded-key>_meta.json   (optional TTL sidecar — always JSON)
 /// ```
 ///
 /// Suitable for development, single-machine deployments, and cases
 /// where data must survive process restarts without a database.
 pub struct FsStore {
     root: PathBuf,
+    format: Format,
 }
 
 impl FsStore {
     /// Create a new filesystem store rooted at the given directory.
     ///
-    /// The directory is created lazily on first write.
+    /// Defaults to [`Format::Json`]. The directory is created lazily on first write.
     pub fn new(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
+            format: Format::default(),
+        }
+    }
+
+    /// Create a new filesystem store with the given serialization format.
+    ///
+    /// The directory is created lazily on first write.
+    pub fn with_format(root: &Path, format: Format) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            format,
         }
     }
 }
@@ -54,7 +91,7 @@ fn scope_dir_name(scope: &Scope) -> String {
 
 /// Encode a key into a percent-encoded filename stem (without extension).
 ///
-/// The data file for a key is `{stem}.json`; its TTL sidecar is `{stem}_meta.json`.
+/// The data file for a key is `{stem}.{ext}`; its TTL sidecar is `{stem}_meta.json`.
 fn key_to_filename(key: &str) -> String {
     let mut encoded = String::new();
     for ch in key.chars() {
@@ -70,9 +107,12 @@ fn key_to_filename(key: &str) -> String {
     encoded
 }
 
-/// Decode a filename (with `.json` extension) back to a key.
-fn filename_to_key(filename: &str) -> Option<String> {
-    let name = filename.strip_suffix(".json")?;
+/// Decode a filename back to a key, stripping the given extension (without leading dot).
+///
+/// Returns `None` if the filename does not end with `.{ext}`.
+fn filename_to_key(filename: &str, ext: &str) -> Option<String> {
+    let suffix = format!(".{ext}");
+    let name = filename.strip_suffix(&suffix)?;
     let mut result = Vec::new();
     let bytes = name.as_bytes();
     let mut i = 0;
@@ -108,8 +148,8 @@ fn is_expired(meta_path: &Path) -> bool {
     now >= expires_at
 }
 
-/// Read the raw contents of a data file, without any expiry check.
-async fn read_raw(path: &Path) -> Result<Option<serde_json::Value>, StateError> {
+/// Read a JSON data file, returning `None` if absent.
+async fn read_json(path: &Path) -> Result<Option<serde_json::Value>, StateError> {
     match tokio::fs::read_to_string(path).await {
         Ok(contents) => {
             let value: serde_json::Value = serde_json::from_str(&contents)
@@ -121,6 +161,67 @@ async fn read_raw(path: &Path) -> Result<Option<serde_json::Value>, StateError> 
     }
 }
 
+/// Read a Markdown data file, returning `None` if absent.
+///
+/// The read order is:
+///   1. Try to parse the raw content as JSON.
+///   2. Try to strip a fenced JSON code block (` ```json…``` `) and parse the inner text.
+///   3. Fall back to wrapping the raw content as [`serde_json::Value::String`].
+async fn read_md(path: &Path) -> Result<Option<serde_json::Value>, StateError> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(contents) => {
+            // 1. Try raw JSON parse (handles bare strings stored as quoted JSON, etc.)
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) {
+                return Ok(Some(value));
+            }
+            // 2. Try fenced JSON code block produced by value_to_markdown.
+            if let Some(inner) = strip_json_fence(&contents)
+                && let Ok(value) = serde_json::from_str::<serde_json::Value>(inner)
+            {
+                return Ok(Some(value));
+            }
+            // 3. Treat the raw content as a plain string value.
+            Ok(Some(serde_json::Value::String(contents)))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(StateError::WriteFailed(e.to_string())),
+    }
+}
+
+/// Strip the ` ```json\n…\n``` ` fence from Markdown content and return the inner text.
+fn strip_json_fence(s: &str) -> Option<&str> {
+    let inner = s.strip_prefix("```json\n")?;
+    inner.strip_suffix("\n```")
+}
+
+/// Serialize a JSON value to Markdown text.
+///
+/// String values are written as raw text. All other types are wrapped in a
+/// fenced JSON code block.
+fn value_to_markdown(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => {
+            let pretty = serde_json::to_string_pretty(other).unwrap_or_default();
+            format!("```json\n{pretty}\n```")
+        }
+    }
+}
+
+/// Count non-overlapping occurrences of `needle` within `haystack`.
+fn count_occurrences(haystack: &str, needle: &str) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+    let mut count = 0;
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        count += 1;
+        start += pos + needle.len();
+    }
+    count
+}
+
 #[async_trait]
 impl StateStore for FsStore {
     async fn read(
@@ -130,7 +231,8 @@ impl StateStore for FsStore {
     ) -> Result<Option<serde_json::Value>, StateError> {
         let scope_path = self.root.join(scope_dir_name(scope));
         let stem = key_to_filename(key);
-        let data_path = scope_path.join(format!("{stem}.json"));
+        let ext = self.format.ext();
+        let data_path = scope_path.join(format!("{stem}.{ext}"));
         let meta_path = scope_path.join(format!("{stem}_meta.json"));
 
         // Check expiry lazily: if expired, delete both files and return None.
@@ -140,7 +242,10 @@ impl StateStore for FsStore {
             return Ok(None);
         }
 
-        read_raw(&data_path).await
+        match self.format {
+            Format::Json => read_json(&data_path).await,
+            Format::Markdown => read_md(&data_path).await,
+        }
     }
 
     async fn write(
@@ -155,9 +260,15 @@ impl StateStore for FsStore {
             .map_err(|e| StateError::WriteFailed(e.to_string()))?;
 
         let stem = key_to_filename(key);
-        let path = dir.join(format!("{stem}.json"));
-        let contents = serde_json::to_string_pretty(&value)
-            .map_err(|e| StateError::Serialization(e.to_string()))?;
+        let ext = self.format.ext();
+        let path = dir.join(format!("{stem}.{ext}"));
+
+        let contents = match self.format {
+            Format::Json => serde_json::to_string_pretty(&value)
+                .map_err(|e| StateError::Serialization(e.to_string()))?,
+            Format::Markdown => value_to_markdown(&value),
+        };
+
         tokio::fs::write(&path, contents)
             .await
             .map_err(|e| StateError::WriteFailed(e.to_string()))?;
@@ -167,7 +278,8 @@ impl StateStore for FsStore {
     async fn delete(&self, scope: &Scope, key: &str) -> Result<(), StateError> {
         let dir = self.root.join(scope_dir_name(scope));
         let stem = key_to_filename(key);
-        let path = dir.join(format!("{stem}.json"));
+        let ext = self.format.ext();
+        let path = dir.join(format!("{stem}.{ext}"));
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -177,6 +289,9 @@ impl StateStore for FsStore {
 
     async fn list(&self, scope: &Scope, prefix: &str) -> Result<Vec<String>, StateError> {
         let dir = self.root.join(scope_dir_name(scope));
+        let ext = self.format.ext();
+        let data_suffix = format!(".{ext}");
+
         let mut entries = match tokio::fs::read_dir(&dir).await {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
@@ -192,11 +307,12 @@ impl StateStore for FsStore {
             if let Some(filename) = entry.file_name().to_str()
                 // Explicitly skip TTL sidecar files — they must not appear as keys.
                 && !filename.ends_with("_meta.json")
-                && let Some(key) = filename_to_key(filename)
+                && filename.ends_with(&data_suffix)
+                && let Some(key) = filename_to_key(filename, ext)
                 && key.starts_with(prefix)
             {
                 // Skip expired entries without deleting them (lazy cleanup on read).
-                let stem = filename.strip_suffix(".json").unwrap_or(filename);
+                let stem = filename.strip_suffix(&data_suffix).unwrap_or(filename);
                 let meta_path = dir.join(format!("{stem}_meta.json"));
                 if meta_path.exists() && is_expired(&meta_path) {
                     continue;
@@ -209,12 +325,64 @@ impl StateStore for FsStore {
 
     async fn search(
         &self,
-        _scope: &Scope,
-        _query: &str,
-        _limit: usize,
+        scope: &Scope,
+        query: &str,
+        limit: usize,
     ) -> Result<Vec<SearchResult>, StateError> {
-        // Filesystem store does not support semantic search.
-        Ok(vec![])
+        if query.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let keys = self.list(scope, "").await?;
+        let query_lower = query.to_lowercase();
+
+        // When the `regex` feature is enabled, attempt to compile the query as a
+        // regex pattern and fall back to substring matching if compilation fails.
+        #[cfg(feature = "regex")]
+        let compiled_regex = regex::Regex::new(query).ok();
+
+        let mut results = Vec::new();
+
+        for key in keys {
+            let Some(value) = self.read(scope, &key).await? else {
+                continue;
+            };
+
+            let text = match &value {
+                serde_json::Value::String(s) => s.clone(),
+                other => serde_json::to_string(other).unwrap_or_default(),
+            };
+
+            let match_count = {
+                #[cfg(feature = "regex")]
+                {
+                    if let Some(ref re) = compiled_regex {
+                        re.find_iter(&text).count()
+                    } else {
+                        count_occurrences(&text.to_lowercase(), &query_lower)
+                    }
+                }
+                #[cfg(not(feature = "regex"))]
+                {
+                    count_occurrences(&text.to_lowercase(), &query_lower)
+                }
+            };
+
+            if match_count > 0 {
+                let score = if text.is_empty() {
+                    0.0
+                } else {
+                    match_count as f64 / text.len() as f64
+                };
+                let mut result = SearchResult::new(key, score);
+                result.snippet = Some(text.chars().take(200).collect());
+                results.push(result);
+            }
+        }
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        Ok(results)
     }
 
     async fn write_hinted(
@@ -228,6 +396,7 @@ impl StateStore for FsStore {
         self.write(scope, key, value).await?;
 
         // If a TTL was specified, write a sidecar recording the expiry timestamp.
+        // TTL sidecars always use .json regardless of the store's data format.
         if let Some(ttl) = options.ttl {
             let dir = self.root.join(scope_dir_name(scope));
             let stem = key_to_filename(key);
@@ -268,7 +437,7 @@ mod tests {
         for key in &keys {
             let stem = key_to_filename(key);
             let filename = format!("{stem}.json");
-            let decoded = filename_to_key(&filename).unwrap();
+            let decoded = filename_to_key(&filename, "json").unwrap();
             assert_eq!(*key, decoded, "roundtrip failed for {key}");
         }
     }
@@ -299,7 +468,7 @@ mod tests {
 
     #[test]
     fn filename_to_key_rejects_non_json() {
-        let result = filename_to_key("test.txt");
+        let result = filename_to_key("test.txt", "json");
         assert!(result.is_none());
     }
 
@@ -513,5 +682,151 @@ mod tests {
             !keys.contains(&"expiring_b".to_string()),
             "expiring_b must not appear after expiry"
         );
+    }
+
+    // --- Format::Markdown tests ---
+
+    #[tokio::test]
+    async fn markdown_write_and_read_string() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::with_format(dir.path(), Format::Markdown);
+        let scope = Scope::Global;
+
+        store
+            .write(&scope, "note", json!("Hello, world!"))
+            .await
+            .unwrap();
+
+        // Verify raw file contains the string without JSON quoting.
+        let stem = key_to_filename("note");
+        let raw = std::fs::read_to_string(
+            dir.path()
+                .join(scope_dir_name(&scope))
+                .join(format!("{stem}.md")),
+        )
+        .unwrap();
+        assert_eq!(raw, "Hello, world!");
+
+        // Round-trip through the store returns the original value.
+        let val = store.read(&scope, "note").await.unwrap();
+        assert_eq!(val, Some(json!("Hello, world!")));
+    }
+
+    #[tokio::test]
+    async fn markdown_write_and_read_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::with_format(dir.path(), Format::Markdown);
+        let scope = Scope::Global;
+
+        let obj = json!({"name": "Alice", "age": 30});
+        store.write(&scope, "profile", obj.clone()).await.unwrap();
+
+        // Verify raw file is a fenced JSON code block.
+        let stem = key_to_filename("profile");
+        let raw = std::fs::read_to_string(
+            dir.path()
+                .join(scope_dir_name(&scope))
+                .join(format!("{stem}.md")),
+        )
+        .unwrap();
+        assert!(raw.starts_with("```json\n"), "expected fenced code block");
+        assert!(raw.ends_with("\n```"), "expected closing fence");
+
+        // Round-trip must reconstruct the original JSON object.
+        let val = store.read(&scope, "profile").await.unwrap();
+        assert_eq!(val, Some(obj));
+    }
+
+    #[tokio::test]
+    async fn markdown_list_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::with_format(dir.path(), Format::Markdown);
+        let scope = Scope::Global;
+
+        store.write(&scope, "alpha", json!("a")).await.unwrap();
+        store.write(&scope, "beta", json!("b")).await.unwrap();
+
+        let mut keys = store.list(&scope, "").await.unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["alpha", "beta"]);
+    }
+
+    // --- Search tests ---
+
+    #[tokio::test]
+    async fn search_finds_substring() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::new(dir.path());
+        let scope = Scope::Global;
+
+        store
+            .write(&scope, "a", json!("the quick brown fox"))
+            .await
+            .unwrap();
+        store
+            .write(&scope, "b", json!("jumped over the lazy dog"))
+            .await
+            .unwrap();
+        store
+            .write(&scope, "c", json!("completely unrelated content"))
+            .await
+            .unwrap();
+
+        let results = store.search(&scope, "fox", 10).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].key, "a");
+    }
+
+    #[tokio::test]
+    async fn search_case_insensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::new(dir.path());
+        let scope = Scope::Global;
+
+        store
+            .write(&scope, "k1", json!("Hello World"))
+            .await
+            .unwrap();
+
+        let results = store.search(&scope, "hello", 10).await.unwrap();
+        assert_eq!(results.len(), 1, "case-insensitive match should find Hello");
+
+        let results2 = store.search(&scope, "WORLD", 10).await.unwrap();
+        assert_eq!(results2.len(), 1, "case-insensitive match should find World");
+    }
+
+    #[tokio::test]
+    async fn search_respects_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::new(dir.path());
+        let scope = Scope::Global;
+
+        for i in 0..10 {
+            store
+                .write(&scope, &format!("key{i}"), json!(format!("needle content {i}")))
+                .await
+                .unwrap();
+        }
+
+        let results = store.search(&scope, "needle", 3).await.unwrap();
+        assert_eq!(results.len(), 3, "limit of 3 must be respected");
+    }
+
+    #[tokio::test]
+    async fn search_returns_empty_for_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::new(dir.path());
+        let scope = Scope::Global;
+
+        store
+            .write(&scope, "k1", json!("some content here"))
+            .await
+            .unwrap();
+
+        let results = store
+            .search(&scope, "xyzzy_nonexistent", 10)
+            .await
+            .unwrap();
+        assert!(results.is_empty());
     }
 }

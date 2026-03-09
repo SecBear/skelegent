@@ -156,20 +156,25 @@ async fn scopes_are_isolated() {
 // --- Search ---
 
 #[tokio::test]
-async fn search_returns_empty_vec() {
+async fn search_finds_matching_value() {
     let dir = tempfile::tempdir().unwrap();
     let store = FsStore::new(dir.path());
     let scope = session_scope("s1");
 
     store
-        .write(&scope, "key1", serde_json::json!("hello"))
+        .write(&scope, "key1", serde_json::json!("hello world"))
+        .await
+        .unwrap();
+    store
+        .write(&scope, "key2", serde_json::json!("unrelated"))
         .await
         .unwrap();
 
     let results = StateStore::search(&store, &scope, "hello", 10)
         .await
         .unwrap();
-    assert!(results.is_empty());
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].key, "key1");
 }
 
 // --- Object safety ---
