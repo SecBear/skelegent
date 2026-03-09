@@ -320,9 +320,24 @@ pub async fn extract_cognitive_state<P: Provider>(
         .with_max_tokens(4096);
     let response = provider.infer(request).await?;
     let text = response.text().unwrap_or("");
-    serde_json::from_str(text).map_err(|err| EngineError::Halted {
+    let trimmed = strip_json_fences(text);
+    serde_json::from_str(trimmed).map_err(|err| EngineError::Halted {
         reason: format!("cognitive state extraction failed to parse: {err}"),
     })
+}
+
+/// Strip markdown code fences from a JSON response.
+///
+/// Models often wrap JSON in ````json\n...\n```` even when instructed not to.
+fn strip_json_fences(text: &str) -> &str {
+    let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("```json") {
+        rest.trim().strip_suffix("```").unwrap_or(rest.trim()).trim()
+    } else if let Some(rest) = trimmed.strip_prefix("```") {
+        rest.trim().strip_suffix("```").unwrap_or(rest.trim()).trim()
+    } else {
+        trimmed
+    }
 }
 
 #[cfg(test)]

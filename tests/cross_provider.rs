@@ -261,3 +261,80 @@ async fn ollama_streaming_text() {
         response.usage.input_tokens, response.usage.output_tokens
     );
 }
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Context engineering integration tests
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[tokio::test]
+#[ignore]
+async fn anthropic_summarize_live() {
+    use neuron_context_engine::rules::compaction::summarize;
+
+    let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
+    let provider = AnthropicProvider::new(api_key);
+
+    // Build a conversation worth summarizing
+    let messages = vec![
+        Message::new(Role::User, Content::text("I'm building an agent framework in Rust called neuron.")),
+        Message::new(Role::Assistant, Content::text("That sounds interesting! What are the key design decisions?")),
+        Message::new(Role::User, Content::text("We use a 6-layer architecture: layer0 (types), turn (inference), tool, context-engine, orch, and neuron (top-level). Provider is RPITIT, not object-safe.")),
+        Message::new(Role::Assistant, Content::text("The RPITIT approach for Provider gives you zero-cost generics. What about context management?")),
+        Message::new(Role::User, Content::text("Context engineering is composable ops. ContextOp trait, rules with triggers, pure functions like sliding_window and policy_trim, plus async strategies like summarize that take a Provider.")),
+    ];
+
+    let summary = summarize(&messages, &provider).await.expect("summarize should succeed");
+
+    // Verify the summary is a valid message
+    assert_eq!(summary.role, Role::Assistant);
+    let text = summary.text_content();
+    assert!(!text.is_empty(), "summary should not be empty");
+    println!("Summary ({} chars): {}", text.len(), &text[..text.len().min(200)]);
+
+    // Summary should be pinned (survives further compaction)
+    assert_eq!(
+        summary.meta.policy,
+        layer0::lifecycle::CompactionPolicy::Pinned,
+        "summary should be pinned"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn anthropic_extract_cognitive_state_live() {
+    use neuron_context_engine::rules::compaction::extract_cognitive_state;
+
+    let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
+    let provider = AnthropicProvider::new(api_key);
+
+    let messages = vec![
+        Message::new(Role::User, Content::text("We decided to use SQLite for the state store. The API design is complete but testing is still pending.")),
+        Message::new(Role::Assistant, Content::text("Good choice. SQLite gives you FTS5 for text search. What about vector search?")),
+        Message::new(Role::User, Content::text("Vector search will be optional behind a feature flag using sqlite-vec.")),
+    ];
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "decisions": { "type": "array", "items": { "type": "string" } },
+            "open_questions": { "type": "array", "items": { "type": "string" } },
+            "current_status": { "type": "string" }
+        }
+    });
+
+    let state = extract_cognitive_state(&messages, &provider, &schema)
+        .await
+        .expect("extract_cognitive_state should succeed");
+
+    println!("Cognitive state: {}", serde_json::to_string_pretty(&state).unwrap());
+
+    // Should be a JSON object
+    assert!(state.is_object(), "cognitive state should be a JSON object");
+    // Should have at least some of the schema fields
+    let obj = state.as_object().unwrap();
+    assert!(
+        obj.contains_key("decisions") || obj.contains_key("open_questions") || obj.contains_key("current_status"),
+        "cognitive state should contain at least one schema field"
+    );
+}
