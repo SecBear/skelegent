@@ -2,17 +2,17 @@
 //!
 //! Runs inside a Docker container and exposes:
 //! - A gRPC server (tonic) implementing the Runner service on port 50051
-//! - An HTTP healthcheck endpoint (axum) on port 8080 for Docker HEALTHCHECK
+//! - HTTP/JSON endpoints (axum) on port 8080 for healthcheck and convenience API
 //!
 //! The runner authenticates requests via `session_key`, validates the
 //! `EnvironmentSpec`, loads the requested operator from a compiled-in
 //! registry, executes it, and returns the result.
 
+mod http_adapter;
 mod registry;
 
 use std::sync::Arc;
 
-use axum::{routing::get, Router};
 use tokio::signal;
 use tonic::transport::Server as TonicServer;
 use tonic::{Request, Response, Status};
@@ -31,14 +31,52 @@ use registry::OperatorRegistry;
 
 /// gRPC port the runner listens on inside the container.
 const GRPC_PORT: u16 = 50051;
-/// HTTP port for Docker healthcheck.
+/// HTTP port for healthcheck and JSON API.
 const HTTP_PORT: u16 = 8080;
+
+// ---------------------------------------------------------------------------
+// Transport-agnostic error type
+// ---------------------------------------------------------------------------
+
+/// Errors from core runner logic, independent of transport (gRPC / HTTP).
+pub enum CoreError {
+    Unauthenticated(String),
+    NotFound(String),
+    InvalidArgument(String),
+    Internal(String),
+}
+
+impl CoreError {
+    pub fn message(&self) -> &str {
+        match self {
+            CoreError::Unauthenticated(m)
+            | CoreError::NotFound(m)
+            | CoreError::InvalidArgument(m)
+            | CoreError::Internal(m) => m,
+        }
+    }
+}
+
+impl From<CoreError> for Status {
+    fn from(err: CoreError) -> Self {
+        match err {
+            CoreError::Unauthenticated(m) => Status::unauthenticated(m),
+            CoreError::NotFound(m) => Status::not_found(m),
+            CoreError::InvalidArgument(m) => Status::invalid_argument(m),
+            CoreError::Internal(m) => Status::internal(m),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core runner service
+// ---------------------------------------------------------------------------
 
 /// Core runner service implementation.
 ///
 /// Holds a compiled-in operator registry and validates requests
 /// against an expected session key set at startup.
-struct RunnerServiceImpl {
+pub struct RunnerServiceImpl {
     registry: Arc<OperatorRegistry>,
     expected_session_key: String,
 }
@@ -51,36 +89,68 @@ impl RunnerServiceImpl {
         }
     }
 
-    /// Validate session key. Returns `Status::unauthenticated` on mismatch.
-    fn validate_session_key(&self, provided: &str) -> Result<(), Status> {
+    /// Validate session key.
+    pub fn validate_session_key(&self, provided: &str) -> Result<(), CoreError> {
         if provided.is_empty() || provided != self.expected_session_key {
-            return Err(Status::unauthenticated("invalid session key"));
+            return Err(CoreError::Unauthenticated("invalid session key".into()));
         }
         Ok(())
     }
 
     /// Deserialize `OperatorInput` from JSON bytes.
-    fn deserialize_input(
-        &self,
-        bytes: &[u8],
-    ) -> Result<layer0::OperatorInput, Status> {
+    fn deserialize_input(&self, bytes: &[u8]) -> Result<layer0::OperatorInput, CoreError> {
         serde_json::from_slice(bytes).map_err(|e| {
             warn!("failed to deserialize OperatorInput: {e}");
-            Status::invalid_argument("failed to deserialize OperatorInput")
+            CoreError::InvalidArgument("failed to deserialize OperatorInput".into())
         })
     }
 
-    /// Look up an operator by id. Returns `Status::not_found` if missing.
+    /// Look up an operator by id.
     fn resolve_operator(
         &self,
         operator_id: &str,
-    ) -> Result<Arc<dyn layer0::Operator>, Status> {
+    ) -> Result<Arc<dyn layer0::Operator>, CoreError> {
         self.registry
             .get(operator_id)
             .cloned()
-            .ok_or_else(|| Status::not_found(format!("operator not found: {operator_id}")))
+            .ok_or_else(|| CoreError::NotFound(format!("operator not found: {operator_id}")))
+    }
+
+    /// Shared execute pipeline used by both gRPC and HTTP transports.
+    ///
+    /// Takes raw `input_bytes` (JSON-encoded `OperatorInput`), dispatches
+    /// to the named operator, and returns serialized `OperatorOutput`.
+    pub async fn execute_core(
+        &self,
+        operator_id: &str,
+        input_bytes: &[u8],
+    ) -> Result<Vec<u8>, CoreError> {
+        let input = self.deserialize_input(input_bytes)?;
+        let operator = self.resolve_operator(operator_id)?;
+
+        // Spawn in a task to catch panics from operator implementations.
+        let handle = tokio::task::spawn(async move { operator.execute(input).await });
+
+        let result = handle.await.map_err(|join_err| {
+            error!("operator panicked: {join_err}");
+            CoreError::Internal("operator execution failed".into())
+        })?;
+
+        let output = result.map_err(|op_err| {
+            error!("operator error: {op_err}");
+            CoreError::Internal("operator execution failed".into())
+        })?;
+
+        serde_json::to_vec(&output).map_err(|e| {
+            error!("failed to serialize OperatorOutput: {e}");
+            CoreError::Internal("failed to serialize operator output".into())
+        })
     }
 }
+
+// ---------------------------------------------------------------------------
+// gRPC transport (tonic)
+// ---------------------------------------------------------------------------
 
 #[tonic::async_trait]
 impl Runner for RunnerServiceImpl {
@@ -91,26 +161,7 @@ impl Runner for RunnerServiceImpl {
         let req = request.into_inner();
 
         self.validate_session_key(&req.session_key)?;
-        let input = self.deserialize_input(&req.input)?;
-        let operator = self.resolve_operator(&req.operator)?;
-
-        // Spawn in a task to catch panics from operator implementations.
-        let handle = tokio::task::spawn(async move { operator.execute(input).await });
-
-        let result = handle.await.map_err(|join_err| {
-            error!("operator panicked: {join_err}");
-            Status::internal("operator execution failed")
-        })?;
-
-        let output = result.map_err(|op_err| {
-            error!("operator error: {op_err}");
-            Status::internal("operator execution failed")
-        })?;
-
-        let output_bytes = serde_json::to_vec(&output).map_err(|e| {
-            error!("failed to serialize OperatorOutput: {e}");
-            Status::internal("failed to serialize operator output")
-        })?;
+        let output_bytes = self.execute_core(&req.operator, &req.input).await?;
 
         Ok(Response::new(ExecuteResponse {
             output: output_bytes,
@@ -197,10 +248,9 @@ impl Runner for RunnerServiceImpl {
     }
 }
 
-/// HTTP healthcheck handler for Docker HEALTHCHECK.
-async fn health_handler() -> &'static str {
-    "ok"
-}
+// ---------------------------------------------------------------------------
+// Entrypoint
+// ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -226,11 +276,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("starting skg-runner grpc={grpc_addr} http={http_addr}");
 
-    let runner = RunnerServiceImpl::new(registry, session_key);
+    let runner = Arc::new(RunnerServiceImpl::new(registry, session_key));
 
-    // Spawn HTTP healthcheck server.
+    // Spawn HTTP server (healthcheck + JSON API).
+    let http_runner = Arc::clone(&runner);
     let http_server = tokio::spawn(async move {
-        let app = Router::new().route("/health", get(health_handler));
+        let app = http_adapter::router(http_runner);
         let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown_signal())
@@ -240,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run gRPC server.
     TonicServer::builder()
-        .add_service(RunnerServer::new(runner))
+        .add_service(RunnerServer::from_arc(runner))
         .serve_with_shutdown(grpc_addr, shutdown_signal())
         .await?;
 
