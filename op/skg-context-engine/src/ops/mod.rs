@@ -2,6 +2,8 @@
 
 pub mod cognitive;
 
+pub mod memory_note;
+pub mod qualify;
 pub mod compact;
 pub mod inject;
 pub mod response;
@@ -12,6 +14,8 @@ pub use cognitive::{
     CognitiveError, CognitiveState, CommitCognitiveState, CompressCognitiveStateConfig,
     DEFAULT_CCS_PROMPT, Entity, Relation,
 };
+pub use memory_note::MemoryNote;
+pub use qualify::{DEFAULT_QUALIFY_PROMPT, QualifyRecallConfig, RecalledArtifact};
 pub use compact::{Compact, CompactResult};
 pub use inject::{InjectMessage, InjectMessages, InjectSystem};
 pub use response::AppendResponse;
