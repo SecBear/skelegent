@@ -270,7 +270,7 @@ boundaries. An Orchestrator dispatch and a StateStore write are
 fundamentally different operations — different failure modes,
 different retry semantics, different observability needs. Tower
 works for HTTP because every HTTP handler really is the same shape.
-Neuron's protocol boundaries are meaningfully distinct. Making them
+Skelegent's protocol boundaries are meaningfully distinct. Making them
 all `Service<SomeRequest>` is technically true but architecturally
 misleading. Additionally, Rust's async + generics + dyn dispatch
 create type signature complexity that undermines ergonomics.

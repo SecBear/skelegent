@@ -10,7 +10,7 @@
 
 **Design doc:** `docs/plans/2026-03-07-context-middleware-redesign.md` (approved).
 
-**Verification:** `cd neuron/ && nix develop --command cargo test --workspace --all-targets` and `cd neuron/ && nix develop --command cargo clippy --workspace -- -D warnings`.
+**Verification:** `cd skelegent/ && nix develop --command cargo test --workspace --all-targets` and `cd skelegent/ && nix develop --command cargo clippy --workspace -- -D warnings`.
 
 ---
 
@@ -21,12 +21,12 @@ Add all new types alongside the old ones. Everything compiles, all existing test
 ### Task 1.1: Message and Role types in layer0
 
 **Files:**
-- Modify: `neuron/layer0/src/context.rs`
-- Modify: `neuron/layer0/src/lib.rs`
+- Modify: `skelegent/layer0/src/context.rs`
+- Modify: `skelegent/layer0/src/lib.rs`
 
 **Step 1: Write the failing test**
 
-Add to `neuron/layer0/src/context.rs` tests module:
+Add to `skelegent/layer0/src/context.rs` tests module:
 
 ```rust
 #[test]
@@ -61,12 +61,12 @@ fn message_serde_roundtrip() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd neuron/ && nix develop --command cargo test -p layer0 message_construction -- --nocapture`
+Run: `cd skelegent/ && nix develop --command cargo test -p layer0 message_construction -- --nocapture`
 Expected: FAIL — `Message` and `Role` not defined.
 
 **Step 3: Write minimal implementation**
 
-Add to `neuron/layer0/src/context.rs`, above the existing `AgentContext` code:
+Add to `skelegent/layer0/src/context.rs`, above the existing `AgentContext` code:
 
 ```rust
 /// Role of a message in the context window.
@@ -130,7 +130,7 @@ impl Message {
 
 Add `use crate::content::Content;` to the imports if not already present.
 
-Add to `neuron/layer0/src/lib.rs` re-exports:
+Add to `skelegent/layer0/src/lib.rs` re-exports:
 
 ```rust
 pub use context::{Message, Role};
@@ -138,7 +138,7 @@ pub use context::{Message, Role};
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd neuron/ && nix develop --command cargo test -p layer0 -- message_construction message_serde`
+Run: `cd skelegent/ && nix develop --command cargo test -p layer0 -- message_construction message_serde`
 Expected: PASS
 
 **Step 5: Commit**
@@ -153,12 +153,12 @@ git commit -m "feat(layer0): add concrete Message and Role types"
 ### Task 1.2: Middleware traits and Next types
 
 **Files:**
-- Create: `neuron/layer0/src/middleware.rs`
-- Modify: `neuron/layer0/src/lib.rs`
+- Create: `skelegent/layer0/src/middleware.rs`
+- Modify: `skelegent/layer0/src/lib.rs`
 
 **Step 1: Write the failing test**
 
-Create `neuron/layer0/src/middleware.rs` with tests at the bottom:
+Create `skelegent/layer0/src/middleware.rs` with tests at the bottom:
 
 ```rust
 #[cfg(test)]
@@ -191,12 +191,12 @@ mod tests {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd neuron/ && nix develop --command cargo test -p layer0 dispatch_next_calls_through`
+Run: `cd skelegent/ && nix develop --command cargo test -p layer0 dispatch_next_calls_through`
 Expected: FAIL — module doesn't exist.
 
 **Step 3: Write minimal implementation**
 
-Write `neuron/layer0/src/middleware.rs`:
+Write `skelegent/layer0/src/middleware.rs`:
 
 ```rust
 //! Per-boundary middleware traits using the continuation pattern.
@@ -332,7 +332,7 @@ pub trait ExecMiddleware: Send + Sync {
 }
 ```
 
-Add `pub mod middleware;` to `neuron/layer0/src/lib.rs`.
+Add `pub mod middleware;` to `skelegent/layer0/src/lib.rs`.
 
 Add re-exports:
 
@@ -346,7 +346,7 @@ pub use middleware::{
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd neuron/ && nix develop --command cargo test -p layer0 dispatch_next_calls_through`
+Run: `cd skelegent/ && nix develop --command cargo test -p layer0 dispatch_next_calls_through`
 Expected: PASS
 
 **Step 5: Commit**
@@ -361,8 +361,8 @@ git commit -m "feat(layer0): add per-boundary middleware traits"
 ### Task 1.3: DispatchStack builder
 
 **Files:**
-- Create: `neuron/layer0/src/middleware/dispatch_stack.rs`
-- Modify: `neuron/layer0/src/middleware.rs` (make it `mod` directory or include)
+- Create: `skelegent/layer0/src/middleware/dispatch_stack.rs`
+- Modify: `skelegent/layer0/src/middleware.rs` (make it `mod` directory or include)
 
 Note: If the middleware module is a single file, refactor it into a directory with `mod.rs` + `dispatch_stack.rs`. Alternatively, keep it in one file if the stack builder is small enough.
 
@@ -481,7 +481,7 @@ async fn dispatch_stack_transform_then_guard() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd neuron/ && nix develop --command cargo test -p layer0 dispatch_stack`
+Run: `cd skelegent/ && nix develop --command cargo test -p layer0 dispatch_stack`
 Expected: FAIL — `DispatchStack` not defined.
 
 **Step 3: Write minimal implementation**
@@ -599,7 +599,7 @@ impl DispatchNext for MiddlewareChain<'_> {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd neuron/ && nix develop --command cargo test -p layer0 dispatch_stack`
+Run: `cd skelegent/ && nix develop --command cargo test -p layer0 dispatch_stack`
 Expected: PASS
 
 **Step 5: Commit**
@@ -614,7 +614,7 @@ git commit -m "feat(layer0): add DispatchStack builder with observer/transform/g
 ### Task 1.4: StoreStack and ExecStack builders
 
 **Files:**
-- Modify: `neuron/layer0/src/middleware.rs` (or directory)
+- Modify: `skelegent/layer0/src/middleware.rs` (or directory)
 
 Follow the same pattern as Task 1.3 for `StoreStack` and `ExecStack`. Each gets:
 - A `*Stack` struct with `layers: Vec<Arc<dyn *Middleware>>`
@@ -640,8 +640,8 @@ git commit -m "feat(layer0): add StoreStack and ExecStack middleware builders"
 Run:
 
 ```bash
-cd neuron/ && nix develop --command cargo test --workspace --all-targets
-cd neuron/ && nix develop --command cargo clippy --workspace -- -D warnings
+cd skelegent/ && nix develop --command cargo test --workspace --all-targets
+cd skelegent/ && nix develop --command cargo clippy --workspace -- -D warnings
 ```
 
 Expected: All existing tests pass. All new tests pass. Zero clippy warnings. Nothing was removed — only added.
@@ -661,8 +661,8 @@ Replace the generic `AgentContext<M>` with the concrete `Context` type and migra
 ### Task 2.1: Replace AgentContext<M> with Context
 
 **Files:**
-- Modify: `neuron/layer0/src/context.rs`
-- Modify: `neuron/layer0/src/lib.rs`
+- Modify: `skelegent/layer0/src/context.rs`
+- Modify: `skelegent/layer0/src/lib.rs`
 
 `AgentContext<M>` is defined but has ZERO consumers in skelegent/ or extras/. Replace it in-place with `Context` that uses the concrete `Message` type from Task 1.1.
 
@@ -724,7 +724,7 @@ fn context_compact_with_closure() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd neuron/ && nix develop --command cargo test -p layer0 context_push_and_read`
+Run: `cd skelegent/ && nix develop --command cargo test -p layer0 context_push_and_read`
 Expected: FAIL — `Context` not defined.
 
 **Step 3: Implement Context**
@@ -741,7 +741,7 @@ Update `lib.rs` re-exports: add `Context`, keep old types with `#[deprecated]`.
 
 **Step 4: Run tests**
 
-Run: `cd neuron/ && nix develop --command cargo test -p layer0 context_`
+Run: `cd skelegent/ && nix develop --command cargo test -p layer0 context_`
 Expected: All new context tests PASS. Old `AgentContext` tests may be removed or adapted.
 
 **Step 5: Commit**
@@ -756,10 +756,10 @@ git commit -m "feat(layer0): add concrete Context type replacing AgentContext<M>
 ### Task 2.2: Migrate AnnotatedMessage → Message
 
 **Files:**
-- Modify: `neuron/turn/skg-turn/src/context.rs`
-- Modify: `neuron/turn/skg-turn/src/lib.rs`
-- Modify: `neuron/turn/skg-context/src/lib.rs` (SlidingWindow, TieredStrategy)
-- Modify: `neuron/turn/skg-context/src/context_assembly.rs` (ContextAssembler)
+- Modify: `skelegent/turn/skg-turn/src/context.rs`
+- Modify: `skelegent/turn/skg-turn/src/lib.rs`
+- Modify: `skelegent/turn/skg-context/src/lib.rs` (SlidingWindow, TieredStrategy)
+- Modify: `skelegent/turn/skg-context/src/context_assembly.rs` (ContextAssembler)
 
 `AnnotatedMessage` has these fields:
 - `message: ProviderMessage` (role + content)
@@ -794,9 +794,9 @@ git commit -m "refactor(turn): migrate AnnotatedMessage to layer0::Message"
 ### Task 2.3: Migrate ContextStrategy → Context methods
 
 **Files:**
-- Modify: `neuron/turn/skg-turn/src/context.rs`
-- Modify: `neuron/turn/skg-context/src/lib.rs`
-- Modify: `neuron/op/skg-op-react/src/lib.rs`
+- Modify: `skelegent/turn/skg-turn/src/context.rs`
+- Modify: `skelegent/turn/skg-context/src/lib.rs`
+- Modify: `skelegent/op/skg-op-react/src/lib.rs`
 
 The `ContextStrategy` trait has:
 - `token_estimate(&self, messages: &[AnnotatedMessage]) -> usize`
@@ -847,9 +847,9 @@ git commit -m "refactor: replace ContextStrategy trait with Context::compact_wit
 ### Task 2.4: Delete deprecated types
 
 **Files:**
-- Modify: `neuron/layer0/src/context.rs` — remove `AgentContext<M>`, `ContextMessage<M>`
-- Modify: `neuron/turn/skg-turn/src/context.rs` — remove `AnnotatedMessage`, `ContextStrategy`
-- Modify: `neuron/layer0/src/lib.rs` — remove deprecated re-exports
+- Modify: `skelegent/layer0/src/context.rs` — remove `AgentContext<M>`, `ContextMessage<M>`
+- Modify: `skelegent/turn/skg-turn/src/context.rs` — remove `AnnotatedMessage`, `ContextStrategy`
+- Modify: `skelegent/layer0/src/lib.rs` — remove deprecated re-exports
 
 **Step 1:** Delete old types. Fix any remaining compile errors.
 **Step 2:** Run full workspace tests.
@@ -865,8 +865,8 @@ git commit -m "cleanup: remove AgentContext<M>, AnnotatedMessage, ContextStrateg
 ### Task 2.5: Full workspace verification (Phase 2)
 
 ```bash
-cd neuron/ && nix develop --command cargo test --workspace --all-targets
-cd neuron/ && nix develop --command cargo clippy --workspace -- -D warnings
+cd skelegent/ && nix develop --command cargo test --workspace --all-targets
+cd skelegent/ && nix develop --command cargo clippy --workspace -- -D warnings
 ```
 
 Expected: All tests pass. No clippy warnings. Context is now a single concrete type.
@@ -880,8 +880,8 @@ Convert existing Hook consumers to use the middleware stack.
 ### Task 3.1: Migrate LocalOrchestrator to DispatchStack
 
 **Files:**
-- Modify: `neuron/orch/skg-orch-local/src/lib.rs`
-- Modify: `neuron/orch/skg-orch-local/tests/orch.rs`
+- Modify: `skelegent/orch/skg-orch-local/src/lib.rs`
+- Modify: `skelegent/orch/skg-orch-local/tests/orch.rs`
 
 LocalOrch currently has an `Option<HookRegistry>` and fires `PreDispatch`/`PostDispatch` hooks. Replace with `DispatchStack`:
 
@@ -914,9 +914,9 @@ git commit -m "refactor(orch-local): replace HookRegistry with DispatchStack"
 ### Task 3.2: Migrate effect handlers to StoreMiddleware
 
 **Files:**
-- Modify: `neuron/effects/skg-effects-local/src/lib.rs`
-- Modify: `neuron/effects/skg-effects-local/tests/hooks.rs`
-- Modify: `neuron/orch/skg-orch-kit/src/runner.rs`
+- Modify: `skelegent/effects/skg-effects-local/src/lib.rs`
+- Modify: `skelegent/effects/skg-effects-local/tests/hooks.rs`
+- Modify: `skelegent/orch/skg-orch-kit/src/runner.rs`
 
 These currently fire `PreMemoryWrite` hooks before state writes. Replace with `StoreStack` wrapping the `StateStore`.
 
@@ -933,7 +933,7 @@ git commit -m "refactor(effects): replace PreMemoryWrite hooks with StoreMiddlew
 ### Task 3.3: Migrate security hooks to middleware
 
 **Files:**
-- Modify: `neuron/hooks/skg-hook-security/src/lib.rs`
+- Modify: `skelegent/hooks/skg-hook-security/src/lib.rs`
 
 `RedactionHook` (PostSubDispatch) and `ExfilGuardHook` (PreSubDispatch) are ReactOperator-internal concerns. They move to `skg-op-react` as operator-local middleware or become `DispatchMiddleware` implementations.
 
@@ -970,8 +970,8 @@ git commit -m "refactor(security): migrate RedactionHook/ExfilGuardHook to Dispa
 ### Task 3.4: Migrate ReactOperator internal hook points
 
 **Files:**
-- Modify: `neuron/op/skg-op-react/src/lib.rs`
-- (Optional) Create: `neuron/op/skg-op-react/src/intercept.rs`
+- Modify: `skelegent/op/skg-op-react/src/lib.rs`
+- (Optional) Create: `skelegent/op/skg-op-react/src/intercept.rs`
 
 ReactOperator fires hooks at: PreInference, PostInference, PreSubDispatch, PostSubDispatch, ExitCheck, SubDispatchUpdate, PreSteeringInject, PostSteeringSkip, PreCompaction, PostCompaction.
 
@@ -1005,8 +1005,8 @@ git commit -m "refactor(react): extract operator-local ReactInterceptor, remove 
 ### Task 3.5: Full workspace verification (Phase 3)
 
 ```bash
-cd neuron/ && nix develop --command cargo test --workspace --all-targets
-cd neuron/ && nix develop --command cargo clippy --workspace -- -D warnings
+cd skelegent/ && nix develop --command cargo test --workspace --all-targets
+cd skelegent/ && nix develop --command cargo clippy --workspace -- -D warnings
 ```
 
 Expected: All tests pass. No clippy warnings.
@@ -1018,10 +1018,10 @@ Expected: All tests pass. No clippy warnings.
 ### Task 4.1: Remove Hook system from layer0
 
 **Files:**
-- Modify: `neuron/layer0/src/hook.rs` — delete everything (entire file or gut it)
-- Modify: `neuron/layer0/src/lib.rs` — remove `pub mod hook` and all Hook re-exports
-- Delete: `neuron/hooks/skg-hooks/src/lib.rs` (HookRegistry)
-- Delete: `neuron/layer0/src/test_utils/logging_hook.rs`
+- Modify: `skelegent/layer0/src/hook.rs` — delete everything (entire file or gut it)
+- Modify: `skelegent/layer0/src/lib.rs` — remove `pub mod hook` and all Hook re-exports
+- Delete: `skelegent/hooks/skg-hooks/src/lib.rs` (HookRegistry)
+- Delete: `skelegent/layer0/src/test_utils/logging_hook.rs`
 
 Before deleting, verify with `cargo check --workspace` that no crate imports Hook types.
 
@@ -1036,8 +1036,8 @@ git commit -m "cleanup: remove Hook trait, HookPoint, HookRegistry from layer0"
 ### Task 4.2: Remove ObservableEvent and EventSource
 
 **Files:**
-- Modify: `neuron/layer0/src/lifecycle.rs` — remove `ObservableEvent`, `EventSource`
-- Modify: `neuron/layer0/src/lib.rs` — remove re-exports
+- Modify: `skelegent/layer0/src/lifecycle.rs` — remove `ObservableEvent`, `EventSource`
+- Modify: `skelegent/layer0/src/lib.rs` — remove re-exports
 
 These are replaced by tracing spans and middleware. Verify no consumers remain.
 
@@ -1052,12 +1052,12 @@ git commit -m "cleanup: remove ObservableEvent and EventSource (replaced by trac
 ### Task 4.3: Clean up skg-hooks crate
 
 **Files:**
-- Modify: `neuron/hooks/skg-hooks/Cargo.toml` — if crate is now empty, remove it
-- Modify: `neuron/Cargo.toml` workspace members — remove if crate deleted
+- Modify: `skelegent/hooks/skg-hooks/Cargo.toml` — if crate is now empty, remove it
+- Modify: `skelegent/Cargo.toml` workspace members — remove if crate deleted
 
 If `skg-hook-security` was migrated to middleware in Task 3.3, it may also be removable or renamed.
 
-Also update `neuron/neuron/Cargo.toml` facade crate:
+Also update `skelegent/skelegent/Cargo.toml` facade crate:
 - Remove `hooks` feature gate from `default`
 - Remove `hooks = ["core", "dep:skg-hooks"]` feature
 - Change `op-react` and `op-single-shot` features to no longer depend on `hooks`
@@ -1078,7 +1078,7 @@ git commit -m "cleanup: remove skg-hooks crate (HookRegistry replaced by Dispatc
 ### Task 5.1: Update ARCHITECTURE.md
 
 **Files:**
-- Modify: `neuron/ARCHITECTURE.md`
+- Modify: `skelegent/ARCHITECTURE.md`
 
 Update the "Three-Primitive Operator Composition" section. The old text about hooks/steering/planner being structurally different and must not be unified needs to be replaced with the middleware model.
 
@@ -1097,10 +1097,10 @@ git commit -m "docs: update ARCHITECTURE.md for middleware redesign"
 ### Task 5.2: Update book documentation
 
 **Files:**
-- Modify: `neuron/docs/book/src/guides/hooks.md` — rewrite for middleware
-- Modify: `neuron/docs/book/src/guides/custom-operator.md` — update examples
-- Modify: `neuron/docs/book/src/architecture/protocol-traits.md` — update
-- Modify: `neuron/docs/book/src/SUMMARY.md` — update navigation
+- Modify: `skelegent/docs/book/src/guides/hooks.md` — rewrite for middleware
+- Modify: `skelegent/docs/book/src/guides/custom-operator.md` — update examples
+- Modify: `skelegent/docs/book/src/architecture/protocol-traits.md` — update
+- Modify: `skelegent/docs/book/src/SUMMARY.md` — update navigation
 
 Replace Hook examples with middleware examples. The `DenyToolHook` becomes a `DispatchMiddleware` guard. The `StripSecretTransformer` becomes a `DispatchMiddleware` transformer.
 
@@ -1115,8 +1115,8 @@ git commit -m "docs: update book for middleware redesign"
 ### Task 5.3: Final full verification
 
 ```bash
-cd neuron/ && nix develop --command cargo test --workspace --all-targets
-cd neuron/ && nix develop --command cargo clippy --workspace -- -D warnings
+cd skelegent/ && nix develop --command cargo test --workspace --all-targets
+cd skelegent/ && nix develop --command cargo clippy --workspace -- -D warnings
 cd extras/ && nix develop --command cargo test --workspace --all-targets
 cd extras/ && nix develop --command cargo clippy --workspace -- -D warnings
 ```
@@ -1126,7 +1126,7 @@ Expected: All tests pass in both workspaces. Zero clippy warnings.
 Verify no external decision vocabulary in source:
 
 ```bash
-cd neuron/ && grep -rn '\b[DLC][1-5][A-E]\?\b' --include='*.rs' --include='*.md' | grep -v 'target/' | grep -v 'plans/'
+cd skelegent/ && grep -rn '\b[DLC][1-5][A-E]\?\b' --include='*.rs' --include='*.md' | grep -v 'target/' | grep -v 'plans/'
 ```
 
 Expected: No matches outside plans/ directory.
@@ -1254,7 +1254,7 @@ impl Message {
 ### Task R.1: SlidingWindow → `sliding_window_compactor()` closure
 
 **Crate:** `skg-context`
-**Files:** Modify `neuron/turn/skg-context/src/lib.rs`
+**Files:** Modify `skelegent/turn/skg-context/src/lib.rs`
 **Depends on:** Task 1.1 (Message type exists)
 **One agent. One file.**
 
@@ -1331,7 +1331,7 @@ The new function is additive.
 ### Task R.2: SaliencePackingStrategy → `salience_packing_compactor()` closure
 
 **Crate:** `skg-context`
-**Files:** Modify `neuron/turn/skg-context/src/salience_packing.rs`
+**Files:** Modify `skelegent/turn/skg-context/src/salience_packing.rs`
 **Depends on:** Task 1.1 (Message type exists)
 **One agent. One file.**
 
@@ -1431,7 +1431,7 @@ The `term_jaccard` tests are pure and unchanged.
 ### Task R.3: TieredStrategy → `tiered_compactor()` closure
 
 **Crate:** `skg-turn` (the `tiered.rs` module)
-**Files:** Modify `neuron/turn/skg-turn/src/tiered.rs`
+**Files:** Modify `skelegent/turn/skg-turn/src/tiered.rs`
 **Depends on:** Task 1.1 (Message type exists)
 **One agent. One file.**
 
@@ -1503,7 +1503,7 @@ to return `Message` instead of `ProviderMessage`.
 ### Task R.4: ContextAssembler → produce `Vec<Message>`
 
 **Crate:** `skg-context`
-**Files:** Modify `neuron/turn/skg-context/src/context_assembly.rs`
+**Files:** Modify `skelegent/turn/skg-context/src/context_assembly.rs`
 **Depends on:** Task 1.1 (Message type exists), conversion bridge in skg-turn
 **One agent. One file.**
 
@@ -1562,7 +1562,7 @@ The `text_msg()` helper is deleted — replaced by `Message::new(role, Content::
 ### Task R.5: RedactionHook → `RedactionMiddleware`
 
 **Crate:** `skg-hook-security`
-**Files:** Modify `neuron/hooks/skg-hook-security/src/lib.rs`
+**Files:** Modify `skelegent/hooks/skg-hook-security/src/lib.rs`
 **Depends on:** Task 1.2 (DispatchMiddleware trait exists)
 **One agent. One file.**
 
@@ -1629,7 +1629,7 @@ No more `HookContext` construction.
 ### Task R.6: ExfilGuardHook → `ExfilGuardMiddleware`
 
 **Crate:** `skg-hook-security`
-**Files:** Modify `neuron/hooks/skg-hook-security/src/lib.rs` (same file as R.5)
+**Files:** Modify `skelegent/hooks/skg-hook-security/src/lib.rs` (same file as R.5)
 **Depends on:** Task 1.2 (DispatchMiddleware trait exists)
 **One agent. Same file as R.5 — schedule AFTER R.5.**
 
@@ -1706,8 +1706,8 @@ and `Ok(...)` for clean input.
 After all R tasks complete:
 
 ```bash
-cd neuron/ && nix develop --command cargo test --workspace --all-targets
-cd neuron/ && nix develop --command cargo clippy --workspace -- -D warnings
+cd skelegent/ && nix develop --command cargo test --workspace --all-targets
+cd skelegent/ && nix develop --command cargo clippy --workspace -- -D warnings
 ```
 
 Expected: All old tests still pass (old code untouched). All new tests pass.

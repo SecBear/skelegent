@@ -5,7 +5,7 @@
 
 ## What We're Building
 
-Replace neuron's Hook/HookPoint system with **per-boundary continuation-based
+Replace skelegent's Hook/HookPoint system with **per-boundary continuation-based
 middleware** and unify context types into a single concrete `Context`.
 
 ## The Four Changes
@@ -103,7 +103,7 @@ not protocol boundaries.
 
 ## Consumer Map — Exact Files Per Concern
 
-### Hook consumers (neuron/ only — extras/ has ZERO hook usage)
+### Hook consumers (skelegent/ only — extras/ has ZERO hook usage)
 
 | File | What it does with hooks |
 |------|------------------------|
@@ -153,7 +153,7 @@ not protocol boundaries.
 - **`OperatorInput`/`OperatorOutput` are `#[non_exhaustive]`** — use `::new()` constructors
 - **No external decision vocabulary** (framework-specific IDs) in skelegent/ code or docs
 - **Authority**: ARCHITECTURE.md > specs/ > rules/ > judgment
-- **Verification**: `cd neuron/ && nix develop --command cargo test --workspace --all-targets`
+- **Verification**: `cd skelegent/ && nix develop --command cargo test --workspace --all-targets`
 
 ## File Layout After Redesign
 

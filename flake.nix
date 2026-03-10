@@ -1,5 +1,5 @@
 {
-  description = "neuron — composable building blocks for AI agents";
+  description = "skelegent — composable building blocks for AI agents";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -106,7 +106,7 @@
             shellHook = ''
               prek install --install-hooks 2>/dev/null
 
-              echo "neuron dev shell"
+              echo "skelegent dev shell"
               echo ""
               echo "  rustc --version   — $(rustc --version)"
               echo "  nix fmt           — format everything (rustfmt + nixfmt + taplo)"

@@ -72,7 +72,7 @@ jobs:
             skg-provider-ollama
 
             # Umbrella (last)
-            neuron
+            skelegent
           )
           for crate in "${CRATES[@]}"; do
             # Skip comments
