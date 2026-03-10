@@ -74,8 +74,9 @@ impl AnthropicProvider {
     /// from `skelegent-extras`.
     ///
     /// OAuth tokens (`sk-ant-oat*`) returned by the provider are sent as
-    /// `Authorization: Bearer` with the required `anthropic-beta:
-    /// oauth-2025-04-20` header. Regular API keys use `x-api-key`.
+    /// `Authorization: Bearer` with Claude Code identity headers (`anthropic-beta:
+    /// claude-code-20250219,oauth-2025-04-20`, `user-agent: claude-cli/2.1.62`,
+    /// `x-app: cli`). Regular API keys use `x-api-key`.
     pub fn with_auth(provider: Arc<dyn AuthProvider>) -> Self {
         Self {
             api_key_source: ApiKeySource::Auth {
@@ -279,8 +280,9 @@ fn parse_anthropic_infer_response(
 /// Returns `true` if `key` is an Anthropic OAuth token.
 ///
 /// OAuth tokens use prefix `sk-ant-oat` and require `Authorization: Bearer`
-/// plus the `anthropic-beta: oauth-2025-04-20` header. Standard API keys use
-/// the `x-api-key` header.
+/// plus Claude Code identity headers (`anthropic-beta: claude-code-20250219,
+/// oauth-2025-04-20`, `user-agent: claude-cli/2.1.62`, `x-app: cli`).
+/// Standard API keys use the `x-api-key` header.
 fn is_oauth_token(key: &str) -> bool {
     key.starts_with("sk-ant-oat")
 }
@@ -333,7 +335,9 @@ impl Provider for AnthropicProvider {
             if is_oauth_token(&key) {
                 builder = builder
                     .header("Authorization", format!("Bearer {key}"))
-                    .header("anthropic-beta", "oauth-2025-04-20");
+                    .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+                    .header("user-agent", "claude-cli/2.1.62")
+                    .header("x-app", "cli");
             } else {
                 builder = builder.header("x-api-key", key);
             }
@@ -415,7 +419,9 @@ impl StreamProvider for AnthropicProvider {
             if is_oauth_token(&key) {
                 builder = builder
                     .header("Authorization", format!("Bearer {key}"))
-                    .header("anthropic-beta", "oauth-2025-04-20");
+                    .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+                    .header("user-agent", "claude-cli/2.1.62")
+                    .header("x-app", "cli");
             } else {
                 builder = builder.header("x-api-key", key);
             }
