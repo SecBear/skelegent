@@ -349,8 +349,8 @@ impl ContextOp for SaveConversation {
     type Output = ();
 
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-        let value = serde_json::to_value(&ctx.messages)
-            .map_err(|e| EngineError::Custom(Box::new(e)))?;
+        let value =
+            serde_json::to_value(&ctx.messages).map_err(|e| EngineError::Custom(Box::new(e)))?;
         self.store
             .write(&self.scope, &self.key, value)
             .await
@@ -396,11 +396,10 @@ impl ContextOp for LoadConversation {
         match value {
             None => Ok(None),
             Some(v) => {
-                let messages: Vec<Message> = serde_json::from_value(v).map_err(|err| {
-                    EngineError::Halted {
+                let messages: Vec<Message> =
+                    serde_json::from_value(v).map_err(|err| EngineError::Halted {
                         reason: format!("failed to deserialize conversation: {err}"),
-                    }
-                })?;
+                    })?;
                 let len = messages.len();
                 ctx.messages = messages;
                 tracing::info!(key = %self.key, count = len, "neuron.load_conversation");
@@ -783,10 +782,7 @@ mod tests {
         ctx.messages
             .push(Message::new(Role::User, Content::text("hello")));
 
-        let count = ctx
-            .run(InjectSearchResults::new(vec![]))
-            .await
-            .unwrap();
+        let count = ctx.run(InjectSearchResults::new(vec![])).await.unwrap();
 
         assert_eq!(count, 0);
         assert_eq!(ctx.messages.len(), 1);
@@ -803,13 +799,9 @@ mod tests {
         ctx.messages
             .push(Message::new(Role::Assistant, Content::text("hi")));
 
-        ctx.run(SaveConversation::new(
-            store.clone(),
-            Scope::Global,
-            "conv",
-        ))
-        .await
-        .unwrap();
+        ctx.run(SaveConversation::new(store.clone(), Scope::Global, "conv"))
+            .await
+            .unwrap();
 
         let data = store.data.read().unwrap();
         let stored = data.get("conv").unwrap();
@@ -825,22 +817,14 @@ mod tests {
             let mut ctx = Context::new();
             ctx.messages
                 .push(Message::new(Role::User, Content::text("saved msg")));
-            ctx.run(SaveConversation::new(
-                store.clone(),
-                Scope::Global,
-                "conv",
-            ))
-            .await
-            .unwrap();
+            ctx.run(SaveConversation::new(store.clone(), Scope::Global, "conv"))
+                .await
+                .unwrap();
         }
 
         let mut ctx = Context::new();
         let result = ctx
-            .run(LoadConversation::new(
-                store.clone(),
-                Scope::Global,
-                "conv",
-            ))
+            .run(LoadConversation::new(store.clone(), Scope::Global, "conv"))
             .await
             .unwrap();
 
@@ -935,8 +919,10 @@ mod tests {
             .push(Message::new(Role::System, Content::text("old system")));
         ctx.messages
             .push(Message::new(Role::User, Content::text("old user")));
-        ctx.messages
-            .push(Message::new(Role::Assistant, Content::text("old assistant")));
+        ctx.messages.push(Message::new(
+            Role::Assistant,
+            Content::text("old assistant"),
+        ));
 
         let result = ctx
             .run(LoadConversation::new(

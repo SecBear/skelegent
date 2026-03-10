@@ -1123,7 +1123,7 @@ cd extras/ && nix develop --command cargo clippy --workspace -- -D warnings
 
 Expected: All tests pass in both workspaces. Zero clippy warnings.
 
-Verify no golden decision vocabulary in neuron/:
+Verify no external decision vocabulary in source:
 
 ```bash
 cd neuron/ && grep -rn '\b[DLC][1-5][A-E]\?\b' --include='*.rs' --include='*.md' | grep -v 'target/' | grep -v 'plans/'

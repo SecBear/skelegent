@@ -151,7 +151,7 @@ not protocol boundaries.
 
 - **Provider is RPITIT, NOT object-safe** — generic `<P: Provider>` is the boundary
 - **`OperatorInput`/`OperatorOutput` are `#[non_exhaustive]`** — use `::new()` constructors
-- **No golden decision vocabulary** (D1-D5, C1-C5, L1-L5) in neuron/ code or docs
+- **No external decision vocabulary** (framework-specific IDs) in neuron/ code or docs
 - **Authority**: ARCHITECTURE.md > specs/ > rules/ > judgment
 - **Verification**: `cd neuron/ && nix develop --command cargo test --workspace --all-targets`
 
