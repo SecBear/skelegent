@@ -59,9 +59,10 @@ filesystem API — that's a violation.
 
 Two narrow exceptions to the effects boundary are permitted by design.
 
-**Scoped state**: Operators may read and write their own state partition directly
-via injected `ScopedState`. This is internal state — not a cross-boundary
-side-effect. Cross-scope writes remain as `Effect::WriteMemory`.
+**Scoped state**: Operators may read and write their own state partition
+via `FlushToStore`/`InjectFromStore` ops or by holding an `Arc<dyn StateStore>`
+directly. This is internal state — not a cross-boundary side-effect.
+Cross-scope writes remain as `Effect::WriteMemory`.
 
 **Composition dispatch**: Operators may directly dispatch to other operators via
 an injected `Arc<dyn Orchestrator>` capability. The dispatched operator's I/O
@@ -117,9 +118,9 @@ include creates capability; what you exclude creates safety.
 but always explicitly configured, never implicitly assumed.
 
 **History**: The turn reads from state; it writes only through effects. The
-state backend is swappable without turn changes. Serialized snapshots
-(save/load context) are implemented via `ContextCommand::SaveSnapshot` /
-`LoadSnapshot` — a user-triggered portable checkpoint pattern for long sessions.
+state backend is swappable without turn changes. Conversation persistence
+(save/load context) is implemented via `SaveConversation` / `LoadConversation`
+ops from `neuron-context-engine` — a user-triggered portable checkpoint pattern for long sessions.
 
 **Memory**: Three tiers — hot (always loaded, taxes every turn), warm
 (on-demand within session), cold (cross-session search). Tier assignment is
@@ -226,8 +227,9 @@ lifecycle mechanism for long-running agents.
 **Compaction**: Three-way coordination between turn (detects pressure, executes
 summarization), orchestration (may continue-as-new), and state (persists
 results). Summarization is the default. The compaction reserve must never be
-zero. Selective/tiered compaction (`TieredStrategy`) is implemented — context
-partitioned into zones with different policies (pin, compress, discard).
+zero. `sliding_window` and `policy_trim` strategies are implemented, with
+LLM-driven `summarize` and `extract_cognitive_state` available. Tiered/zone-based
+compaction is tracked in `TODO-aspirational.md` as future work.
 Recursive summarization degradation is a documented failure mode: summarizing
 summaries loses critical detail after 2-3 cycles; fresh summary replacement is
 the mitigation. Message-level metadata (`Message` from `layer0::context`, `CompactionPolicy`)
@@ -316,7 +318,9 @@ construct. The parent controls the parameters. The child owns the behavior.
 ```rust
 // Parent controls the budget (data):
 let config = OperatorConfig { max_cost: Some(dec!(5.0)), ..Default::default() };
-orchestrator.dispatch(&operator_id, OperatorInput { config: Some(config), .. }).await;
+let mut input = OperatorInput::new(message, TriggerType::Task);
+input.config = Some(config);
+orchestrator.dispatch(&operator_id, input).await;
 
 // Child constructs the rule (behavior):
 let mut ctx = Context::new();

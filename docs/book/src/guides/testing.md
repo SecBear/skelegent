@@ -80,19 +80,18 @@ To test operators without making real API calls, create a mock `Provider`:
 
 ```rust
 use neuron_turn::provider::{Provider, ProviderError};
-use neuron_turn::types::*;
-use serde_json::json;
+use neuron_turn::infer::{InferRequest, InferResponse};
 use std::future::Future;
 
 struct MockProvider {
-    responses: Vec<ProviderResponse>,
+    responses: Vec<InferResponse>,
 }
 
 impl Provider for MockProvider {
-    fn complete(
+    fn infer(
         &self,
-        _request: ProviderRequest,
-    ) -> impl Future<Output = Result<ProviderResponse, ProviderError>> + Send {
+        _request: InferRequest,
+    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
         let response = self.responses[0].clone(); // simplified
         async move { Ok(response) }
     }
@@ -107,7 +106,7 @@ use neuron_tool::{ToolRegistry, ToolCallContext};
 use neuron_layer0::context::{Message, Role};
 
 let mut ctx = Context::new("You are a helpful assistant.");
-ctx.inject_turn(Message::new(Role::User, "Hello"));
+ctx.inject_message(Message::new(Role::User, "Hello"));
 
 let tools = ToolRegistry::new();
 let tool_ctx = ToolCallContext::empty();

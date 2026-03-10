@@ -122,11 +122,14 @@ The context engine loop stops when:
 
 - **`Complete`** -- The model produced a final text response without requesting any tool use.
 - **`MaxTurns`** -- The `max_turns` limit was reached.
-- **`BudgetExhausted`** -- Accumulated cost exceeded `max_cost`.
+- **`BudgetExhausted`** -- Accumulated cost exceeded `max_cost` or tool-call step limit exceeded.
 - **`Timeout`** -- Wall-clock time exceeded `max_duration`.
-- **`InterceptorHalt`** -- An interceptor (including a Rule that returns `RuleAction::Halt`) stopped execution.
+- **`InterceptorHalt { reason }`** -- An interceptor (including a Rule that returns `RuleAction::Halt`) stopped execution.
 - **`CircuitBreaker`** -- Too many consecutive failures (provider errors or tool errors).
 - **`Error`** -- An unrecoverable error occurred.
+- **`SafetyStop { reason }`** -- Provider safety system stopped generation (content filter or safety mechanism triggered).
+- **`AwaitingApproval`** -- One or more tool calls require human approval before execution.
+- **`Custom(String)`** -- Operator-defined exit reason.
 
 ### Effects
 

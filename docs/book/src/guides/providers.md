@@ -6,10 +6,10 @@ Providers are the LLM backend abstraction in neuron. Each provider implements th
 
 ```rust
 pub trait Provider: Send + Sync {
-    fn complete(
+    fn infer(
         &self,
-        request: ProviderRequest,
-    ) -> impl Future<Output = Result<ProviderResponse, ProviderError>> + Send;
+        request: InferRequest,
+    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send;
 }
 ```
 
@@ -29,8 +29,8 @@ let provider = AnthropicProvider::new("sk-ant-...");
 
 Configuration:
 - **API key:** Passed to `new()`. Read it from `ANTHROPIC_API_KEY` in production.
-- **Default model:** `claude-haiku-4-5-20251001`. Override per-request via `ProviderRequest.model`.
-- **Default max tokens:** 4096. Override per-request via `ProviderRequest.max_tokens`.
+- **Default model:** `claude-haiku-4-5-20251001`. Override per-request via `InferRequest.model`.
+- **Default max tokens:** 4096. Override per-request via `InferRequest.max_tokens`.
 - **API URL:** Override with `.with_url()` for proxies or testing.
 
 ```rust,no_run
@@ -70,34 +70,34 @@ Configuration:
 - **URL:** Defaults to `http://localhost:11434`. Override with `.with_url()`.
 - No API key required (Ollama runs locally).
 
-## ProviderRequest and ProviderResponse
+## InferRequest and InferResponse
 
-The `ProviderRequest` struct is the common input to all providers:
+The `InferRequest` struct is the common input to all providers:
 
 ```rust
-pub struct ProviderRequest {
+pub struct InferRequest {
     pub model: Option<String>,           // Model identifier
-    pub messages: Vec<ProviderMessage>,  // Conversation history
-    pub tools: Vec<ToolDefinition>,      // Available tools (JSON Schema)
-    pub max_tokens: Option<u32>,         // Max output tokens
-    pub temperature: Option<f32>,        // Sampling temperature
-    pub system: Option<String>,          // System prompt
-    pub extra: serde_json::Value,        // Provider-specific extensions
+    pub messages: Vec<Message>,           // Conversation history (layer0 types)
+    pub tools: Vec<ToolSchema>,           // Available tools (JSON Schema)
+    pub max_tokens: Option<u32>,          // Max output tokens
+    pub temperature: Option<f64>,         // Sampling temperature
+    pub system: Option<String>,           // System prompt
+    pub extra: serde_json::Value,         // Provider-specific extensions
 }
 ```
 
 The `extra` field allows provider-specific features (Anthropic's prompt caching, thinking blocks, etc.) without polluting the common interface.
 
-The `ProviderResponse` contains the model's output:
+The `InferResponse` contains the model's output:
 
 ```rust
-pub struct ProviderResponse {
-    pub content: Vec<ContentPart>,  // Text, tool use, images
-    pub stop_reason: StopReason,    // EndTurn, ToolUse, MaxTokens
-    pub usage: TokenUsage,          // Input/output/cache tokens
-    pub model: String,              // Model that responded
-    pub cost: Option<Decimal>,      // Calculated cost in USD
-    pub truncated: Option<bool>,    // Whether input was truncated
+pub struct InferResponse {
+    pub content: Content,             // Response content
+    pub tool_calls: Vec<ToolCall>,    // Tool calls requested by the model
+    pub stop_reason: StopReason,      // EndTurn, ToolUse, MaxTokens
+    pub usage: TokenUsage,            // Input/output/cache tokens
+    pub model: String,                // Model that responded
+    pub cost: Option<Decimal>,        // Calculated cost in USD
 }
 ```
 
@@ -122,7 +122,7 @@ let tools = ToolRegistry::new();
 let tool_context = ToolCallContext::empty();
 let mut context = Context::new();
 
-// react_loop drives the ReAct loop, calling provider.complete() as needed
+// react_loop drives the ReAct loop, calling provider.infer() as needed
 let response = react_loop(&provider, &tools, &tool_context, &mut context, &config).await;
 ```
 

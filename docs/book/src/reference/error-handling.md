@@ -17,7 +17,7 @@ Errors from operator execution (Layer 0, `layer0::error::OperatorError`):
 ```rust
 pub enum OperatorError {
     Model(String),           // LLM provider error
-    Tool { tool, message },  // Tool execution error
+    SubDispatch { operator, message },  // Sub-dispatch execution error
     ContextAssembly(String), // Context assembly failed
     Retryable(String),       // Transient, may succeed on retry
     NonRetryable(String),    // Permanent failure (budget, safety, invalid input)
