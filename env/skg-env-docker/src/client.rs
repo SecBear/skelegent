@@ -10,7 +10,6 @@ use crate::proto::runner::runner_client::RunnerClient;
 use layer0::error::EnvError;
 use std::time::Duration;
 use tonic::transport::Channel;
-use tracing;
 
 /// Connect to the runner gRPC service inside the container.
 ///

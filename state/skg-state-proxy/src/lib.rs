@@ -41,6 +41,7 @@ fn scope_to_string(scope: &Scope) -> String {
 }
 
 /// Deserialize a scope string from the proto back into a [`Scope`].
+#[allow(clippy::result_large_err)]
 fn scope_from_string(s: &str) -> Result<Scope, Status> {
     serde_json::from_str(s)
         .map_err(|e| Status::invalid_argument(format!("invalid scope: {e}")))
@@ -66,8 +67,7 @@ fn status_to_state_err(s: Status) -> StateError {
             key: s.message().to_string(),
         },
         tonic::Code::InvalidArgument => StateError::Serialization(s.message().to_string()),
-        _ => StateError::Other(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        _ => StateError::Other(Box::new(std::io::Error::other(
             s.message().to_string(),
         ))),
     }
@@ -96,6 +96,7 @@ impl StateStoreProxyServer {
     }
 
     /// Validate the session key from request metadata.
+    #[allow(clippy::result_large_err)]
     fn check_auth<T>(&self, req: &Request<T>) -> Result<(), Status> {
         let provided = req
             .metadata()

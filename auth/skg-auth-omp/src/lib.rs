@@ -231,11 +231,11 @@ impl AuthProvider for OmpAuthProvider {
         // 1. Check cache.
         {
             let cached = self.cache.read().await;
-            if let Some(ref token) = *cached {
-                if token.is_valid() {
-                    debug!("using cached OMP token");
-                    return Ok(token.to_auth_token());
-                }
+            if let Some(ref token) = *cached
+                && token.is_valid()
+            {
+                debug!("using cached OMP token");
+                return Ok(token.to_auth_token());
             }
         }
 
@@ -243,10 +243,10 @@ impl AuthProvider for OmpAuthProvider {
         let mut cached = self.cache.write().await;
 
         // Double-check: another task may have refreshed while we waited.
-        if let Some(ref token) = *cached {
-            if token.is_valid() {
-                return Ok(token.to_auth_token());
-            }
+        if let Some(ref token) = *cached
+            && token.is_valid()
+        {
+            return Ok(token.to_auth_token());
         }
 
         // 3. Read from DB.

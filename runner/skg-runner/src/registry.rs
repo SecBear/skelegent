@@ -12,6 +12,7 @@ pub struct OperatorRegistry {
 
 impl OperatorRegistry {
     /// Create an empty registry.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             operators: HashMap::new(),
@@ -26,6 +27,7 @@ impl OperatorRegistry {
     }
 
     /// Register an operator. Overwrites any existing operator with the same id.
+    #[allow(dead_code)]
     pub fn register(&mut self, id: OperatorId, op: Arc<dyn Operator>) {
         self.operators.insert(id, op);
     }
@@ -43,6 +45,7 @@ pub struct OperatorRegistryBuilder {
 
 impl OperatorRegistryBuilder {
     /// Register an operator into the builder.
+    #[allow(dead_code)]
     pub fn register(mut self, id: OperatorId, op: Arc<dyn Operator>) -> Self {
         self.operators.insert(id, op);
         self

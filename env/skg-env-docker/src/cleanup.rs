@@ -5,7 +5,6 @@
 
 use bollard::Docker;
 use bollard::container::{RemoveContainerOptions, StopContainerOptions};
-use tracing;
 
 /// RAII guard that stops and removes a Docker container on drop.
 ///

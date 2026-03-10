@@ -38,17 +38,17 @@ pub fn hardened_host_config(resources: Option<&ResourceLimits>) -> HostConfig {
 /// Map `ResourceLimits` to bollard's `HostConfig` fields.
 fn apply_resource_limits(host_config: &mut HostConfig, limits: &ResourceLimits) {
     // CPU: "1.0" → 1_000_000_000 NanoCPUs, "500m" → 500_000_000
-    if let Some(ref cpu) = limits.cpu {
-        if let Some(nano) = parse_cpu_to_nanos(cpu) {
-            host_config.nano_cpus = Some(nano);
-        }
+    if let Some(ref cpu) = limits.cpu
+        && let Some(nano) = parse_cpu_to_nanos(cpu)
+    {
+        host_config.nano_cpus = Some(nano);
     }
 
     // Memory: "2Gi" → bytes, "512Mi" → bytes
-    if let Some(ref mem) = limits.memory {
-        if let Some(bytes) = parse_memory_to_bytes(mem) {
-            host_config.memory = Some(bytes);
-        }
+    if let Some(ref mem) = limits.memory
+        && let Some(bytes) = parse_memory_to_bytes(mem)
+    {
+        host_config.memory = Some(bytes);
     }
 
     // GPU: request nvidia runtime device

@@ -32,7 +32,7 @@ pub struct JsonExecuteRequest {
     pub input: String,
     /// Base64-encoded environment spec bytes.
     pub spec: String,
-    pub idempotency_key: String,
+    pub _idempotency_key: String,
     pub session_key: String,
 }
 

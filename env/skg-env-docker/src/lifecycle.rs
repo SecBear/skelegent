@@ -14,7 +14,6 @@ use bollard::models::{HostConfig, PortBinding, PortMap};
 use futures_util::StreamExt;
 use layer0::error::EnvError;
 use std::collections::HashMap;
-use tracing;
 
 use crate::config::PullPolicy;
 
