@@ -87,6 +87,9 @@
               pkgs.mdbook
               pkgs.lychee
 
+              # Protobuf compiler (for tonic-build / prost-build)
+              pkgs.protobuf
+
               # Pre-commit hooks
               pkgs.prek
 

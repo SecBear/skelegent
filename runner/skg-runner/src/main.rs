@@ -84,8 +84,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let grpc_addr = format!("0.0.0.0:{GRPC_PORT}").parse()?;
-    let http_addr = format!("0.0.0.0:{HTTP_PORT}").parse()?;
+    let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{GRPC_PORT}").parse()?;
+    let http_addr: std::net::SocketAddr = format!("0.0.0.0:{HTTP_PORT}").parse()?;
 
     info!("starting skg-runner grpc={grpc_addr} http={http_addr}");
 

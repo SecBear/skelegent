@@ -28,6 +28,7 @@ use skg_secret::SecretResolver;
 use std::sync::Arc;
 
 /// Generated protobuf/gRPC types for the runner service.
+#[allow(missing_docs)]
 pub mod proto {
     /// Runner service definitions (Execute, ExecuteStream, Health).
     pub mod runner {
