@@ -67,3 +67,20 @@ pub struct RetryConfig {
     /// Backoff multiplier per retry.
     pub multiplier: f64,
 }
+
+impl Default for DockerEnvConfig {
+    fn default() -> Self {
+        Self {
+            transport: Transport::Grpc { port: 50051 },
+            pull_policy: PullPolicy::IfMissing,
+            reuse_policy: ReusePolicy::Fresh,
+            default_timeout: Duration::from_secs(300),
+            retry: RetryConfig {
+                max_retries: 3,
+                initial_backoff: Duration::from_secs(1),
+                max_backoff: Duration::from_secs(30),
+                multiplier: 2.0,
+            },
+        }
+    }
+}

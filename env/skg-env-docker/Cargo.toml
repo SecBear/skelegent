@@ -16,13 +16,14 @@ skg-secret = { path = "../../secret/skg-secret", version = "0.4.0" }
 bollard = "0.18"
 tonic = { version = "0.13", features = ["transport"] }
 prost = "0.13"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 url = "2"
 tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
+futures-util = "0.3"
 
 [build-dependencies]
 tonic-build = "0.13"
