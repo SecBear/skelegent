@@ -1,6 +1,6 @@
 [package]
 name = "skelegent"
-version = "0.4.0"
+version = "0.4.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -14,21 +14,21 @@ keywords = ["skelegent", "ai", "agent", "async", "framework"]
 path = "src/lib.rs"
 
 [dependencies]
-layer0 = { path = "../layer0", optional = true, version = "0.4.0" }
-skg-context = { path = "../turn/skg-context", optional = true, version = "0.4.0" }
-skg-mcp = { path = "../turn/skg-mcp", optional = true, version = "0.4.0" }
-skg-context-engine = { path = "../op/skg-context-engine", optional = true, version = "0.4.0" }
-skg-op-single-shot = { path = "../op/skg-op-single-shot", optional = true, version = "0.4.0" }
-skg-orch-kit = { path = "../orch/skg-orch-kit", optional = true, version = "0.4.0" }
-skg-orch-local = { path = "../orch/skg-orch-local", optional = true, version = "0.4.0" }
-skg-env-local = { path = "../env/skg-env-local", optional = true, version = "0.4.0" }
-skg-provider-anthropic = { path = "../provider/skg-provider-anthropic", optional = true, version = "0.4.0" }
-skg-provider-ollama = { path = "../provider/skg-provider-ollama", optional = true, version = "0.4.0" }
-skg-provider-openai = { path = "../provider/skg-provider-openai", optional = true, version = "0.4.0" }
-skg-state-fs = { path = "../state/skg-state-fs", optional = true, version = "0.4.0" }
-skg-state-memory = { path = "../state/skg-state-memory", optional = true, version = "0.4.0" }
-skg-tool = { path = "../turn/skg-tool", optional = true, version = "0.4.0" }
-skg-turn = { path = "../turn/skg-turn", optional = true, version = "0.4.0" }
+layer0 = { path = "../layer0", optional = true, version = "0.4.1" }
+skg-context = { path = "../turn/skg-context", optional = true, version = "0.4.1" }
+skg-mcp = { path = "../turn/skg-mcp", optional = true, version = "0.4.1" }
+skg-context-engine = { path = "../op/skg-context-engine", optional = true, version = "0.4.1" }
+skg-op-single-shot = { path = "../op/skg-op-single-shot", optional = true, version = "0.4.1" }
+skg-orch-kit = { path = "../orch/skg-orch-kit", optional = true, version = "0.4.1" }
+skg-orch-local = { path = "../orch/skg-orch-local", optional = true, version = "0.4.1" }
+skg-env-local = { path = "../env/skg-env-local", optional = true, version = "0.4.1" }
+skg-provider-anthropic = { path = "../provider/skg-provider-anthropic", optional = true, version = "0.4.1" }
+skg-provider-ollama = { path = "../provider/skg-provider-ollama", optional = true, version = "0.4.1" }
+skg-provider-openai = { path = "../provider/skg-provider-openai", optional = true, version = "0.4.1" }
+skg-state-fs = { path = "../state/skg-state-fs", optional = true, version = "0.4.1" }
+skg-state-memory = { path = "../state/skg-state-memory", optional = true, version = "0.4.1" }
+skg-tool = { path = "../turn/skg-tool", optional = true, version = "0.4.1" }
+skg-turn = { path = "../turn/skg-turn", optional = true, version = "0.4.1" }
 
 [features]
 default = ["core"]

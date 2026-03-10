@@ -1,6 +1,6 @@
 [package]
 name = "skg-auth"
-version = "0.4.0"
+version = "0.4.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,8 +11,8 @@ categories = ["asynchronous", "authentication"]
 keywords = ["skelegent", "ai", "agent", "authentication", "auth"]
 
 [dependencies]
-layer0 = { path = "../../layer0", version = "0.4.0" }
-skg-secret = { path = "../../secret/skg-secret", version = "0.4.0" }
+layer0 = { path = "../../layer0", version = "0.4.1" }
+skg-secret = { path = "../../secret/skg-secret", version = "0.4.1" }
 async-trait = "0.1"
 thiserror = "2"
 
