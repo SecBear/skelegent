@@ -16,6 +16,7 @@ All crates in the skelegent workspace, organized by architectural layer.
 | `skg-provider-anthropic` | Anthropic Claude API provider. Implements `Provider` for the Messages API. |
 | `skg-provider-openai` | OpenAI API provider. Implements `Provider` for the Chat Completions API. |
 | `skg-provider-ollama` | Ollama local model provider. Implements `Provider` for the Ollama API. |
+| `skg-provider-codex` | OpenAI Codex (Responses API) provider. Implements `Provider` for the Responses API. |
 | `skg-tool` | `ToolDyn` trait, `ToolRegistry`, `AliasedTool`. Object-safe tool abstraction. |
 | `skg-context` | Conversation context assembly and compaction strategies. |
 | `skg-mcp` | MCP (Model Context Protocol) client. Wraps MCP server tools as `ToolDyn` implementations. |
@@ -73,10 +74,10 @@ All crates in the skelegent workspace, organized by architectural layer.
 | Layer | Crates |
 |-------|--------|
 | 0 | 1 |
-| 1 | 11 |
+| 1 | 12 |
 | 2 | 4 |
 | 3 | 2 |
 | 4 | 5 |
 | 5 | 1 |
 | Umbrella | 1 |
-| **Total** | **25** |
+| **Total** | **26** |
