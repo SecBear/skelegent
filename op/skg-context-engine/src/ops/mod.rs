@@ -8,7 +8,10 @@ pub mod response;
 pub mod store;
 pub mod tool;
 
-pub use cognitive::{CognitiveState, Entity, Relation};
+pub use cognitive::{
+    CognitiveError, CognitiveState, CommitCognitiveState, CompressCognitiveStateConfig,
+    DEFAULT_CCS_PROMPT, Entity, Relation,
+};
 pub use compact::{Compact, CompactResult};
 pub use inject::{InjectMessage, InjectMessages, InjectSystem};
 pub use response::AppendResponse;
