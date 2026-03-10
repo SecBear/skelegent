@@ -1,0 +1,17 @@
+[package]
+name = "hello-claude"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "hello-claude"
+path = "main.rs"
+
+[dependencies]
+layer0 = { path = "../../layer0" }
+skg-provider-anthropic = { path = "../../provider/skg-provider-anthropic" }
+skg-op-single-shot = { path = "../../op/skg-op-single-shot" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"

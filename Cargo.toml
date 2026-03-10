@@ -37,6 +37,7 @@ members = [
   "effects/skg-effects-local",
   "env/skg-env-docker",
   "runner/skg-runner",
+  "examples/hello-claude",
 ]
 
 [workspace.package]
