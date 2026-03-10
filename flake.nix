@@ -123,6 +123,12 @@
             '';
           };
 
+          # ── packages ────────────────────────────────────────────
+          # dockerTools is Linux-only; guard so macOS flake eval doesn't break.
+          packages = lib.optionalAttrs pkgs.stdenv.isLinux {
+            runner-image = pkgs.callPackage ./nix/runner-image.nix { };
+          };
+
         };
     };
 }
