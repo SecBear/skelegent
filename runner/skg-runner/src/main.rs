@@ -8,11 +8,15 @@
 //! `EnvironmentSpec`, loads the requested operator from a compiled-in
 //! registry, executes it, and returns the result.
 
+mod registry;
+
+use std::sync::Arc;
+
 use axum::{routing::get, Router};
 use tokio::signal;
 use tonic::transport::Server as TonicServer;
 use tonic::{Request, Response, Status};
-use tracing::info;
+use tracing::{error, info, warn};
 
 mod proto {
     tonic::include_proto!("skg.runner.v1");
@@ -20,8 +24,10 @@ mod proto {
 
 use proto::runner_server::{Runner, RunnerServer};
 use proto::{
-    ExecuteEvent, ExecuteRequest, ExecuteResponse, HealthRequest, HealthResponse,
+    execute_event, ExecuteEvent, ExecuteRequest, ExecuteResponse, HealthRequest, HealthResponse,
 };
+
+use registry::OperatorRegistry;
 
 /// gRPC port the runner listens on inside the container.
 const GRPC_PORT: u16 = 50051;
@@ -30,23 +36,85 @@ const HTTP_PORT: u16 = 8080;
 
 /// Core runner service implementation.
 ///
-/// In v1, operators are compiled into the binary and selected by id
-/// from the `ExecuteRequest.operator` field.
-struct RunnerServiceImpl;
+/// Holds a compiled-in operator registry and validates requests
+/// against an expected session key set at startup.
+struct RunnerServiceImpl {
+    registry: Arc<OperatorRegistry>,
+    expected_session_key: String,
+}
+
+impl RunnerServiceImpl {
+    fn new(registry: Arc<OperatorRegistry>, expected_session_key: String) -> Self {
+        Self {
+            registry,
+            expected_session_key,
+        }
+    }
+
+    /// Validate session key. Returns `Status::unauthenticated` on mismatch.
+    fn validate_session_key(&self, provided: &str) -> Result<(), Status> {
+        if provided.is_empty() || provided != self.expected_session_key {
+            return Err(Status::unauthenticated("invalid session key"));
+        }
+        Ok(())
+    }
+
+    /// Deserialize `OperatorInput` from JSON bytes.
+    fn deserialize_input(
+        &self,
+        bytes: &[u8],
+    ) -> Result<layer0::OperatorInput, Status> {
+        serde_json::from_slice(bytes).map_err(|e| {
+            warn!("failed to deserialize OperatorInput: {e}");
+            Status::invalid_argument("failed to deserialize OperatorInput")
+        })
+    }
+
+    /// Look up an operator by id. Returns `Status::not_found` if missing.
+    fn resolve_operator(
+        &self,
+        operator_id: &str,
+    ) -> Result<Arc<dyn layer0::Operator>, Status> {
+        self.registry
+            .get(operator_id)
+            .cloned()
+            .ok_or_else(|| Status::not_found(format!("operator not found: {operator_id}")))
+    }
+}
 
 #[tonic::async_trait]
 impl Runner for RunnerServiceImpl {
     async fn execute(
         &self,
-        _request: Request<ExecuteRequest>,
+        request: Request<ExecuteRequest>,
     ) -> Result<Response<ExecuteResponse>, Status> {
-        // 1) Validate session_key
-        // 2) Deserialize OperatorInput from request.input
-        // 3) Validate spec compatibility
-        // 4) Look up operator by id in compiled-in registry
-        // 5) Execute operator
-        // 6) Serialize OperatorOutput into response.output
-        todo!("RunnerServiceImpl::execute — implement operator dispatch")
+        let req = request.into_inner();
+
+        self.validate_session_key(&req.session_key)?;
+        let input = self.deserialize_input(&req.input)?;
+        let operator = self.resolve_operator(&req.operator)?;
+
+        // Spawn in a task to catch panics from operator implementations.
+        let handle = tokio::task::spawn(async move { operator.execute(input).await });
+
+        let result = handle.await.map_err(|join_err| {
+            error!("operator panicked: {join_err}");
+            Status::internal("operator execution failed")
+        })?;
+
+        let output = result.map_err(|op_err| {
+            error!("operator error: {op_err}");
+            Status::internal("operator execution failed")
+        })?;
+
+        let output_bytes = serde_json::to_vec(&output).map_err(|e| {
+            error!("failed to serialize OperatorOutput: {e}");
+            Status::internal("failed to serialize operator output")
+        })?;
+
+        Ok(Response::new(ExecuteResponse {
+            output: output_bytes,
+        }))
     }
 
     type ExecuteStreamStream =
@@ -54,9 +122,68 @@ impl Runner for RunnerServiceImpl {
 
     async fn execute_stream(
         &self,
-        _request: Request<ExecuteRequest>,
+        request: Request<ExecuteRequest>,
     ) -> Result<Response<Self::ExecuteStreamStream>, Status> {
-        todo!("RunnerServiceImpl::execute_stream — implement streaming execution")
+        let req = request.into_inner();
+
+        self.validate_session_key(&req.session_key)?;
+        let input = self.deserialize_input(&req.input)?;
+        let operator = self.resolve_operator(&req.operator)?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+
+        tokio::task::spawn(async move {
+            // Log that execution has started.
+            let started_event = ExecuteEvent {
+                event: Some(execute_event::Event::LogLine(
+                    b"operator started".to_vec(),
+                )),
+            };
+            if tx.send(Ok(started_event)).await.is_err() {
+                return; // receiver dropped
+            }
+
+            // Execute the operator, catching panics via the spawned task boundary.
+            let result = tokio::task::spawn(async move { operator.execute(input).await }).await;
+
+            match result {
+                Ok(Ok(output)) => {
+                    let output_bytes = match serde_json::to_vec(&output) {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            let _ = tx
+                                .send(Err(Status::internal(format!(
+                                    "failed to serialize operator output: {e}"
+                                ))))
+                                .await;
+                            return;
+                        }
+                    };
+                    let final_event = ExecuteEvent {
+                        event: Some(execute_event::Event::FinalOutput(ExecuteResponse {
+                            output: output_bytes,
+                        })),
+                    };
+                    let _ = tx.send(Ok(final_event)).await;
+                }
+                Ok(Err(op_err)) => {
+                    error!("operator error during stream: {op_err}");
+                    let _ = tx
+                        .send(Err(Status::internal("operator execution failed")))
+                        .await;
+                }
+                Err(join_err) => {
+                    error!("operator panicked during stream: {join_err}");
+                    let _ = tx
+                        .send(Err(Status::internal("operator execution failed")))
+                        .await;
+                }
+            }
+        });
+
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
     }
 
     async fn health(
@@ -84,14 +211,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    // Session key is required — container must be started with SKG_SESSION_KEY set.
+    let session_key = std::env::var("SKG_SESSION_KEY").unwrap_or_else(|_| {
+        eprintln!("FATAL: SKG_SESSION_KEY environment variable is required");
+        std::process::exit(1);
+    });
+
+    // Build operator registry. Empty by default — downstream image builders
+    // will compile their operators into the binary.
+    let registry = Arc::new(OperatorRegistry::builder().build());
+
     let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{GRPC_PORT}").parse()?;
     let http_addr: std::net::SocketAddr = format!("0.0.0.0:{HTTP_PORT}").parse()?;
 
     info!("starting skg-runner grpc={grpc_addr} http={http_addr}");
 
-    let runner = RunnerServiceImpl;
+    let runner = RunnerServiceImpl::new(registry, session_key);
 
-    // Spawn HTTP healthcheck server
+    // Spawn HTTP healthcheck server.
     let http_server = tokio::spawn(async move {
         let app = Router::new().route("/health", get(health_handler));
         let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
@@ -101,7 +238,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
     });
 
-    // Run gRPC server
+    // Run gRPC server.
     TonicServer::builder()
         .add_service(RunnerServer::new(runner))
         .serve_with_shutdown(grpc_addr, shutdown_signal())
@@ -114,7 +251,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn shutdown_signal() {
-    signal::ctrl_c()
-        .await
-        .expect("failed to install CTRL+C handler");
+    let ctrl_c = signal::ctrl_c();
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => { info!("received CTRL+C, shutting down"); }
+        _ = terminate => { info!("received SIGTERM, shutting down"); }
+    }
 }
