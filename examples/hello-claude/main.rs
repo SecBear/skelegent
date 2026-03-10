@@ -6,48 +6,18 @@
 
 use layer0::content::Content;
 use layer0::operator::{Operator, OperatorInput, TriggerType};
+use skg_auth_omp::OmpAuthProvider;
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_provider_anthropic::AnthropicProvider;
-
-/// Read the Anthropic OAuth access token from OMP's credential store.
-///
-/// OMP stores credentials in `~/.omp/agent/agent.db` (SQLite).
-/// The `data` column is JSON: `{"access":"sk-ant-oat...","refresh":...,"expires":...}`.
-fn read_omp_anthropic_token() -> Result<String, Box<dyn std::error::Error>> {
-    let home = std::env::var("HOME")?;
-    let db_path = format!("{home}/.omp/agent/agent.db");
-
-    let conn = rusqlite::Connection::open_with_flags(
-        &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| format!("failed to open {db_path}: {e} — is OMP installed?"))?;
-
-    let data: String = conn
-        .query_row(
-            "SELECT data FROM auth_credentials \
-             WHERE provider='anthropic' AND credential_type='oauth' \
-             ORDER BY updated_at DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("no anthropic oauth credential in agent.db: {e}"))?;
-
-    let parsed: serde_json::Value = serde_json::from_str(&data)?;
-    parsed["access"]
-        .as_str()
-        .map(String::from)
-        .ok_or_else(|| "no 'access' field in credential data".into())
-}
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Read token from OMP's credential store.
-    let token = read_omp_anthropic_token()?;
-    eprintln!("token loaded ({} chars, ends ...{})", token.len(), &token[token.len().saturating_sub(4)..]);
+    // 1. Build auth provider from OMP's credential store.
+    let auth = Arc::new(OmpAuthProvider::new()?);
+    let provider = AnthropicProvider::with_auth(auth);
 
-    // 2. Build provider + operator.
-    let provider = AnthropicProvider::new(token);
+    // 2. Build operator.
     let config = SingleShotConfig {
         system_prompt: "You are a helpful assistant. Be concise.".into(),
         default_model: "claude-sonnet-4-20250514".into(),
