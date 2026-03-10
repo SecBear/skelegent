@@ -35,7 +35,10 @@ pub struct RecalledArtifact {
 impl RecalledArtifact {
     /// Create a new recalled artifact.
     pub fn new(key: impl Into<String>, snippet: impl Into<String>) -> Self {
-        Self { key: key.into(), snippet: snippet.into() }
+        Self {
+            key: key.into(),
+            snippet: snippet.into(),
+        }
     }
 }
 
@@ -78,7 +81,10 @@ pub struct QualifyRecallConfig {
 
 impl Default for QualifyRecallConfig {
     fn default() -> Self {
-        Self { system_prompt: None, max_tokens: 512 }
+        Self {
+            system_prompt: None,
+            max_tokens: 512,
+        }
     }
 }
 
@@ -174,9 +180,15 @@ mod tests {
         assert!(sys.contains("approved"));
 
         let text = request.messages[0].text_content();
-        assert!(text.contains("migrate production database"), "CCS goal missing");
+        assert!(
+            text.contains("migrate production database"),
+            "CCS goal missing"
+        );
         assert!(text.contains("art:1"), "candidate key art:1 missing");
-        assert!(text.contains("Database backup completed"), "candidate snippet missing");
+        assert!(
+            text.contains("Database backup completed"),
+            "candidate snippet missing"
+        );
         assert!(text.contains("art:2"), "candidate key art:2 missing");
     }
 

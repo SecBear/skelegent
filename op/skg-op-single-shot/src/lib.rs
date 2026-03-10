@@ -12,9 +12,9 @@ use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
 use layer0::error::OperatorError;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorMetadata, OperatorOutput};
+use rust_decimal::Decimal;
 use skg_turn::infer::InferRequest;
 use skg_turn::provider::Provider;
-use rust_decimal::Decimal;
 use std::time::Instant;
 
 /// Static configuration for a SingleShotOperator instance.

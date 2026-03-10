@@ -210,21 +210,13 @@ impl ProviderKind {
                     })
             }
             #[cfg(feature = "provider-openai")]
-            Self::OpenAI(provider) => {
-                skg_context_engine::react_loop(ctx, provider, tools, config)
-                    .await
-                    .map_err(|e| {
-                        OperatorError::InferenceError(format!("Context engine error: {e}"))
-                    })
-            }
+            Self::OpenAI(provider) => skg_context_engine::react_loop(ctx, provider, tools, config)
+                .await
+                .map_err(|e| OperatorError::InferenceError(format!("Context engine error: {e}"))),
             #[cfg(feature = "provider-ollama")]
-            Self::Ollama(provider) => {
-                skg_context_engine::react_loop(ctx, provider, tools, config)
-                    .await
-                    .map_err(|e| {
-                        OperatorError::InferenceError(format!("Context engine error: {e}"))
-                    })
-            }
+            Self::Ollama(provider) => skg_context_engine::react_loop(ctx, provider, tools, config)
+                .await
+                .map_err(|e| OperatorError::InferenceError(format!("Context engine error: {e}"))),
         }
     }
 }

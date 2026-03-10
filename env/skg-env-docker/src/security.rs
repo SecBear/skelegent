@@ -121,7 +121,12 @@ mod tests {
         let hc = hardened_host_config(None);
         assert_eq!(hc.readonly_rootfs, Some(true));
         assert_eq!(hc.cap_drop.as_deref(), Some(&["ALL".to_string()][..]));
-        assert!(hc.security_opt.as_ref().unwrap().contains(&"no-new-privileges".to_string()));
+        assert!(
+            hc.security_opt
+                .as_ref()
+                .unwrap()
+                .contains(&"no-new-privileges".to_string())
+        );
         assert!(hc.tmpfs.as_ref().unwrap().contains_key("/tmp"));
     }
 

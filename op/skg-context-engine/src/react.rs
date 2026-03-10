@@ -18,11 +18,11 @@ use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
+use serde_json::Value;
 use skg_tool::{ToolCallContext, ToolDyn, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
-use serde_json::Value;
 use std::fmt;
 use std::sync::Arc;
 
@@ -461,9 +461,9 @@ mod tests {
     use super::*;
     use crate::output::OutputSchema;
     use layer0::id::OperatorId;
+    use serde_json::json;
     use skg_tool::{ToolDyn, ToolError};
     use skg_turn::test_utils::TestProvider;
-    use serde_json::json;
     use std::pin::Pin;
     use std::sync::Arc;
 

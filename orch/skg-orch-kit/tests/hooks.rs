@@ -5,8 +5,8 @@ use layer0::id::OperatorId;
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
 use layer0::state::{StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
-use skg_orch_kit::{EffectInterpreter, ExecutionEvent, ExecutionTrace, LocalEffectInterpreter};
 use serde_json::json;
+use skg_orch_kit::{EffectInterpreter, ExecutionEvent, ExecutionTrace, LocalEffectInterpreter};
 use std::sync::Arc;
 
 // ── Test middleware ──────────────────────────────────────────────────────────

@@ -4,9 +4,9 @@
 //! backoff + jitter for transient failures.
 
 use crate::config::RetryConfig;
-use crate::proto::runner::runner_client::RunnerClient;
 use crate::proto::runner::ExecuteRequest;
 use crate::proto::runner::ExecuteResponse;
+use crate::proto::runner::runner_client::RunnerClient;
 use layer0::error::EnvError;
 use std::time::Duration;
 use tonic::transport::Channel;
@@ -26,9 +26,7 @@ pub async fn connect_runner(
         .timeout(timeout)
         .connect()
         .await
-        .map_err(|e| {
-            EnvError::ProvisionFailed(format!("gRPC connection to runner failed: {e}"))
-        })?;
+        .map_err(|e| EnvError::ProvisionFailed(format!("gRPC connection to runner failed: {e}")))?;
 
     Ok(RunnerClient::new(channel))
 }
@@ -37,9 +35,7 @@ pub async fn connect_runner(
 fn is_retryable(code: tonic::Code) -> bool {
     matches!(
         code,
-        tonic::Code::Unavailable
-            | tonic::Code::DeadlineExceeded
-            | tonic::Code::ResourceExhausted
+        tonic::Code::Unavailable | tonic::Code::DeadlineExceeded | tonic::Code::ResourceExhausted
     )
 }
 

@@ -17,6 +17,7 @@ use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, Trig
 use layer0::orchestrator::Orchestrator;
 use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
+use rust_decimal::Decimal;
 use skg_context_engine::{Context, ReactLoopConfig, react_loop};
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_orch_local::LocalOrch;
@@ -26,7 +27,6 @@ use skg_tool::ToolRegistry;
 use skg_turn::infer::InferResponse;
 use skg_turn::test_utils::{TestProvider, make_text_response};
 use skg_turn::types::*;
-use rust_decimal::Decimal;
 use std::sync::Arc;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

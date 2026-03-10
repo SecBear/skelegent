@@ -7,12 +7,12 @@ mod types;
 
 use futures_util::StreamExt;
 use layer0::content::{Content, ContentBlock, ImageSource as L0ImageSource};
+use rust_decimal::Decimal;
 use skg_auth::{AuthProvider, AuthRequest};
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
 use skg_turn::provider::{Provider, ProviderError};
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use skg_turn::types::*;
-use rust_decimal::Decimal;
 use std::sync::Arc;
 use tracing::Instrument;
 use types::*;
@@ -842,10 +842,7 @@ mod tests_credential {
 
     #[async_trait]
     impl skg_auth::AuthProvider for StubAuth {
-        async fn provide(
-            &self,
-            request: &skg_auth::AuthRequest,
-        ) -> Result<AuthToken, AuthError> {
+        async fn provide(&self, request: &skg_auth::AuthRequest) -> Result<AuthToken, AuthError> {
             assert_eq!(
                 request.audience.as_deref().unwrap_or(""),
                 self.expected_audience,

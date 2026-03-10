@@ -59,7 +59,6 @@ pub struct Procedure {
     pub last_used: Option<f64>,
 }
 
-
 impl Procedure {
     /// Create a new procedure with the given key and description.
     pub fn new(key: impl Into<String>, description: impl Into<String>) -> Self {
@@ -136,7 +135,10 @@ pub struct DistillProcedureConfig {
 
 impl Default for DistillProcedureConfig {
     fn default() -> Self {
-        Self { system_prompt: None, max_tokens: 2048 }
+        Self {
+            system_prompt: None,
+            max_tokens: 2048,
+        }
     }
 }
 
@@ -174,8 +176,7 @@ impl DistillProcedureConfig {
     /// Strips markdown code fences if present, then deserializes the JSON.
     pub fn parse_response(&self, response: &str) -> Result<Procedure, CognitiveError> {
         let trimmed = strip_json_fences(response);
-        serde_json::from_str(trimmed)
-            .map_err(|e| CognitiveError::ParseFailed(e.to_string()))
+        serde_json::from_str(trimmed).map_err(|e| CognitiveError::ParseFailed(e.to_string()))
     }
 }
 
@@ -192,7 +193,10 @@ pub struct RecallProcedureConfig {
 
 impl Default for RecallProcedureConfig {
     fn default() -> Self {
-        Self { system_prompt: None, max_tokens: 256 }
+        Self {
+            system_prompt: None,
+            max_tokens: 256,
+        }
     }
 }
 
@@ -233,7 +237,12 @@ impl RecallProcedureConfig {
             if !proc.steps.is_empty() {
                 parts.push("Steps:".to_string());
                 for (i, step) in proc.steps.iter().enumerate() {
-                    parts.push(format!("  {}. [{}] {}", i + 1, step.action, step.description));
+                    parts.push(format!(
+                        "  {}. [{}] {}",
+                        i + 1,
+                        step.action,
+                        step.description
+                    ));
                 }
             }
         }
@@ -281,7 +290,10 @@ pub struct RefineProcedureConfig {
 
 impl Default for RefineProcedureConfig {
     fn default() -> Self {
-        Self { min_utility: 0.2, merge_threshold: 0.85 }
+        Self {
+            min_utility: 0.2,
+            merge_threshold: 0.85,
+        }
     }
 }
 
@@ -316,8 +328,7 @@ impl RefineProcedureConfig {
     /// Parse a provider response into a merged [`Procedure`].
     pub fn parse_merge_response(&self, response: &str) -> Result<Procedure, CognitiveError> {
         let trimmed = strip_json_fences(response);
-        serde_json::from_str(trimmed)
-            .map_err(|e| CognitiveError::ParseFailed(e.to_string()))
+        serde_json::from_str(trimmed).map_err(|e| CognitiveError::ParseFailed(e.to_string()))
     }
 }
 
@@ -406,7 +417,10 @@ mod tests {
         let msg = config.format_guidance(&[p]);
         let text = msg.text_content();
         assert!(text.contains("p:test"), "key missing from guidance");
-        assert!(text.contains("test procedure"), "description missing from guidance");
+        assert!(
+            text.contains("test procedure"),
+            "description missing from guidance"
+        );
         assert!(text.contains("step1"), "step action missing from guidance");
     }
 
@@ -433,7 +447,10 @@ mod tests {
 
     #[test]
     fn refine_should_prune() {
-        let config = RefineProcedureConfig { min_utility: 0.5, merge_threshold: 0.8 };
+        let config = RefineProcedureConfig {
+            min_utility: 0.5,
+            merge_threshold: 0.8,
+        };
         let mut p = Procedure::new("p:old", "old procedure");
         p.success_count = 1;
         p.failure_count = 10;
@@ -443,7 +460,10 @@ mod tests {
 
     #[test]
     fn refine_should_not_prune_low_usage() {
-        let config = RefineProcedureConfig { min_utility: 0.5, merge_threshold: 0.8 };
+        let config = RefineProcedureConfig {
+            min_utility: 0.5,
+            merge_threshold: 0.8,
+        };
         let p = Procedure::new("p:new", "new procedure");
         // success=0, failure=0, utility=0.0 < 0.5, but total uses = 0 <= threshold
         assert!(!config.should_prune(&p));
@@ -451,7 +471,10 @@ mod tests {
 
     #[test]
     fn refine_should_not_prune_high_utility() {
-        let config = RefineProcedureConfig { min_utility: 0.5, merge_threshold: 0.8 };
+        let config = RefineProcedureConfig {
+            min_utility: 0.5,
+            merge_threshold: 0.8,
+        };
         let mut p = Procedure::new("p:good", "good procedure");
         p.success_count = 9;
         p.failure_count = 1;

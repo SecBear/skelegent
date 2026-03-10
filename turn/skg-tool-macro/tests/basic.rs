@@ -1,9 +1,9 @@
 // Integration tests for the `#[skg_tool]` proc macro.
 // Each test exercises the generated struct through the `ToolDyn` trait.
 
+use serde_json::{Value, json};
 use skg_tool::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError};
 use skg_tool_macro::skg_tool;
-use serde_json::{Value, json};
 
 // ── Test 1: basic required-parameter tool ─────────────────────────────────────
 

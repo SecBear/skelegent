@@ -4,13 +4,13 @@
 //! results. The caller composes these into the full lifecycle in
 //! `DockerEnvironment::run`.
 
+use bollard::Docker;
 use bollard::container::{
     Config, CreateContainerOptions, InspectContainerOptions, RemoveContainerOptions,
     StartContainerOptions, StopContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::{HostConfig, PortBinding, PortMap};
-use bollard::Docker;
 use futures_util::StreamExt;
 use layer0::error::EnvError;
 use std::collections::HashMap;
@@ -27,12 +27,7 @@ pub async fn ensure_image(
     let should_pull = match pull_policy {
         PullPolicy::Always => true,
         PullPolicy::Never => false,
-        PullPolicy::IfMissing => {
-            docker
-                .inspect_image(image)
-                .await
-                .is_err()
-        }
+        PullPolicy::IfMissing => docker.inspect_image(image).await.is_err(),
     };
 
     if !should_pull {
@@ -128,7 +123,10 @@ pub async fn create_container(
 
     // Labels for identification and external garbage collection
     let mut labels: HashMap<String, String> = HashMap::new();
-    labels.insert("skg.operator".to_string(), params.operator_label.to_string());
+    labels.insert(
+        "skg.operator".to_string(),
+        params.operator_label.to_string(),
+    );
     labels.insert("skg.session".to_string(), params.session_label.to_string());
     labels.insert("skg.managed-by".to_string(), "skg-env-docker".to_string());
 

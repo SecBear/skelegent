@@ -76,17 +76,28 @@ async fn acc_full_loop_integration() {
     // ── Turn 1 ────────────────────────────────────────────────────────────────
 
     // Step 1: Build compression request for turn 1, no previous CCS.
-    let turn1_messages = vec![
-        Message::new(Role::User, Content::text("I need to migrate prod-db-01 to a new region.")),
-    ];
+    let turn1_messages = vec![Message::new(
+        Role::User,
+        Content::text("I need to migrate prod-db-01 to a new region."),
+    )];
     let req1 = compress_cfg.build_request(&turn1_messages, None, &[]);
 
     // Request must carry a system prompt and one user message.
-    assert!(req1.system.is_some(), "turn 1 request must have a system prompt");
-    assert_eq!(req1.messages.len(), 1, "turn 1 request must have exactly one user message");
+    assert!(
+        req1.system.is_some(),
+        "turn 1 request must have a system prompt"
+    );
+    assert_eq!(
+        req1.messages.len(),
+        1,
+        "turn 1 request must have exactly one user message"
+    );
 
     let sys1 = req1.system.as_ref().unwrap();
-    assert!(sys1.contains("episodic_trace"), "system prompt must include CCS schema");
+    assert!(
+        sys1.contains("episodic_trace"),
+        "system prompt must include CCS schema"
+    );
 
     // The user message must echo back the conversation content.
     let user_text1 = req1.messages[0].text_content();
@@ -100,7 +111,10 @@ async fn acc_full_loop_integration() {
         .parse_response(&simulated_ccs_1_json())
         .expect("CCS_1 must parse from simulated JSON");
 
-    assert_eq!(ccs_1.goal, "Migrate prod-db-01 to new region without downtime");
+    assert_eq!(
+        ccs_1.goal,
+        "Migrate prod-db-01 to new region without downtime"
+    );
     assert_eq!(ccs_1.constraints, vec![PRESERVED_CONSTRAINT]);
     assert_eq!(ccs_1.focal_entities.len(), 2);
     assert_eq!(ccs_1.relational_map.len(), 1);
@@ -121,9 +135,10 @@ async fn acc_full_loop_integration() {
     // ── Turn 2 ────────────────────────────────────────────────────────────────
 
     // Step 6: Build turn 2 compression request with CCS_1 as previous state.
-    let turn2_messages = vec![
-        Message::new(Role::User, Content::text("Backup is done. Can we start the migration?")),
-    ];
+    let turn2_messages = vec![Message::new(
+        Role::User,
+        Content::text("Backup is done. Can we start the migration?"),
+    )];
     let req2 = compress_cfg.build_request(&turn2_messages, Some(&loaded_1), &[]);
 
     let user_text2 = req2.messages[0].text_content();
@@ -143,7 +158,10 @@ async fn acc_full_loop_integration() {
     ];
     let qualify_req = qualify_cfg.build_request(&loaded_1, &candidates);
 
-    assert!(qualify_req.system.is_some(), "qualify request must have a system prompt");
+    assert!(
+        qualify_req.system.is_some(),
+        "qualify request must have a system prompt"
+    );
     let qualify_user_text = qualify_req.messages[0].text_content();
     assert!(
         qualify_user_text.contains("art:backup-log"),
@@ -163,7 +181,11 @@ async fn acc_full_loop_integration() {
         .parse_response(simulated_qualify_response())
         .expect("qualify response must parse");
 
-    assert_eq!(approved, vec!["art:backup-log"], "only the relevant artifact must be approved");
+    assert_eq!(
+        approved,
+        vec!["art:backup-log"],
+        "only the relevant artifact must be approved"
+    );
 
     // Step 10: Simulate CCS_2 via approved artifact refs in the compression request.
     let req2_with_artifacts =
@@ -179,9 +201,16 @@ async fn acc_full_loop_integration() {
         .parse_response(&simulated_ccs_2_json())
         .expect("CCS_2 must parse from simulated JSON");
 
-    assert_eq!(ccs_2.goal, "Migrate prod-db-01 to new region without downtime");
+    assert_eq!(
+        ccs_2.goal,
+        "Migrate prod-db-01 to new region without downtime"
+    );
     assert_eq!(ccs_2.artifact_refs, vec!["art:backup-log"]);
-    assert_eq!(ccs_2.focal_entities.len(), 3, "CCS_2 must add new-region-vpc entity");
+    assert_eq!(
+        ccs_2.focal_entities.len(),
+        3,
+        "CCS_2 must add new-region-vpc entity"
+    );
 
     // Step 11: Commit CCS_2 — must overwrite CCS_1.
     CommitCognitiveState::commit(&store, &scope, &ccs_2)
@@ -194,22 +223,37 @@ async fn acc_full_loop_integration() {
         .expect("CCS_2 must be present after commit");
 
     assert_eq!(loaded_2, ccs_2, "loaded CCS_2 must equal committed CCS_2");
-    assert_ne!(loaded_2.episodic_trace, ccs_1.episodic_trace, "CCS_2 must replace CCS_1");
+    assert_ne!(
+        loaded_2.episodic_trace, ccs_1.episodic_trace,
+        "CCS_2 must replace CCS_1"
+    );
 
     // Step 12: Verify CCS_2 preserved the constraint from turn 1.
     assert!(
-        loaded_2.constraints.contains(&PRESERVED_CONSTRAINT.to_string()),
+        loaded_2
+            .constraints
+            .contains(&PRESERVED_CONSTRAINT.to_string()),
         "CCS_2 must carry forward the constraint '{PRESERVED_CONSTRAINT}' from turn 1"
     );
     // Also picked up a new constraint in turn 2.
     assert!(
-        loaded_2.constraints.contains(&"Backup must be verified before cutover".to_string()),
+        loaded_2
+            .constraints
+            .contains(&"Backup must be verified before cutover".to_string()),
         "CCS_2 must add the turn-2 constraint"
     );
 
     // Structural sanity: entities and relations in CCS_2 are proper types.
-    assert!(loaded_2.focal_entities.contains(&Entity::new("prod-db-01", "server")));
-    assert!(loaded_2.focal_entities.contains(&Entity::new("new-region-vpc", "network")));
+    assert!(
+        loaded_2
+            .focal_entities
+            .contains(&Entity::new("prod-db-01", "server"))
+    );
+    assert!(
+        loaded_2
+            .focal_entities
+            .contains(&Entity::new("new-region-vpc", "network"))
+    );
     assert!(loaded_2.relational_map.contains(&Relation::new(
         "prod-db-01",
         "new-region-vpc",

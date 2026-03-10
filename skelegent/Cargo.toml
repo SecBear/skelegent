@@ -34,12 +34,7 @@ skg-turn = { path = "../turn/skg-turn", optional = true, version = "0.4.1" }
 default = ["core"]
 
 # Protocol + core wiring
-core = [
-  "dep:layer0",
-  "dep:skg-context",
-  "dep:skg-tool",
-  "dep:skg-turn",
-]
+core = ["dep:layer0", "dep:skg-context", "dep:skg-tool", "dep:skg-turn"]
 
 # Tooling / integration
 mcp = ["core", "dep:skg-mcp"]

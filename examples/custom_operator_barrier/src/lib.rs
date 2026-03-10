@@ -183,8 +183,8 @@ impl Operator for BarrierOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skg_tool::{ToolDyn, ToolError};
     use serde_json::json;
+    use skg_tool::{ToolDyn, ToolError};
     use std::sync::Arc;
 
     struct Echo;

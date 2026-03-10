@@ -126,10 +126,10 @@ mod tests {
     use layer0::content::Content;
     use layer0::context::{Message, Role};
     use layer0::id::OperatorId;
+    use serde_json::json;
     use skg_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
     use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest, infer_stream_fallback};
     use skg_turn::test_utils::TestProvider;
-    use serde_json::json;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
 

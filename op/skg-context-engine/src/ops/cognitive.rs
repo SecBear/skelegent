@@ -69,7 +69,10 @@ pub struct Entity {
 impl Entity {
     /// Create a new entity.
     pub fn new(name: impl Into<String>, entity_type: impl Into<String>) -> Self {
-        Self { name: name.into(), entity_type: entity_type.into() }
+        Self {
+            name: name.into(),
+            entity_type: entity_type.into(),
+        }
     }
 }
 
@@ -91,7 +94,11 @@ impl Relation {
         to: impl Into<String>,
         relation: impl Into<String>,
     ) -> Self {
-        Self { from: from.into(), to: to.into(), relation: relation.into() }
+        Self {
+            from: from.into(),
+            to: to.into(),
+            relation: relation.into(),
+        }
     }
 }
 
@@ -144,7 +151,10 @@ pub struct CompressCognitiveStateConfig {
 
 impl Default for CompressCognitiveStateConfig {
     fn default() -> Self {
-        Self { system_prompt: None, max_tokens: 4096 }
+        Self {
+            system_prompt: None,
+            max_tokens: 4096,
+        }
     }
 }
 
@@ -185,8 +195,7 @@ impl CompressCognitiveStateConfig {
         if let Some(prev) = prev_ccs {
             parts.push(String::new());
             parts.push("## Previous Cognitive State".to_string());
-            let prev_json =
-                serde_json::to_string_pretty(prev).unwrap_or_else(|_| "{}".to_string());
+            let prev_json = serde_json::to_string_pretty(prev).unwrap_or_else(|_| "{}".to_string());
             parts.push(prev_json);
         }
 
@@ -213,8 +222,7 @@ impl CompressCognitiveStateConfig {
     /// text cannot be parsed as a valid CCS.
     pub fn parse_response(&self, response: &str) -> Result<CognitiveState, CognitiveError> {
         let trimmed = strip_json_fences(response);
-        serde_json::from_str(trimmed)
-            .map_err(|e| CognitiveError::ParseFailed(e.to_string()))
+        serde_json::from_str(trimmed).map_err(|e| CognitiveError::ParseFailed(e.to_string()))
     }
 }
 
@@ -239,8 +247,8 @@ impl CommitCognitiveState {
         scope: &Scope,
         state: &CognitiveState,
     ) -> Result<(), StateError> {
-        let value = serde_json::to_value(state)
-            .map_err(|e| StateError::Serialization(e.to_string()))?;
+        let value =
+            serde_json::to_value(state).map_err(|e| StateError::Serialization(e.to_string()))?;
         store.write(scope, Self::KEY, value).await
     }
 
@@ -275,12 +283,8 @@ mod tests {
         let ccs = CognitiveState {
             episodic_trace: "User asked about deployment constraints".into(),
             semantic_gist: "Infrastructure migration planning".into(),
-            focal_entities: vec![
-                Entity::new("prod-db-01", "server"),
-            ],
-            relational_map: vec![
-                Relation::new("prod-db-01", "app-cluster", "serves"),
-            ],
+            focal_entities: vec![Entity::new("prod-db-01", "server")],
+            relational_map: vec![Relation::new("prod-db-01", "app-cluster", "serves")],
             goal: "Migrate to new region without downtime".into(),
             constraints: vec!["No restarts during business hours".into()],
             predictive_cue: "Next: verify backup completion".into(),
@@ -340,9 +344,7 @@ mod tests {
     #[test]
     fn compress_config_builds_request_with_schema() {
         let config = CompressCognitiveStateConfig::default();
-        let messages = vec![
-            Message::new(Role::User, Content::text("Deploy to staging")),
-        ];
+        let messages = vec![Message::new(Role::User, Content::text("Deploy to staging"))];
         let request = config.build_request(&messages, None, &[]);
         // System message should contain CCS schema
         assert!(request.system.is_some());
@@ -354,7 +356,10 @@ mod tests {
     #[test]
     fn compress_config_includes_previous_ccs() {
         let config = CompressCognitiveStateConfig::default();
-        let prev = CognitiveState { goal: "migrate DB".into(), ..Default::default() };
+        let prev = CognitiveState {
+            goal: "migrate DB".into(),
+            ..Default::default()
+        };
         let request = config.build_request(&[], Some(&prev), &[]);
         let text = request.messages[0].text_content();
         assert!(text.contains("migrate DB"));
@@ -397,9 +402,14 @@ mod tests {
         use skg_state_memory::MemoryStore;
         let store = MemoryStore::new();
         let scope = Scope::Global;
-        let ccs = CognitiveState { goal: "test goal".into(), ..Default::default() };
+        let ccs = CognitiveState {
+            goal: "test goal".into(),
+            ..Default::default()
+        };
 
-        CommitCognitiveState::commit(&store, &scope, &ccs).await.unwrap();
+        CommitCognitiveState::commit(&store, &scope, &ccs)
+            .await
+            .unwrap();
         let loaded = CommitCognitiveState::load(&store, &scope).await.unwrap();
         assert_eq!(loaded.unwrap().goal, "test goal");
     }
@@ -410,11 +420,21 @@ mod tests {
         let store = MemoryStore::new();
         let scope = Scope::Global;
 
-        let ccs1 = CognitiveState { goal: "first".into(), ..Default::default() };
-        let ccs2 = CognitiveState { goal: "second".into(), ..Default::default() };
+        let ccs1 = CognitiveState {
+            goal: "first".into(),
+            ..Default::default()
+        };
+        let ccs2 = CognitiveState {
+            goal: "second".into(),
+            ..Default::default()
+        };
 
-        CommitCognitiveState::commit(&store, &scope, &ccs1).await.unwrap();
-        CommitCognitiveState::commit(&store, &scope, &ccs2).await.unwrap();
+        CommitCognitiveState::commit(&store, &scope, &ccs1)
+            .await
+            .unwrap();
+        CommitCognitiveState::commit(&store, &scope, &ccs2)
+            .await
+            .unwrap();
 
         let loaded = CommitCognitiveState::load(&store, &scope).await.unwrap();
         assert_eq!(loaded.unwrap().goal, "second");

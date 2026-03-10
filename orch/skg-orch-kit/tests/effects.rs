@@ -5,8 +5,8 @@ use layer0::operator::{ExitReason, OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::state::StateStore;
 use layer0::test_utils::InMemoryStore;
-use skg_orch_kit::effects::{EffectExecutor as EffectsTrait, LocalEffectExecutor};
 use serde_json::json;
+use skg_orch_kit::effects::{EffectExecutor as EffectsTrait, LocalEffectExecutor};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 

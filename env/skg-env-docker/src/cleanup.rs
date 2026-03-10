@@ -3,8 +3,8 @@
 //! Ensures containers are stopped and removed even on panic or early return.
 //! Uses `Drop` with a spawned blocking task for best-effort cleanup.
 
-use bollard::container::{RemoveContainerOptions, StopContainerOptions};
 use bollard::Docker;
+use bollard::container::{RemoveContainerOptions, StopContainerOptions};
 use tracing;
 
 /// RAII guard that stops and removes a Docker container on drop.

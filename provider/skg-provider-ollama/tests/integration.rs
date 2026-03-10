@@ -5,11 +5,11 @@
 
 use layer0::content::Content;
 use layer0::context::{Message, Role};
+use serde_json::json;
 use skg_provider_ollama::OllamaProvider;
 use skg_turn::infer::InferRequest;
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
-use serde_json::json;
 
 #[tokio::test]
 #[ignore = "requires local Ollama running with llama3.2:1b"]

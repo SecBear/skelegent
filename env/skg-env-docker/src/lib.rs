@@ -23,9 +23,7 @@ pub use config::{DockerEnvConfig, PullPolicy, RetryConfig, ReusePolicy, Transpor
 
 use async_trait::async_trait;
 use bollard::Docker;
-use layer0::environment::{
-    CredentialInjection, Environment, EnvironmentSpec, IsolationBoundary,
-};
+use layer0::environment::{CredentialInjection, Environment, EnvironmentSpec, IsolationBoundary};
 use layer0::error::EnvError;
 use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput};
@@ -129,15 +127,12 @@ impl DockerEnvironment {
                         ))
                     })?;
 
-                    let lease = resolver
-                        .resolve(&cred_ref.source)
-                        .await
-                        .map_err(|e| {
-                            EnvError::CredentialFailed(format!(
-                                "failed to resolve credential '{}': {e}",
-                                cred_ref.name
-                            ))
-                        })?;
+                    let lease = resolver.resolve(&cred_ref.source).await.map_err(|e| {
+                        EnvError::CredentialFailed(format!(
+                            "failed to resolve credential '{}': {e}",
+                            cred_ref.name
+                        ))
+                    })?;
 
                     // Extract the secret value as a UTF-8 string for env var injection.
                     let value = lease.value.with_bytes(|bytes| {
@@ -297,11 +292,8 @@ impl Environment for DockerEnvironment {
         };
 
         // 10) Execute with timeout + retry
-        let execute_future = client::execute_with_retry(
-            &mut runner_client,
-            request,
-            &self.cfg.retry,
-        );
+        let execute_future =
+            client::execute_with_retry(&mut runner_client, request, &self.cfg.retry);
 
         let response = tokio::time::timeout(self.cfg.default_timeout, execute_future)
             .await

@@ -9,8 +9,8 @@ use layer0::middleware::{StoreStack, StoreWriteNext};
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::orchestrator::Orchestrator;
 use layer0::state::{StateStore, StoreOptions};
-use skg_effects_core::{EffectExecutor, Error, UnknownEffectPolicy};
 use serde_json::json;
+use skg_effects_core::{EffectExecutor, Error, UnknownEffectPolicy};
 use std::sync::Arc;
 
 /// Local executor that applies memory effects to a `StateStore` and

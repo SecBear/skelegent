@@ -119,7 +119,10 @@ pub struct ConstructNoteConfig {
 
 impl Default for ConstructNoteConfig {
     fn default() -> Self {
-        Self { system_prompt: None, max_tokens: 1024 }
+        Self {
+            system_prompt: None,
+            max_tokens: 1024,
+        }
     }
 }
 
@@ -158,8 +161,7 @@ impl ConstructNoteConfig {
     /// Returns [`CognitiveError::ParseFailed`] on failure.
     pub fn parse_response(&self, response: &str) -> Result<MemoryNote, CognitiveError> {
         let trimmed = strip_json_fences(response);
-        serde_json::from_str(trimmed)
-            .map_err(|e| CognitiveError::ParseFailed(e.to_string()))
+        serde_json::from_str(trimmed).map_err(|e| CognitiveError::ParseFailed(e.to_string()))
     }
 }
 
@@ -202,7 +204,10 @@ pub struct LinkGenerationConfig {
 
 impl Default for LinkGenerationConfig {
     fn default() -> Self {
-        Self { system_prompt: None, max_tokens: 512 }
+        Self {
+            system_prompt: None,
+            max_tokens: 512,
+        }
     }
 }
 
@@ -230,9 +235,7 @@ impl LinkGenerationConfig {
             "## Existing Notes".to_string(),
         ];
         for note in existing_notes {
-            parts.push(
-                serde_json::to_string_pretty(note).unwrap_or_else(|_| "{}".to_string()),
-            );
+            parts.push(serde_json::to_string_pretty(note).unwrap_or_else(|_| "{}".to_string()));
             parts.push(String::new());
         }
 
@@ -244,7 +247,7 @@ impl LinkGenerationConfig {
 
     /// Parse a provider response into a list of [`NoteLink`]s.
     ///
-    /// Strips fences, parses `{"links": [{"to_key", "relation", "strength"}]}`. 
+    /// Strips fences, parses `{"links": [{"to_key", "relation", "strength"}]}`.
     /// `from_key` is left empty — the caller must set it from `new_note.key`.
     pub fn parse_response(&self, response: &str) -> Result<Vec<NoteLink>, CognitiveError> {
         #[derive(Deserialize)]
@@ -307,18 +310,17 @@ pub struct EvolveMemoryConfig {
 
 impl Default for EvolveMemoryConfig {
     fn default() -> Self {
-        Self { system_prompt: None, max_tokens: 1024 }
+        Self {
+            system_prompt: None,
+            max_tokens: 1024,
+        }
     }
 }
 
 impl EvolveMemoryConfig {
     /// Build an [`InferRequest`] that asks the LLM whether `existing_note` should
     /// be updated given `new_note`.
-    pub fn build_request(
-        &self,
-        new_note: &MemoryNote,
-        existing_note: &MemoryNote,
-    ) -> InferRequest {
+    pub fn build_request(&self, new_note: &MemoryNote, existing_note: &MemoryNote) -> InferRequest {
         let system = self
             .system_prompt
             .as_deref()
@@ -343,10 +345,7 @@ impl EvolveMemoryConfig {
     ///
     /// Returns `None` if the response indicates no update is needed.
     /// Returns `Some(MemoryNote)` with the updated note if `updated: true`.
-    pub fn parse_response(
-        &self,
-        response: &str,
-    ) -> Result<Option<MemoryNote>, CognitiveError> {
+    pub fn parse_response(&self, response: &str) -> Result<Option<MemoryNote>, CognitiveError> {
         #[derive(Deserialize)]
         struct EvolveResponse {
             updated: bool,
@@ -357,11 +356,14 @@ impl EvolveMemoryConfig {
         let parsed: EvolveResponse = serde_json::from_str(trimmed)
             .map_err(|e| CognitiveError::ParseFailed(e.to_string()))?;
         if parsed.updated {
-            parsed.note.ok_or_else(|| {
-                CognitiveError::ParseFailed(
-                    "updated=true but 'note' field is missing".to_string(),
-                )
-            }).map(Some)
+            parsed
+                .note
+                .ok_or_else(|| {
+                    CognitiveError::ParseFailed(
+                        "updated=true but 'note' field is missing".to_string(),
+                    )
+                })
+                .map(Some)
         } else {
             Ok(None)
         }
@@ -502,4 +504,3 @@ mod tests {
         assert!(result.is_none());
     }
 }
-

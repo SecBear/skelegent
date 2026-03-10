@@ -5,6 +5,9 @@ edition = "2024"
 rust-version = "1.85"
 publish = false
 
+# Prevent Cargo from discovering examples/hello-claude as an example of this virtual package
+autoexamples = false
+
 [workspace]
 resolver = "3"
 members = [
