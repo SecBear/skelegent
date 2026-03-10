@@ -7,13 +7,13 @@
 //!
 //! Contents:
 //! - Concurrency and ConcurrencyDecider — classify tool calls as Shared vs Exclusive
-//! - ToolExecutionPlanner and BarrierPlanner — sequence tool calls into batches
+//! - DispatchPlanner and BarrierPlanner — sequence tool calls into batches
 //! - SteeringSource — optional source of mid-loop steering messages
 //! - BatchExecutor — run batches, with a simple sequential baseline executor
 //!
 //! Example: planning with a barrier.
 //! ```rust
-//! use neuron_turn_kit::{BarrierPlanner, Concurrency, ConcurrencyDecider, ToolExecutionPlanner};
+//! use neuron_turn_kit::{BarrierPlanner, Concurrency, ConcurrencyDecider, DispatchPlanner};
 //!
 //! struct SharedIfStartsWith;
 //! impl ConcurrencyDecider for SharedIfStartsWith {
@@ -31,6 +31,13 @@
 //! let plan = planner.plan(&calls, &SharedIfStartsWith);
 //! assert!(matches!(plan[0], neuron_turn_kit::BatchItem::Shared(_)));
 //! ```
+
+use layer0::context::Message;
+
+#[cfg(feature = "typed-output")]
+pub mod typed_output;
+#[cfg(feature = "typed-output")]
+pub use typed_output::{OutputValidator, RETURN_RESULT_TOOL, ToolSchemaEntry, TypedOutput};
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -56,7 +63,7 @@ pub trait ConcurrencyDecider: Send + Sync {
 /// the next inference call. These bypass the LLM entirely.
 #[derive(Debug, Clone)]
 pub enum ContextCommand {
-    /// Promote message at `index` to [`layer0::CompactionPolicy::Pinned`].
+    /// Promote message at `index` to `CompactionPolicy::Pinned`.
     ///
     /// Pinned messages survive all compaction. Index is into the current buffer.
     Pin {
@@ -93,7 +100,7 @@ pub enum ContextCommand {
 #[derive(Debug, Clone)]
 pub enum SteeringCommand {
     /// Inject a message into the context at the steering boundary.
-    Message(neuron_turn::types::ProviderMessage),
+    Message(Message),
     /// Execute a context manipulation command.
     Context(ContextCommand),
 }
@@ -120,29 +127,29 @@ pub enum BatchItem {
     Exclusive((String, String, Value)),
 }
 
-/// Plan how to execute tool calls this turn (sequencing only).
-pub trait ToolExecutionPlanner: Send + Sync {
-    /// Plan execution batches from an ordered list of tool calls. The planner
+/// Plan how to dispatch tool calls this turn (sequencing only).
+pub trait DispatchPlanner: Send + Sync {
+    /// Plan dispatch batches from an ordered list of tool calls. The planner
     /// must preserve relative order of application and introduce parallelism
     /// only for Shared batches. The decider classifies each tool.
     fn plan(
         &self,
-        tool_uses: &[(String, String, Value)],
+        dispatch_requests: &[(String, String, Value)],
         decider: &dyn ConcurrencyDecider,
     ) -> Vec<BatchItem>;
 }
 
 /// Barrier planner: batches shared tools; flushes on exclusive.
 pub struct BarrierPlanner;
-impl ToolExecutionPlanner for BarrierPlanner {
+impl DispatchPlanner for BarrierPlanner {
     fn plan(
         &self,
-        tool_uses: &[(String, String, Value)],
+        dispatch_requests: &[(String, String, Value)],
         decider: &dyn ConcurrencyDecider,
     ) -> Vec<BatchItem> {
         let mut out = Vec::new();
         let mut pending_shared: Vec<(String, String, Value)> = Vec::new();
-        for (id, name, input) in tool_uses.iter().cloned() {
+        for (id, name, input) in dispatch_requests.iter().cloned() {
             match decider.concurrency(&name) {
                 Concurrency::Shared => pending_shared.push((id, name, input)),
                 Concurrency::Exclusive => {

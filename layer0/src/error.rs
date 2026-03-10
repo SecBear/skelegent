@@ -10,11 +10,11 @@ pub enum OperatorError {
     #[error("model error: {0}")]
     Model(String),
 
-    /// An error during tool execution.
-    #[error("tool error in {tool}: {message}")]
-    Tool {
-        /// Name of the tool that failed.
-        tool: String,
+    /// An error during sub-dispatch execution.
+    #[error("sub-dispatch error in {operator}: {message}")]
+    SubDispatch {
+        /// Name of the operator that failed.
+        operator: String,
         /// Error message.
         message: String,
     },
@@ -42,9 +42,9 @@ pub enum OperatorError {
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum OrchError {
-    /// The requested agent was not found.
-    #[error("agent not found: {0}")]
-    AgentNotFound(String),
+    /// The requested operator was not found.
+    #[error("operator not found: {0}")]
+    OperatorNotFound(String),
 
     /// The requested workflow was not found.
     #[error("workflow not found: {0}")]
@@ -116,20 +116,6 @@ pub enum EnvError {
     /// An operator error propagated through the environment.
     #[error("operator error: {0}")]
     OperatorError(#[from] OperatorError),
-
-    /// Catch-all.
-    #[error("{0}")]
-    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
-}
-
-/// Hook errors. These are logged but do NOT halt the operator
-/// (use HookAction::Halt to halt).
-#[non_exhaustive]
-#[derive(Debug, Error)]
-pub enum HookError {
-    /// The hook execution failed.
-    #[error("hook failed: {0}")]
-    Failed(String),
 
     /// Catch-all.
     #[error("{0}")]

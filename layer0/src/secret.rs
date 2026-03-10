@@ -113,8 +113,8 @@ pub struct SecretAccessEvent {
     pub reason: Option<String>,
     /// Workflow ID for correlation.
     pub workflow_id: Option<String>,
-    /// Agent/operator ID for correlation.
-    pub agent_id: Option<String>,
+    /// Operator ID for correlation.
+    pub operator_id: Option<String>,
     /// Trace ID for distributed tracing.
     pub trace_id: Option<String>,
 }
@@ -157,7 +157,7 @@ impl SecretAccessEvent {
             lease_ttl_secs: None,
             reason: None,
             workflow_id: None,
-            agent_id: None,
+            operator_id: None,
             trace_id: None,
         }
     }

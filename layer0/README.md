@@ -19,13 +19,13 @@ Four protocol traits + two cross-cutting interfaces:
 | ② Orchestration | `Orchestrator` | Multi-agent composition + workflow routing |
 | ③ State | `StateStore` / `StateReader` | Persistent key-value memory |
 | ④ Environment | `Environment` | Isolation, credentials, resource limits |
-| ⑤ Hooks | `Hook`, `HookPoint`, `HookAction` | Observation + intervention in the turn loop |
+| ⑤ Middleware | `DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware` | Interception + policy at each boundary |
 | ⑥ Lifecycle | `BudgetEvent`, `CompactionEvent` | Cross-layer coordination events |
 
 ## Exports
 
 **Operator:** `Operator`, `OperatorInput`, `OperatorOutput`, `OperatorConfig`, `OperatorMetadata`,
-`ToolCallRecord`, `ExitReason`
+`SubDispatchRecord`, `ToolMetadata`, `ExitReason`
 
 **Orchestrator:** `Orchestrator`, `QueryPayload`
 
@@ -33,17 +33,17 @@ Four protocol traits + two cross-cutting interfaces:
 
 **Environment:** `Environment`, `EnvironmentSpec`
 
-**Hooks:** `Hook`, `HookAction`, `HookContext`, `HookPoint`
+**Middleware:** `DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`
 
 **Lifecycle:** `BudgetEvent`, `CompactionEvent`, `ObservableEvent`
 
 **Effects:** `Effect`, `Scope`, `SignalPayload`
 
-**Identity:** `AgentId`, `WorkflowId`, `ScopeId`, `SessionId`
+**Identity:** `OperatorId`, `WorkflowId`, `ScopeId`, `SessionId`
 
 **Content:** `Content`, `ContentBlock`
 
-**Errors:** `EnvError`, `HookError`, `OperatorError`, `OrchError`, `StateError`
+**Errors:** `EnvError`, `OperatorError`, `OrchError`, `StateError`
 
 **Misc:** `DurationMs`, `SecretAccessEvent`, `SecretAccessOutcome`, `SecretSource`
 
@@ -62,7 +62,7 @@ layer0 = { version = "0.4", features = ["test-utils"] }
 ```
 
 The `test-utils` feature exports in-memory implementations useful for testing downstream crates:
-`EchoOperator`, `InMemoryStore`, `LocalEnvironment`, `LocalOrchestrator`, `LoggingHook`.
+`EchoOperator`, `InMemoryStore`, `LocalEnvironment`, `LocalOrchestrator`.
 
 ### Implementing the Operator trait
 

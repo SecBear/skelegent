@@ -11,11 +11,9 @@
 `neuron-turn` is the shared toolkit that concrete providers (Anthropic, OpenAI, Ollama) and
 operators (ReAct, single-shot) build on top of. It provides:
 
-- **`Provider` trait** — the async interface that every LLM integration implements
-- **Request / response types** — `TurnRequest`, `TurnResponse`, `ContentPart`, `ToolCall`, etc.
-- **Context strategy types** — `ContextStrategy` enum and its resolution logic (used by providers
-  to window conversation history before sending to the model)
-- **Shared cost / token accounting** — `TokenUsage`, `Cost`, `DurationMs`
+- **`Provider` trait** — the async interface that every LLM integration implements (`Provider::infer()`)
+- **Request / response types** — `InferRequest`, `InferResponse`, `ToolCall`, `ToolSchema`, `StopReason`
+- **Token accounting** — `TokenUsage` with input/output/cache token counts
 
 ## Usage
 
@@ -27,16 +25,20 @@ neuron-turn = "0.4"
 ### Implementing a custom provider
 
 ```rust
-use neuron_turn::{Provider, TurnRequest, TurnResponse};
-use async_trait::async_trait;
+use std::future::Future;
+use neuron_turn::{Provider, InferRequest, InferResponse, ProviderError};
 
 pub struct MyProvider { /* ... */ }
 
-#[async_trait]
 impl Provider for MyProvider {
-    async fn turn(&self, request: TurnRequest) -> Result<TurnResponse, neuron_turn::TurnError> {
-        // call your LLM API here
-        todo!()
+    fn infer(
+        &self,
+        request: InferRequest,
+    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
+        async move {
+            // call your LLM API here
+            todo!()
+        }
     }
 }
 ```

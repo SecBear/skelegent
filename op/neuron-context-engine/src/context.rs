@@ -1,0 +1,446 @@
+//! The [`Context`] runtime — first-class mutable substrate for agentic systems.
+//!
+//! Context carries messages, typed extensions, effects, metrics, and rules.
+//! Every mutation goes through [`Context::run()`], which fires applicable rules.
+
+use crate::error::EngineError;
+use crate::op::ContextOp;
+use crate::rule::Rule;
+
+use layer0::context::Message;
+use layer0::effect::Effect;
+use rust_decimal::Decimal;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::time::Instant;
+
+/// Typed arbitrary state carried alongside messages.
+///
+/// Components store their configuration, intermediate results, or
+/// cross-component communication here. Provides type-safe dynamic storage
+/// keyed by `TypeId`.
+pub struct Extensions {
+    map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl Extensions {
+    /// Create empty extensions.
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    /// Insert a value. Overwrites any existing value of the same type.
+    pub fn insert<T: Send + Sync + 'static>(&mut self, val: T) {
+        self.map.insert(TypeId::of::<T>(), Box::new(val));
+    }
+
+    /// Get a reference to a stored value by type.
+    pub fn get<T: 'static>(&self) -> Option<&T> {
+        self.map
+            .get(&TypeId::of::<T>())
+            .and_then(|b| b.downcast_ref())
+    }
+
+    /// Get a mutable reference to a stored value by type.
+    pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        self.map
+            .get_mut(&TypeId::of::<T>())
+            .and_then(|b| b.downcast_mut())
+    }
+
+    /// Remove a stored value by type, returning it if present.
+    pub fn remove<T: 'static>(&mut self) -> Option<T> {
+        self.map
+            .remove(&TypeId::of::<T>())
+            .and_then(|b| b.downcast().ok())
+            .map(|b| *b)
+    }
+}
+
+impl Default for Extensions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Accumulated metrics for the current operator invocation.
+#[derive(Debug, Clone)]
+pub struct TurnMetrics {
+    /// Total input tokens consumed so far.
+    pub tokens_in: u64,
+    /// Total output tokens consumed so far.
+    pub tokens_out: u64,
+    /// Cumulative cost in USD.
+    pub cost: Decimal,
+    /// Number of completed inference turns.
+    pub turns_completed: u32,
+    /// Total tool calls dispatched.
+    pub tool_calls_total: u32,
+    /// When this operator invocation started.
+    pub start: Instant,
+}
+
+impl Default for TurnMetrics {
+    fn default() -> Self {
+        Self {
+            tokens_in: 0,
+            tokens_out: 0,
+            cost: Decimal::ZERO,
+            turns_completed: 0,
+            tool_calls_total: 0,
+            start: Instant::now(),
+        }
+    }
+}
+
+impl TurnMetrics {
+    /// Create fresh metrics with the clock starting now.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Wall-clock elapsed since start.
+    pub fn elapsed_ms(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
+    }
+
+    /// Total tokens (in + out).
+    pub fn total_tokens(&self) -> u64 {
+        self.tokens_in + self.tokens_out
+    }
+}
+
+/// The mutable substrate for agentic systems.
+///
+/// Context carries everything an agent needs: the message buffer, typed
+/// extensions for cross-component state, declared effects, accumulated
+/// metrics, and reactive rules.
+///
+/// Every operation goes through [`Context::run()`], which dispatches the
+/// operation and fires applicable rules before and after. This is how
+/// hookability works: rules (budget guards, overwatch agents, telemetry
+/// recorders) are participants with the same `&mut Context` power as
+/// pipeline operations.
+pub struct Context {
+    /// The message buffer. This is what gets compiled and sent to the model.
+    pub messages: Vec<Message>,
+    /// Typed arbitrary state for cross-component communication.
+    pub extensions: Extensions,
+    /// Declared effects (write_memory, delegate, signal, etc.).
+    pub effects: Vec<Effect>,
+    /// Accumulated metrics for this operator invocation.
+    pub metrics: TurnMetrics,
+    /// Reactive rules. Sorted by priority (highest first).
+    rules: Vec<Rule>,
+    /// True when executing a rule — prevents recursive rule firing.
+    in_rule: bool,
+}
+
+impl Context {
+    /// Create an empty context with no rules.
+    pub fn new() -> Self {
+        Self {
+            messages: Vec::new(),
+            extensions: Extensions::new(),
+            effects: Vec::new(),
+            metrics: TurnMetrics::new(),
+            rules: Vec::new(),
+            in_rule: false,
+        }
+    }
+
+    /// Create a context with the given rules.
+    pub fn with_rules(rules: Vec<Rule>) -> Self {
+        let mut ctx = Self::new();
+        ctx.rules = rules;
+        ctx.rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        ctx
+    }
+
+    /// Add a rule to this context. Rules are re-sorted by priority.
+    pub fn add_rule(&mut self, rule: Rule) {
+        self.rules.push(rule);
+        self.rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+    }
+
+    /// Number of rules currently attached.
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
+    /// Estimated token count of all messages.
+    pub fn token_count(&self) -> usize {
+        self.messages.iter().map(|m| m.estimated_tokens()).sum()
+    }
+
+    /// Execute a context operation, firing applicable rules before and after.
+    ///
+    /// This is the central dispatch point. The sequence is:
+    ///
+    /// 1. Fire `Before` rules matching this op type (highest priority first)
+    /// 2. Fire `When` rules whose predicates are true
+    /// 3. Execute the operation
+    /// 4. Fire `After` rules matching this op type
+    ///
+    /// Rules cannot trigger other rules — when executing inside a rule,
+    /// the rule dispatch is skipped.
+    pub async fn run<O: ContextOp + 'static>(&mut self, op: O) -> Result<O::Output, EngineError> {
+        let op_type = TypeId::of::<O>();
+
+        if !self.in_rule {
+            // Fire "before" rules
+            self.fire_before_rules(op_type).await?;
+
+            // Fire "when" rules
+            self.fire_when_rules().await?;
+        }
+
+        // Execute the operation
+        let output = op.execute(self).await?;
+
+        if !self.in_rule {
+            // Fire "after" rules
+            self.fire_after_rules(op_type).await?;
+        }
+
+        Ok(output)
+    }
+
+    /// Fire rules that match `Before` for the given op type.
+    async fn fire_before_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
+        // Collect indices of matching rules to avoid borrow issues
+        let indices: Vec<usize> = self
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.matches_before(op_type))
+            .map(|(i, _)| i)
+            .collect();
+
+        self.in_rule = true;
+        for i in indices {
+            // Safety: we're iterating by index and `execute` borrows `ctx`
+            // but not `rules` directly. We need unsafe-free approach:
+            // temporarily take the op out, execute, put back.
+            // Actually, Rule::execute takes &self for the rule and &mut Context.
+            // But Rule is inside Context. We need to work around this.
+            //
+            // Solution: take rules out, execute, put back.
+            let rules = std::mem::take(&mut self.rules);
+            let result = rules[i].execute(self).await;
+            self.rules = rules;
+            result?;
+        }
+        self.in_rule = false;
+        Ok(())
+    }
+
+    /// Fire rules whose `When` predicates match.
+    async fn fire_when_rules(&mut self) -> Result<(), EngineError> {
+        // Take rules out to avoid borrow conflict (predicate needs &Context,
+        // but rules are inside Context)
+        let rules = std::mem::take(&mut self.rules);
+        let indices: Vec<usize> = rules
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                // Evaluate predicate against self (minus rules, which are taken out)
+                r.matches_when(self)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        self.rules = rules;
+
+        self.in_rule = true;
+        for i in indices {
+            let rules = std::mem::take(&mut self.rules);
+            let result = rules[i].execute(self).await;
+            self.rules = rules;
+            result?;
+        }
+        self.in_rule = false;
+        Ok(())
+    }
+
+    /// Fire rules that match `After` for the given op type.
+    async fn fire_after_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
+        let indices: Vec<usize> = self
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.matches_after(op_type))
+            .map(|(i, _)| i)
+            .collect();
+
+        self.in_rule = true;
+        for i in indices {
+            let rules = std::mem::take(&mut self.rules);
+            let result = rules[i].execute(self).await;
+            self.rules = rules;
+            result?;
+        }
+        self.in_rule = false;
+        Ok(())
+    }
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::op::ContextOp;
+    use async_trait::async_trait;
+    use layer0::content::Content;
+    use layer0::context::Role;
+
+    struct AddMessage {
+        msg: Message,
+    }
+
+    #[async_trait]
+    impl ContextOp for AddMessage {
+        type Output = ();
+        async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            ctx.messages.push(self.msg.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn basic_run_adds_message() {
+        let mut ctx = Context::new();
+        let msg = Message::new(Role::User, Content::text("hello"));
+        ctx.run(AddMessage { msg: msg.clone() }).await.unwrap();
+        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages[0].text_content(), "hello");
+    }
+
+    #[tokio::test]
+    async fn rules_fire_before_and_after() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let counter = Arc::new(AtomicU32::new(0));
+
+        struct CountOp {
+            counter: Arc<AtomicU32>,
+        }
+
+        #[async_trait]
+        impl ContextOp for CountOp {
+            type Output = ();
+            async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let before_counter = counter.clone();
+        let after_counter = counter.clone();
+
+        let rules = vec![
+            Rule::before::<AddMessage>(
+                "count_before",
+                10,
+                CountOp {
+                    counter: before_counter,
+                },
+            ),
+            Rule::after::<AddMessage>(
+                "count_after",
+                10,
+                CountOp {
+                    counter: after_counter,
+                },
+            ),
+        ];
+
+        let mut ctx = Context::with_rules(rules);
+        let msg = Message::new(Role::User, Content::text("test"));
+        ctx.run(AddMessage { msg }).await.unwrap();
+
+        // Before + After = 2 increments
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn when_rule_fires_on_predicate() {
+        struct InjectWarning;
+
+        #[async_trait]
+        impl ContextOp for InjectWarning {
+            type Output = ();
+            async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+                ctx.messages.push(Message::new(
+                    Role::User,
+                    Content::text("[WARNING] context large"),
+                ));
+                Ok(())
+            }
+        }
+
+        let rules = vec![Rule::when(
+            "warn_large",
+            10,
+            |ctx| ctx.messages.len() >= 3,
+            InjectWarning,
+        )];
+
+        let mut ctx = Context::with_rules(rules);
+
+        // Add 3 messages to trigger the When rule
+        for _ in 0..3 {
+            ctx.messages
+                .push(Message::new(Role::User, Content::text("filler")));
+        }
+
+        // Now run an op — the When rule should fire
+        let msg = Message::new(Role::User, Content::text("trigger"));
+        ctx.run(AddMessage { msg }).await.unwrap();
+
+        // 3 filler + 1 warning (from When rule) + 1 trigger (from AddMessage) = 5
+        assert_eq!(ctx.messages.len(), 5);
+        assert!(ctx.messages[3].text_content().contains("WARNING"));
+    }
+
+    #[tokio::test]
+    async fn halt_error_stops_execution() {
+        struct HaltOp;
+
+        #[async_trait]
+        impl ContextOp for HaltOp {
+            type Output = ();
+            async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+                Err(EngineError::Halted {
+                    reason: "budget exceeded".into(),
+                })
+            }
+        }
+
+        let rules = vec![Rule::before::<AddMessage>("halt", 100, HaltOp)];
+
+        let mut ctx = Context::with_rules(rules);
+        let msg = Message::new(Role::User, Content::text("should not appear"));
+        let result = ctx.run(AddMessage { msg }).await;
+
+        assert!(result.is_err());
+        assert!(ctx.messages.is_empty()); // op never executed
+    }
+
+    #[tokio::test]
+    async fn metrics_default_values() {
+        let m = TurnMetrics::new();
+        assert_eq!(m.tokens_in, 0);
+        assert_eq!(m.tokens_out, 0);
+        assert_eq!(m.cost, Decimal::ZERO);
+        assert_eq!(m.turns_completed, 0);
+        assert_eq!(m.total_tokens(), 0);
+    }
+}

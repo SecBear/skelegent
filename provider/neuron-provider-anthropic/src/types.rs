@@ -17,6 +17,9 @@ pub struct AnthropicRequest {
     /// Tools available to the model.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<AnthropicTool>,
+    /// Whether to stream the response via SSE.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stream: bool,
 }
 
 /// A message in the Anthropic API format.
@@ -134,4 +137,116 @@ pub struct AnthropicUsage {
     /// Cache creation tokens (prompt caching).
     #[serde(default)]
     pub cache_creation_input_tokens: Option<u64>,
+}
+
+// ── Streaming SSE types ─────────────────────────────────────────────────
+
+/// Top-level SSE event wrapper from the Anthropic streaming API.
+///
+/// Each SSE frame has an `event:` type and a JSON `data:` payload.
+/// We parse the `data:` JSON into the appropriate variant.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum StreamEventData {
+    /// `message_start` — first event, contains the outer message shell.
+    #[serde(rename = "message_start")]
+    MessageStart {
+        /// The initial message skeleton (content is empty at this point).
+        message: AnthropicStreamMessage,
+    },
+    /// `content_block_start` — a new content block (text or tool_use) begins.
+    #[serde(rename = "content_block_start")]
+    ContentBlockStart {
+        /// Zero-based index of the block.
+        index: usize,
+        /// The block shell.
+        content_block: AnthropicContentBlock,
+    },
+    /// `content_block_delta` — incremental data for an open block.
+    #[serde(rename = "content_block_delta")]
+    ContentBlockDelta {
+        /// Zero-based index of the block.
+        index: usize,
+        /// The delta payload.
+        delta: StreamDelta,
+    },
+    /// `content_block_stop` — the block at `index` is complete.
+    #[serde(rename = "content_block_stop")]
+    ContentBlockStop {
+        /// Zero-based index of the block.
+        index: usize,
+    },
+    /// `message_delta` — message-level updates (stop_reason, usage).
+    #[serde(rename = "message_delta")]
+    MessageDelta {
+        /// Updated fields.
+        delta: MessageDeltaPayload,
+        /// Updated usage (output tokens so far).
+        #[serde(default)]
+        usage: Option<StreamUsage>,
+    },
+    /// `message_stop` — the message is fully complete.
+    #[serde(rename = "message_stop")]
+    MessageStop,
+    /// `ping` — keepalive.
+    #[serde(rename = "ping")]
+    Ping,
+    /// `error` — streaming error.
+    #[serde(rename = "error")]
+    Error {
+        /// Error details.
+        error: StreamError,
+    },
+}
+
+/// Incremental delta within a content block.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum StreamDelta {
+    /// Text chunk.
+    #[serde(rename = "text_delta")]
+    TextDelta {
+        /// The text fragment.
+        text: String,
+    },
+    /// Partial JSON for a tool call's `input`.
+    #[serde(rename = "input_json_delta")]
+    InputJsonDelta {
+        /// JSON fragment to append.
+        partial_json: String,
+    },
+}
+
+/// Message shell from `message_start`.
+#[derive(Debug, Deserialize)]
+pub struct AnthropicStreamMessage {
+    /// Model identifier.
+    pub model: String,
+    /// Token usage at start (input_tokens populated, output 0).
+    pub usage: AnthropicUsage,
+}
+
+/// Payload of `message_delta`.
+#[derive(Debug, Deserialize)]
+pub struct MessageDeltaPayload {
+    /// Stop reason (set on final delta).
+    #[serde(default)]
+    pub stop_reason: Option<String>,
+}
+
+/// Usage fragment from `message_delta`.
+#[derive(Debug, Deserialize)]
+pub struct StreamUsage {
+    /// Output tokens generated so far.
+    pub output_tokens: u64,
+}
+
+/// Error from the streaming API.
+#[derive(Debug, Deserialize)]
+pub struct StreamError {
+    /// Error type.
+    #[serde(rename = "type")]
+    pub error_type: String,
+    /// Human-readable message.
+    pub message: String,
 }

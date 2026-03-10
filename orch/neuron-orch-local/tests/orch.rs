@@ -1,5 +1,5 @@
 use layer0::content::Content;
-use layer0::id::{AgentId, WorkflowId};
+use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::test_utils::EchoOperator;
@@ -15,10 +15,10 @@ fn simple_input(msg: &str) -> OperatorInput {
 #[tokio::test]
 async fn dispatch_to_registered_agent() {
     let mut orch = LocalOrch::new();
-    orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
     let output = orch
-        .dispatch(&AgentId::new("echo"), simple_input("hello"))
+        .dispatch(&OperatorId::new("echo"), simple_input("hello"))
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("hello"));
@@ -29,10 +29,15 @@ async fn dispatch_agent_not_found() {
     let orch = LocalOrch::new();
 
     let result = orch
-        .dispatch(&AgentId::new("missing"), simple_input("fail"))
+        .dispatch(&OperatorId::new("missing"), simple_input("fail"))
         .await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("agent not found"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("operator not found")
+    );
 }
 
 // --- Error propagation ---
@@ -54,10 +59,10 @@ impl layer0::operator::Operator for FailingOperator {
 #[tokio::test]
 async fn dispatch_propagates_operator_error() {
     let mut orch = LocalOrch::new();
-    orch.register(AgentId::new("fail"), Arc::new(FailingOperator));
+    orch.register(OperatorId::new("fail"), Arc::new(FailingOperator));
 
     let result = orch
-        .dispatch(&AgentId::new("fail"), simple_input("boom"))
+        .dispatch(&OperatorId::new("fail"), simple_input("boom"))
         .await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("always fails"));
@@ -68,12 +73,12 @@ async fn dispatch_propagates_operator_error() {
 #[tokio::test]
 async fn dispatch_many_concurrent() {
     let mut orch = LocalOrch::new();
-    orch.register(AgentId::new("a"), Arc::new(EchoOperator));
-    orch.register(AgentId::new("b"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("a"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("b"), Arc::new(EchoOperator));
 
     let tasks = vec![
-        (AgentId::new("a"), simple_input("msg-a")),
-        (AgentId::new("b"), simple_input("msg-b")),
+        (OperatorId::new("a"), simple_input("msg-a")),
+        (OperatorId::new("b"), simple_input("msg-b")),
     ];
 
     let results = orch.dispatch_many(tasks).await;
@@ -85,12 +90,12 @@ async fn dispatch_many_concurrent() {
 #[tokio::test]
 async fn dispatch_many_partial_failure() {
     let mut orch = LocalOrch::new();
-    orch.register(AgentId::new("ok"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("ok"), Arc::new(EchoOperator));
     // "bad" is not registered
 
     let tasks = vec![
-        (AgentId::new("ok"), simple_input("fine")),
-        (AgentId::new("bad"), simple_input("fail")),
+        (OperatorId::new("ok"), simple_input("fine")),
+        (OperatorId::new("bad"), simple_input("fail")),
     ];
 
     let results = orch.dispatch_many(tasks).await;
@@ -176,11 +181,11 @@ async fn parallel_signals_recorded_correctly() {
 #[tokio::test]
 async fn usable_as_dyn_orchestrator() {
     let mut orch = LocalOrch::new();
-    orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
     let orch: Box<dyn Orchestrator> = Box::new(orch);
     let output = orch
-        .dispatch(&AgentId::new("echo"), simple_input("dyn"))
+        .dispatch(&OperatorId::new("echo"), simple_input("dyn"))
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("dyn"));
@@ -189,12 +194,94 @@ async fn usable_as_dyn_orchestrator() {
 #[tokio::test]
 async fn usable_as_arc_dyn_orchestrator() {
     let mut orch = LocalOrch::new();
-    orch.register(AgentId::new("echo"), Arc::new(EchoOperator));
+    orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
     let orch: Arc<dyn Orchestrator> = Arc::new(orch);
     let output = orch
-        .dispatch(&AgentId::new("echo"), simple_input("arc"))
+        .dispatch(&OperatorId::new("echo"), simple_input("arc"))
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("arc"));
+}
+
+// --- Middleware ---
+
+#[tokio::test]
+async fn middleware_observer_fires_on_dispatch() {
+    use async_trait::async_trait;
+    use layer0::error::OrchError;
+    use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountMiddleware {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl DispatchMiddleware for CountMiddleware {
+        async fn dispatch(
+            &self,
+            operator: &OperatorId,
+            input: OperatorInput,
+            next: &dyn DispatchNext,
+        ) -> Result<OperatorOutput, OrchError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            next.dispatch(operator, input).await
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mw = Arc::new(CountMiddleware {
+        calls: Arc::clone(&calls),
+    });
+
+    let stack = DispatchStack::builder().observe(mw).build();
+
+    let mut orch = LocalOrch::new().with_middleware(stack);
+    orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
+
+    orch.dispatch(&OperatorId::new("echo"), simple_input("ping"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "middleware observer must fire exactly once"
+    );
+}
+
+#[tokio::test]
+async fn middleware_guard_can_halt_dispatch() {
+    use async_trait::async_trait;
+    use layer0::error::OrchError;
+    use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
+
+    struct DenyAll;
+
+    #[async_trait]
+    impl DispatchMiddleware for DenyAll {
+        async fn dispatch(
+            &self,
+            _operator: &OperatorId,
+            _input: OperatorInput,
+            _next: &dyn DispatchNext,
+        ) -> Result<OperatorOutput, OrchError> {
+            Err(OrchError::DispatchFailed("denied by guard".into()))
+        }
+    }
+
+    let stack = DispatchStack::builder().guard(Arc::new(DenyAll)).build();
+
+    let mut orch = LocalOrch::new().with_middleware(stack);
+    orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
+
+    let result = orch
+        .dispatch(&OperatorId::new("echo"), simple_input("blocked"))
+        .await;
+    assert!(result.is_err());
+    assert!(
+        result.unwrap_err().to_string().contains("denied by guard"),
+        "guard middleware must halt dispatch"
+    );
 }

@@ -6,22 +6,23 @@ All crates in the neuron workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `layer0` | Protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`, `Hook`), message types, and error types. The stability contract. |
+| `layer0` | Protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`), middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`), message types, and error types. The stability contract. |
 
 ## Layer 1 -- Operator Implementations
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-turn` | Shared toolkit: `Provider` trait, `ContextStrategy`, provider request/response types, content conversions. |
+| `neuron-turn` | Shared toolkit: `Provider` trait, `InferRequest`, `InferResponse`, `TokenUsage`, provider request/response types, content conversions. |
 | `neuron-provider-anthropic` | Anthropic Claude API provider. Implements `Provider` for the Messages API. |
 | `neuron-provider-openai` | OpenAI API provider. Implements `Provider` for the Chat Completions API. |
 | `neuron-provider-ollama` | Ollama local model provider. Implements `Provider` for the Ollama API. |
 | `neuron-tool` | `ToolDyn` trait, `ToolRegistry`, `AliasedTool`. Object-safe tool abstraction. |
 | `neuron-context` | Conversation context assembly and compaction strategies. |
 | `neuron-mcp` | MCP (Model Context Protocol) client. Wraps MCP server tools as `ToolDyn` implementations. |
-| `neuron-op-react` | ReAct operator. Implements `Operator` with the reason-act-observe loop and tool execution. |
+| `neuron-context-engine` | Composable three-phase context engine (assembly, inference, reaction). Implements `Operator` with tool execution. |
+| `neuron-tool-macro` | Proc macro for `#[neuron_tool]` attribute. Generates `ToolDyn` implementations from async functions. |
 | `neuron-op-single-shot` | Single-shot operator. Implements `Operator` with one model call and no tools. |
-| `neuron-turn-kit` | Turn engine primitives: `ToolExecutionPlanner`, `ConcurrencyDecider`, `BatchExecutor` (execution-only), `SteeringSource`. |
+| `neuron-turn-kit` | Turn engine primitives: `DispatchPlanner`, `ConcurrencyDecider`, `BatchExecutor` (execution-only), `SteeringSource`. |
 
 ## Layer 2 -- Orchestration
 
@@ -53,8 +54,7 @@ All crates in the neuron workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-hooks` | `HookRegistry` for ordered hook pipeline dispatch. Collects and dispatches `Hook` events. |
-| `neuron-hook-security` | Security-focused hooks: guardrails, policy enforcement, secret redaction. |
+| `neuron-hook-security` | Security middleware: `RedactionMiddleware` (pattern-based content redaction) and `ExfilGuardMiddleware` (data-loss-prevention guardrails). |
 
 ## Umbrella
 
@@ -73,10 +73,10 @@ All crates in the neuron workspace, organized by architectural layer.
 | Layer | Crates |
 |-------|--------|
 | 0 | 1 |
-| 1 | 10 |
+| 1 | 11 |
 | 2 | 4 |
 | 3 | 2 |
 | 4 | 5 |
-| 5 | 2 |
+| 5 | 1 |
 | Umbrella | 1 |
 | **Total** | **25** |

@@ -24,7 +24,7 @@
 //!     fn name(&self) -> &str { "echo" }
 //!     fn description(&self) -> &str { "echoes input" }
 //!     fn input_schema(&self) -> Value { json!({"type": "object"}) }
-//!     fn call(&self, input: Value) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
+//!     fn call(&self, input: Value, _ctx: &neuron_tool::ToolCallContext) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
 //!         Box::pin(async move { Ok(json!({"echo": input})) })
 //!     }
 //! }
@@ -57,7 +57,7 @@ use layer0::content::{Content, ContentBlock};
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::error::OperatorError;
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, ToolCallRecord};
+use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, SubDispatchRecord};
 use neuron_tool::ToolRegistry;
 
 /// A minimal operator that batches tool calls between barriers.
@@ -93,7 +93,9 @@ impl Operator for BarrierOperator {
             for (id, name, params) in batch.drain(..) {
                 let start = std::time::Instant::now();
                 if let Some(tool) = tools.get(&name) {
-                    match tool.call(params).await {
+                    let ctx =
+                        neuron_tool::ToolCallContext::new(layer0::id::OperatorId::new("barrier"));
+                    match tool.call(params, &ctx).await {
                         Ok(val) => {
                             let content = val.to_string();
                             out_blocks.push(ContentBlock::ToolResult {
@@ -101,7 +103,7 @@ impl Operator for BarrierOperator {
                                 content,
                                 is_error: false,
                             });
-                            metadata.tools_called.push(ToolCallRecord::new(
+                            metadata.sub_dispatches.push(SubDispatchRecord::new(
                                 name,
                                 DurationMs::from_millis(start.elapsed().as_millis() as u64),
                                 true,
@@ -113,7 +115,7 @@ impl Operator for BarrierOperator {
                                 content: e.to_string(),
                                 is_error: true,
                             });
-                            metadata.tools_called.push(ToolCallRecord::new(
+                            metadata.sub_dispatches.push(SubDispatchRecord::new(
                                 name,
                                 DurationMs::from_millis(start.elapsed().as_millis() as u64),
                                 false,
@@ -127,9 +129,11 @@ impl Operator for BarrierOperator {
                         content: msg.clone(),
                         is_error: true,
                     });
-                    metadata
-                        .tools_called
-                        .push(ToolCallRecord::new(name, DurationMs::ZERO, false));
+                    metadata.sub_dispatches.push(SubDispatchRecord::new(
+                        name,
+                        DurationMs::ZERO,
+                        false,
+                    ));
                 }
             }
             // Inject a steering message after each batch flush
@@ -197,6 +201,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {

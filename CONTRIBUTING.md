@@ -77,7 +77,7 @@ The workspace is organized in 6 layers:
 | 2 | Orchestration | `neuron-orch-local`, `neuron-orch-kit` |
 | 3 | State | `neuron-state-memory`, `neuron-state-fs` |
 | 4 | Environment | `neuron-env-local`, `neuron-secret-*`, `neuron-auth-*`, `neuron-crypto-*` |
-| 5 | Cross-cutting | `neuron-hooks`, `neuron-hook-security` |
+| 5 | Cross-cutting | `neuron-hook-security` |
 | - | Umbrella | `neuron` |
 
 ### Documentation

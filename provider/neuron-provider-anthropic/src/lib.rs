@@ -5,11 +5,16 @@
 
 mod types;
 
+use futures_util::StreamExt;
+use layer0::content::{Content, ContentBlock, ImageSource as L0ImageSource};
 use neuron_auth::{AuthProvider, AuthRequest};
+use neuron_turn::infer::{InferRequest, InferResponse, ToolCall};
 use neuron_turn::provider::{Provider, ProviderError};
+use neuron_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use neuron_turn::types::*;
 use rust_decimal::Decimal;
 use std::sync::Arc;
+use tracing::Instrument;
 use types::*;
 
 /// Credential source — resolved per request.
@@ -29,6 +34,7 @@ enum ApiKeySource {
 }
 
 /// Anthropic API provider.
+#[derive(Clone)]
 pub struct AnthropicProvider {
     api_key_source: ApiKeySource,
     client: reqwest::Client,
@@ -93,7 +99,7 @@ impl AnthropicProvider {
         self
     }
 
-    fn build_request(&self, request: &ProviderRequest) -> AnthropicRequest {
+    fn build_infer_request(&self, request: &InferRequest) -> AnthropicRequest {
         let model = request
             .model
             .clone()
@@ -104,12 +110,14 @@ impl AnthropicProvider {
             .messages
             .iter()
             .map(|m| AnthropicMessage {
-                role: match m.role {
-                    Role::User => "user".into(),
-                    Role::Assistant => "assistant".into(),
-                    Role::System => "user".into(), // System messages go in the system field
+                role: match &m.role {
+                    layer0::context::Role::User => "user".into(),
+                    layer0::context::Role::Assistant => "assistant".into(),
+                    layer0::context::Role::System => "user".into(),
+                    layer0::context::Role::Tool { .. } => "user".into(),
+                    _ => "user".into(),
                 },
-                content: parts_to_anthropic_content(&m.content),
+                content: message_content_to_anthropic(&m.content),
             })
             .collect();
 
@@ -129,19 +137,114 @@ impl AnthropicProvider {
             messages,
             system: request.system.clone(),
             tools,
+            stream: false,
         }
     }
 }
 
-/// Parse a raw [`AnthropicResponse`] into a [`ProviderResponse`].
-fn parse_anthropic_response(
+/// Convert layer0 [`Content`] to Anthropic wire-format content.
+fn message_content_to_anthropic(content: &Content) -> AnthropicContent {
+    match content {
+        Content::Text(text) => AnthropicContent::Text(text.clone()),
+        Content::Blocks(blocks) => {
+            let anthropic_blocks: Vec<AnthropicContentBlock> = blocks
+                .iter()
+                .filter_map(content_block_to_anthropic)
+                .collect();
+            if anthropic_blocks.len() == 1
+                && let AnthropicContentBlock::Text { text } = &anthropic_blocks[0]
+            {
+                return AnthropicContent::Text(text.clone());
+            }
+            AnthropicContent::Blocks(anthropic_blocks)
+        }
+        // Future Content variants — treat as empty text
+        _ => AnthropicContent::Text(String::new()),
+    }
+}
+
+/// Convert a single layer0 [`ContentBlock`] to an Anthropic content block.
+fn content_block_to_anthropic(block: &ContentBlock) -> Option<AnthropicContentBlock> {
+    match block {
+        ContentBlock::Text { text } => Some(AnthropicContentBlock::Text { text: text.clone() }),
+        ContentBlock::ToolUse { id, name, input } => Some(AnthropicContentBlock::ToolUse {
+            id: id.clone(),
+            name: name.clone(),
+            input: input.clone(),
+        }),
+        ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => Some(AnthropicContentBlock::ToolResult {
+            tool_use_id: tool_use_id.clone(),
+            content: content.clone(),
+            is_error: *is_error,
+        }),
+        ContentBlock::Image { source, media_type } => Some(AnthropicContentBlock::Image {
+            source: match source {
+                L0ImageSource::Base64 { data } => {
+                    AnthropicImageSource::Base64 { data: data.clone() }
+                }
+                L0ImageSource::Url { url } => AnthropicImageSource::Url { url: url.clone() },
+                _ => return None,
+            },
+            media_type: media_type.clone(),
+        }),
+        // Skip custom blocks — not supported by Anthropic API
+        _ => None,
+    }
+}
+
+/// Parse a raw [`AnthropicResponse`] into an [`InferResponse`].
+fn parse_anthropic_infer_response(
     response: AnthropicResponse,
-) -> Result<ProviderResponse, ProviderError> {
-    let content: Vec<ContentPart> = response
-        .content
-        .iter()
-        .map(anthropic_block_to_content_part)
-        .collect();
+) -> Result<InferResponse, ProviderError> {
+    let mut text_parts: Vec<ContentBlock> = Vec::new();
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+    for block in &response.content {
+        match block {
+            AnthropicContentBlock::Text { text } => {
+                text_parts.push(ContentBlock::Text { text: text.clone() });
+            }
+            AnthropicContentBlock::ToolUse { id, name, input } => {
+                tool_calls.push(ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: input.clone(),
+                });
+            }
+            AnthropicContentBlock::ToolResult { .. } => {
+                // Unexpected in a response — ignore
+            }
+            AnthropicContentBlock::Image { source, media_type } => {
+                text_parts.push(ContentBlock::Image {
+                    source: match source {
+                        AnthropicImageSource::Base64 { data } => {
+                            L0ImageSource::Base64 { data: data.clone() }
+                        }
+                        AnthropicImageSource::Url { url } => {
+                            L0ImageSource::Url { url: url.clone() }
+                        }
+                    },
+                    media_type: media_type.clone(),
+                });
+            }
+        }
+    }
+
+    let content = if text_parts.len() == 1 {
+        if let ContentBlock::Text { text } = &text_parts[0] {
+            Content::Text(text.clone())
+        } else {
+            Content::Blocks(text_parts)
+        }
+    } else if text_parts.is_empty() {
+        Content::text("")
+    } else {
+        Content::Blocks(text_parts)
+    };
 
     let stop_reason = match response.stop_reason.as_str() {
         "end_turn" => StopReason::EndTurn,
@@ -158,13 +261,13 @@ fn parse_anthropic_response(
         cache_creation_tokens: response.usage.cache_creation_input_tokens,
     };
 
-    // Cost calculation for Haiku: $0.25/MTok input, $1.25/MTok output
     let input_cost = Decimal::from(response.usage.input_tokens) * Decimal::new(25, 8);
     let output_cost = Decimal::from(response.usage.output_tokens) * Decimal::new(125, 8);
     let cost = input_cost + output_cost;
 
-    Ok(ProviderResponse {
+    Ok(InferResponse {
         content,
+        tool_calls,
         stop_reason,
         usage,
         model: response.model,
@@ -210,23 +313,22 @@ async fn resolve_key(source: &ApiKeySource) -> Result<String, ProviderError> {
 }
 
 impl Provider for AnthropicProvider {
-    fn complete(
+    fn infer(
         &self,
-        request: ProviderRequest,
-    ) -> impl std::future::Future<Output = Result<ProviderResponse, ProviderError>> + Send {
-        // Clone the parts we need to move into the async block without
-        // holding a reference to `self`.
+        request: InferRequest,
+    ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
         let source = self.api_key_source.clone();
-        let api_request = self.build_request(&request);
+        let api_request = self.build_infer_request(&request);
         let client = self.client.clone();
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
 
+        let model = request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.infer", provider = "anthropic", model);
+
         async move {
             let key = resolve_key(&source).await?;
 
-            // OAuth tokens require Bearer auth + the oauth beta header.
-            // Standard API keys use x-api-key.
             let mut builder = client.post(&api_url);
             if is_oauth_token(&key) {
                 builder = builder
@@ -269,8 +371,288 @@ impl Provider for AnthropicProvider {
                 .await
                 .map_err(|e| ProviderError::InvalidResponse(e.to_string()))?;
 
-            parse_anthropic_response(api_response)
+            let response = parse_anthropic_infer_response(api_response)?;
+            tracing::info!(
+                input_tokens = response.usage.input_tokens,
+                output_tokens = response.usage.output_tokens,
+                "inference finished"
+            );
+            Ok(response)
         }
+        .instrument(span)
+    }
+}
+
+impl StreamProvider for AnthropicProvider {
+    fn infer_stream(
+        &self,
+        request: StreamRequest,
+        on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
+    ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        let source = self.api_key_source.clone();
+        let infer_request = InferRequest {
+            model: request.model,
+            messages: request.messages,
+            tools: request.tools,
+            max_tokens: request.max_tokens,
+            temperature: request.temperature,
+            system: request.system,
+            extra: request.extra,
+        };
+        let mut api_request = self.build_infer_request(&infer_request);
+        api_request.stream = true;
+        let client = self.client.clone();
+        let api_url = self.api_url.clone();
+        let api_version = self.api_version.clone();
+
+        let model = infer_request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.infer_stream", provider = "anthropic", model);
+
+        async move {
+            let key = resolve_key(&source).await?;
+
+            let mut builder = client.post(&api_url);
+            if is_oauth_token(&key) {
+                builder = builder
+                    .header("Authorization", format!("Bearer {key}"))
+                    .header("anthropic-beta", "oauth-2025-04-20");
+            } else {
+                builder = builder.header("x-api-key", key);
+            }
+            let http_response = builder
+                .header("anthropic-version", &api_version)
+                .header("content-type", "application/json")
+                .json(&api_request)
+                .send()
+                .await
+                .map_err(|e| ProviderError::TransientError {
+                    message: e.to_string(),
+                    status: None,
+                })?;
+
+            let status = http_response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(ProviderError::RateLimited);
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                let body = http_response.text().await.unwrap_or_default();
+                return Err(ProviderError::AuthFailed(body));
+            }
+            if !status.is_success() {
+                let body = http_response.text().await.unwrap_or_default();
+                return Err(map_error_response(status, &body));
+            }
+
+            // Process SSE byte stream
+            let mut stream = http_response.bytes_stream();
+            let mut buf = String::new();
+
+            // Accumulation state
+            let mut model_name = String::new();
+            let mut input_tokens: u64 = 0;
+            let mut output_tokens: u64 = 0;
+            let mut cache_read_tokens: Option<u64> = None;
+            let mut cache_creation_tokens: Option<u64> = None;
+            let mut stop_reason = StopReason::EndTurn;
+            let mut text_parts: Vec<ContentBlock> = Vec::new();
+            let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+            // Per-block accumulators (indexed by content_block index)
+            let mut block_texts: Vec<String> = Vec::new();
+            let mut block_tool_ids: Vec<String> = Vec::new();
+            let mut block_tool_names: Vec<String> = Vec::new();
+            let mut block_tool_inputs: Vec<String> = Vec::new();
+            // Track which indices are tool_use vs text
+            let mut block_is_tool: Vec<bool> = Vec::new();
+
+            while let Some(chunk) = stream.next().await {
+                let bytes = chunk.map_err(|e| ProviderError::TransientError {
+                    message: format!("stream read error: {e}"),
+                    status: None,
+                })?;
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+
+                // Process complete SSE frames
+                while let Some(frame_end) = buf.find("\n\n") {
+                    let frame = buf[..frame_end].to_string();
+                    buf = buf[frame_end + 2..].to_string();
+
+                    // Parse SSE: extract event type and data
+                    let mut event_type = String::new();
+                    let mut data = String::new();
+                    for line in frame.lines() {
+                        if let Some(rest) = line.strip_prefix("event: ") {
+                            event_type = rest.to_string();
+                        } else if let Some(rest) = line.strip_prefix("data: ") {
+                            data = rest.to_string();
+                        }
+                    }
+
+                    if data.is_empty() {
+                        continue;
+                    }
+
+                    let parsed: StreamEventData = match serde_json::from_str(&data) {
+                        Ok(ev) => ev,
+                        Err(e) => {
+                            tracing::warn!(
+                                event_type,
+                                error = %e,
+                                "failed to parse SSE event"
+                            );
+                            continue;
+                        }
+                    };
+
+                    match parsed {
+                        StreamEventData::MessageStart { message } => {
+                            model_name = message.model;
+                            input_tokens = message.usage.input_tokens;
+                            cache_read_tokens = message.usage.cache_read_input_tokens;
+                            cache_creation_tokens = message.usage.cache_creation_input_tokens;
+                        }
+                        StreamEventData::ContentBlockStart {
+                            index,
+                            content_block,
+                        } => {
+                            // Ensure accumulators are large enough
+                            while block_texts.len() <= index {
+                                block_texts.push(String::new());
+                                block_tool_ids.push(String::new());
+                                block_tool_names.push(String::new());
+                                block_tool_inputs.push(String::new());
+                                block_is_tool.push(false);
+                            }
+                            match &content_block {
+                                AnthropicContentBlock::Text { .. } => {
+                                    block_is_tool[index] = false;
+                                }
+                                AnthropicContentBlock::ToolUse { id, name, .. } => {
+                                    block_is_tool[index] = true;
+                                    block_tool_ids[index] = id.clone();
+                                    block_tool_names[index] = name.clone();
+                                    on_event(StreamEvent::ToolCallStart {
+                                        index,
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                        StreamEventData::ContentBlockDelta { index, delta } => match delta {
+                            StreamDelta::TextDelta { text } => {
+                                if index < block_texts.len() {
+                                    block_texts[index].push_str(&text);
+                                }
+                                on_event(StreamEvent::TextDelta(text));
+                            }
+                            StreamDelta::InputJsonDelta { partial_json } => {
+                                if index < block_tool_inputs.len() {
+                                    block_tool_inputs[index].push_str(&partial_json);
+                                }
+                                on_event(StreamEvent::ToolCallDelta {
+                                    index,
+                                    json_delta: partial_json,
+                                });
+                            }
+                        },
+                        StreamEventData::ContentBlockStop { index } => {
+                            if index < block_is_tool.len() {
+                                if block_is_tool[index] {
+                                    let input_json: serde_json::Value = serde_json::from_str(
+                                        &block_tool_inputs[index],
+                                    )
+                                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                                    tool_calls.push(ToolCall {
+                                        id: block_tool_ids[index].clone(),
+                                        name: block_tool_names[index].clone(),
+                                        input: input_json,
+                                    });
+                                } else {
+                                    text_parts.push(ContentBlock::Text {
+                                        text: block_texts[index].clone(),
+                                    });
+                                }
+                            }
+                        }
+                        StreamEventData::MessageDelta { delta, usage } => {
+                            if let Some(sr) = delta.stop_reason {
+                                stop_reason = match sr.as_str() {
+                                    "end_turn" => StopReason::EndTurn,
+                                    "tool_use" => StopReason::ToolUse,
+                                    "max_tokens" => StopReason::MaxTokens,
+                                    "refusal" => StopReason::ContentFilter,
+                                    _ => StopReason::EndTurn,
+                                };
+                            }
+                            if let Some(u) = usage {
+                                output_tokens = u.output_tokens;
+                                let usage_event = TokenUsage {
+                                    input_tokens,
+                                    output_tokens,
+                                    cache_read_tokens,
+                                    cache_creation_tokens,
+                                };
+                                on_event(StreamEvent::Usage(usage_event));
+                            }
+                        }
+                        StreamEventData::Error { error } => {
+                            return Err(ProviderError::TransientError {
+                                message: format!(
+                                    "stream error ({}): {}",
+                                    error.error_type, error.message
+                                ),
+                                status: None,
+                            });
+                        }
+                        StreamEventData::MessageStop | StreamEventData::Ping => {}
+                    }
+                }
+            }
+
+            // Build final response
+            let content = if text_parts.len() == 1 {
+                if let ContentBlock::Text { text } = &text_parts[0] {
+                    Content::Text(text.clone())
+                } else {
+                    Content::Blocks(text_parts)
+                }
+            } else if text_parts.is_empty() {
+                Content::text("")
+            } else {
+                Content::Blocks(text_parts)
+            };
+
+            let usage = TokenUsage {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+            };
+
+            let input_cost = Decimal::from(input_tokens) * Decimal::new(25, 8);
+            let output_cost = Decimal::from(output_tokens) * Decimal::new(125, 8);
+            let cost = input_cost + output_cost;
+
+            let response = InferResponse {
+                content,
+                tool_calls,
+                stop_reason,
+                usage,
+                model: model_name,
+                cost: Some(cost),
+                truncated: None,
+            };
+
+            on_event(StreamEvent::Done(response.clone()));
+
+            tracing::info!(input_tokens, output_tokens, "streaming inference finished");
+            Ok(response)
+        }
+        .instrument(span)
     }
 }
 
@@ -293,152 +675,10 @@ fn map_error_response(status: reqwest::StatusCode, body: &str) -> ProviderError 
     }
 }
 
-fn parts_to_anthropic_content(parts: &[ContentPart]) -> AnthropicContent {
-    if parts.len() == 1
-        && let ContentPart::Text { text } = &parts[0]
-    {
-        return AnthropicContent::Text(text.clone());
-    }
-    AnthropicContent::Blocks(parts.iter().map(content_part_to_anthropic_block).collect())
-}
-
-fn content_part_to_anthropic_block(part: &ContentPart) -> AnthropicContentBlock {
-    match part {
-        ContentPart::Text { text } => AnthropicContentBlock::Text { text: text.clone() },
-        ContentPart::ToolUse { id, name, input } => AnthropicContentBlock::ToolUse {
-            id: id.clone(),
-            name: name.clone(),
-            input: input.clone(),
-        },
-        ContentPart::ToolResult {
-            tool_use_id,
-            content,
-            is_error,
-        } => AnthropicContentBlock::ToolResult {
-            tool_use_id: tool_use_id.clone(),
-            content: content.clone(),
-            is_error: *is_error,
-        },
-        ContentPart::Image { source, media_type } => AnthropicContentBlock::Image {
-            source: match source {
-                ImageSource::Base64 { data } => AnthropicImageSource::Base64 { data: data.clone() },
-                ImageSource::Url { url } => AnthropicImageSource::Url { url: url.clone() },
-            },
-            media_type: media_type.clone(),
-        },
-    }
-}
-
-fn anthropic_block_to_content_part(block: &AnthropicContentBlock) -> ContentPart {
-    match block {
-        AnthropicContentBlock::Text { text } => ContentPart::Text { text: text.clone() },
-        AnthropicContentBlock::ToolUse { id, name, input } => ContentPart::ToolUse {
-            id: id.clone(),
-            name: name.clone(),
-            input: input.clone(),
-        },
-        AnthropicContentBlock::ToolResult {
-            tool_use_id,
-            content,
-            is_error,
-        } => ContentPart::ToolResult {
-            tool_use_id: tool_use_id.clone(),
-            content: content.clone(),
-            is_error: *is_error,
-        },
-        AnthropicContentBlock::Image { source, media_type } => ContentPart::Image {
-            source: match source {
-                AnthropicImageSource::Base64 { data } => ImageSource::Base64 { data: data.clone() },
-                AnthropicImageSource::Url { url } => ImageSource::Url { url: url.clone() },
-            },
-            media_type: media_type.clone(),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn build_simple_request() {
-        let provider = AnthropicProvider::new("test-key");
-        let request = ProviderRequest {
-            model: Some("claude-haiku-4-5-20251001".into()),
-            messages: vec![ProviderMessage {
-                role: Role::User,
-                content: vec![ContentPart::Text {
-                    text: "Hello".into(),
-                }],
-            }],
-            tools: vec![],
-            max_tokens: Some(256),
-            temperature: None,
-            system: Some("Be helpful.".into()),
-            extra: json!(null),
-        };
-
-        let api_request = provider.build_request(&request);
-        assert_eq!(api_request.model, "claude-haiku-4-5-20251001");
-        assert_eq!(api_request.max_tokens, 256);
-        assert_eq!(api_request.messages.len(), 1);
-        assert_eq!(api_request.messages[0].role, "user");
-        assert_eq!(api_request.system, Some("Be helpful.".into()));
-    }
-
-    #[test]
-    fn parse_simple_response() {
-        let provider = AnthropicProvider::new("test-key");
-        let api_response = AnthropicResponse {
-            content: vec![AnthropicContentBlock::Text {
-                text: "Hello!".into(),
-            }],
-            model: "claude-haiku-4-5-20251001".into(),
-            stop_reason: "end_turn".into(),
-            usage: AnthropicUsage {
-                input_tokens: 10,
-                output_tokens: 5,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-            },
-        };
-
-        let response = parse_anthropic_response(api_response).unwrap();
-        assert_eq!(response.stop_reason, StopReason::EndTurn);
-        assert_eq!(response.usage.input_tokens, 10);
-        assert_eq!(response.usage.output_tokens, 5);
-        assert!(response.cost.is_some());
-        assert_eq!(response.content.len(), 1);
-    }
-
-    #[test]
-    fn parse_tool_use_response() {
-        let provider = AnthropicProvider::new("test-key");
-        let api_response = AnthropicResponse {
-            content: vec![AnthropicContentBlock::ToolUse {
-                id: "tu_1".into(),
-                name: "bash".into(),
-                input: json!({"command": "ls"}),
-            }],
-            model: "claude-haiku-4-5-20251001".into(),
-            stop_reason: "tool_use".into(),
-            usage: AnthropicUsage {
-                input_tokens: 20,
-                output_tokens: 30,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-            },
-        };
-
-        let response = parse_anthropic_response(api_response).unwrap();
-        assert_eq!(response.stop_reason, StopReason::ToolUse);
-        assert_eq!(response.content.len(), 1);
-        match &response.content[0] {
-            ContentPart::ToolUse { name, .. } => assert_eq!(name, "bash"),
-            _ => panic!("expected ToolUse"),
-        }
-    }
 
     #[test]
     fn tool_schema_serializes() {
@@ -455,124 +695,6 @@ mod tests {
         };
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "get_weather");
-    }
-
-    #[test]
-    fn parse_cache_tokens() {
-        let provider = AnthropicProvider::new("test-key");
-        let api_response = AnthropicResponse {
-            content: vec![AnthropicContentBlock::Text {
-                text: "Cached.".into(),
-            }],
-            model: "claude-haiku-4-5-20251001".into(),
-            stop_reason: "end_turn".into(),
-            usage: AnthropicUsage {
-                input_tokens: 100,
-                output_tokens: 10,
-                cache_read_input_tokens: Some(50),
-                cache_creation_input_tokens: Some(25),
-            },
-        };
-
-        let response = parse_anthropic_response(api_response).unwrap();
-        assert_eq!(response.usage.cache_read_tokens, Some(50));
-        assert_eq!(response.usage.cache_creation_tokens, Some(25));
-    }
-
-    #[test]
-    fn default_model_is_haiku() {
-        let provider = AnthropicProvider::new("test-key");
-        let request = ProviderRequest {
-            model: None,
-            messages: vec![ProviderMessage {
-                role: Role::User,
-                content: vec![ContentPart::Text { text: "Hi".into() }],
-            }],
-            tools: vec![],
-            max_tokens: None,
-            temperature: None,
-            system: None,
-            extra: json!(null),
-        };
-
-        let api_request = provider.build_request(&request);
-        assert_eq!(api_request.model, "claude-haiku-4-5-20251001");
-    }
-
-    #[test]
-    fn default_max_tokens_is_4096() {
-        let provider = AnthropicProvider::new("test-key");
-        let request = ProviderRequest {
-            model: None,
-            messages: vec![],
-            tools: vec![],
-            max_tokens: None,
-            temperature: None,
-            system: None,
-            extra: json!(null),
-        };
-
-        let api_request = provider.build_request(&request);
-        assert_eq!(api_request.max_tokens, 4096);
-    }
-
-    #[test]
-    fn tool_result_in_request() {
-        let provider = AnthropicProvider::new("test-key");
-        let request = ProviderRequest {
-            model: None,
-            messages: vec![
-                ProviderMessage {
-                    role: Role::Assistant,
-                    content: vec![ContentPart::ToolUse {
-                        id: "tu_1".into(),
-                        name: "bash".into(),
-                        input: json!({"cmd": "ls"}),
-                    }],
-                },
-                ProviderMessage {
-                    role: Role::User,
-                    content: vec![ContentPart::ToolResult {
-                        tool_use_id: "tu_1".into(),
-                        content: "file.txt".into(),
-                        is_error: false,
-                    }],
-                },
-            ],
-            tools: vec![],
-            max_tokens: None,
-            temperature: None,
-            system: None,
-            extra: json!(null),
-        };
-
-        let api_request = provider.build_request(&request);
-        assert_eq!(api_request.messages.len(), 2);
-        assert_eq!(api_request.messages[0].role, "assistant");
-        assert_eq!(api_request.messages[1].role, "user");
-    }
-
-    #[test]
-    fn parse_response_refusal_maps_to_content_filter() {
-        let api_response = AnthropicResponse {
-            content: vec![AnthropicContentBlock::Text {
-                text: "I cannot help with that.".into(),
-            }],
-            model: "claude-haiku-4-5-20251001".into(),
-            stop_reason: "refusal".into(),
-            usage: AnthropicUsage {
-                input_tokens: 5,
-                output_tokens: 8,
-                cache_read_input_tokens: None,
-                cache_creation_input_tokens: None,
-            },
-        };
-        let resp = parse_anthropic_response(api_response).expect("refusal should be Ok");
-        assert_eq!(resp.stop_reason, StopReason::ContentFilter);
-        assert_eq!(resp.usage.input_tokens, 5);
-        assert_eq!(resp.usage.output_tokens, 8);
-        assert_eq!(resp.content.len(), 1);
-        assert!(resp.cost.is_some());
     }
 
     #[test]

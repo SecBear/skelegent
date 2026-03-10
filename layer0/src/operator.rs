@@ -1,4 +1,4 @@
-//! The Operator protocol — what one agent does per cycle.
+//! The Operator protocol — what one operator does per cycle.
 
 use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
 use async_trait::async_trait;
@@ -78,9 +78,10 @@ pub struct OperatorConfig {
     /// Model override (implementation-specific string).
     pub model: Option<String>,
 
-    /// Tool restrictions for this operator invocation.
-    /// None = use defaults. Some(list) = only these tools.
-    pub allowed_tools: Option<Vec<String>>,
+    /// Operator restrictions for this operator invocation.
+    /// None = use defaults. Some(list) = only these operators.
+    #[serde(alias = "allowed_tools")]
+    pub allowed_operators: Option<Vec<String>>,
 
     /// Additional system prompt content to prepend/append.
     /// Does not replace the operator runtime's base identity —
@@ -105,9 +106,9 @@ pub enum ExitReason {
     CircuitBreaker,
     /// Wall-clock timeout.
     Timeout,
-    /// Observer/guardrail halted execution.
-    ObserverHalt {
-        /// The reason the observer halted execution.
+    /// Interceptor/middleware halted execution.
+    InterceptorHalt {
+        /// The reason the interceptor halted execution.
         reason: String,
     },
     /// Unrecoverable error during execution.
@@ -123,6 +124,12 @@ pub enum ExitReason {
         /// Human-readable reason string supplied by the provider or runtime.
         reason: String,
     },
+    /// One or more tool calls require human approval before execution.
+    /// The calling layer should inspect [`OperatorOutput::effects`] for
+    /// [`Effect::ToolApprovalRequired`] entries, obtain approval, then
+    /// either execute the tools and re-enter the loop, or inject a denial
+    /// message and re-enter.
+    AwaitingApproval,
     /// Future exit reasons.
     Custom(String),
 }
@@ -169,19 +176,20 @@ pub struct OperatorMetadata {
     pub cost: Decimal,
     /// Number of ReAct loop iterations used.
     pub turns_used: u32,
-    /// Record of each tool call made.
-    pub tools_called: Vec<ToolCallRecord>,
+    /// Record of each sub-dispatch made.
+    #[serde(alias = "tools_called")]
+    pub sub_dispatches: Vec<SubDispatchRecord>,
     /// Wall-clock duration of the operator invocation.
     pub duration: DurationMs,
 }
 
-/// Record of a single tool invocation within an operator execution.
+/// Record of a single sub-dispatch within an operator execution.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallRecord {
-    /// Name of the tool that was called.
+pub struct SubDispatchRecord {
+    /// Name of the operator (sub-dispatch) that was called.
     pub name: String,
-    /// How long the tool call took.
+    /// How long the sub-dispatch took.
     pub duration: DurationMs,
     /// Whether the call succeeded.
     pub success: bool,
@@ -194,7 +202,7 @@ impl Default for OperatorMetadata {
             tokens_out: 0,
             cost: Decimal::ZERO,
             turns_used: 0,
-            tools_called: vec![],
+            sub_dispatches: vec![],
             duration: DurationMs::ZERO,
         }
     }
@@ -225,13 +233,53 @@ impl OperatorOutput {
     }
 }
 
-impl ToolCallRecord {
-    /// Create a new ToolCallRecord.
+impl SubDispatchRecord {
+    /// Create a new SubDispatchRecord.
     pub fn new(name: impl Into<String>, duration: DurationMs, success: bool) -> Self {
         Self {
             name: name.into(),
             duration,
             success,
+        }
+    }
+}
+
+/// Metadata describing a tool/sub-operator's external interface.
+///
+/// Used by orchestrators, MCP servers, and any component that needs
+/// to advertise an operator's capabilities to external systems
+/// (including LLM tool-use schemas).
+///
+/// This is the bridge between the operator protocol and tool-use APIs:
+/// an operator that exposes itself as a "tool" attaches `ToolMetadata`
+/// so callers know how to invoke it.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolMetadata {
+    /// Human-readable name for the tool.
+    pub name: String,
+    /// Description of what the tool does (shown to LLMs in tool-use prompts).
+    pub description: String,
+    /// JSON Schema describing the expected input.
+    pub input_schema: serde_json::Value,
+    /// Whether this tool is safe to call concurrently with other tools.
+    /// Used by dispatch planners to decide parallel vs. sequential execution.
+    pub parallel_safe: bool,
+}
+
+impl ToolMetadata {
+    /// Create a new `ToolMetadata`.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: serde_json::Value,
+        parallel_safe: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            input_schema,
+            parallel_safe,
         }
     }
 }
@@ -242,7 +290,7 @@ impl ToolCallRecord {
 
 /// Protocol ① — The Operator
 ///
-/// What one agent does per cycle. Receives input, assembles context,
+/// What one operator does per cycle. Receives input, assembles context,
 /// reasons (model call), acts (tool execution), produces output.
 ///
 /// The ReAct while-loop, the agentic loop, the augmented LLM —
@@ -271,4 +319,40 @@ pub trait Operator: Send + Sync {
     /// The operator MUST NOT write to external state directly — it
     /// declares writes as Effects in the output.
     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_metadata_construction() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" }
+            },
+            "required": ["query"]
+        });
+        let meta = ToolMetadata::new("search", "Search the web", schema.clone(), true);
+        assert_eq!(meta.name, "search");
+        assert_eq!(meta.description, "Search the web");
+        assert_eq!(meta.input_schema, schema);
+        assert!(meta.parallel_safe);
+    }
+
+    #[test]
+    fn tool_metadata_serde_roundtrip() {
+        let meta = ToolMetadata::new(
+            "code_exec",
+            "Execute code in a sandbox",
+            serde_json::json!({"type": "object"}),
+            false,
+        );
+        let json = serde_json::to_string(&meta).expect("serialize");
+        let back: ToolMetadata = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.name, "code_exec");
+        assert_eq!(back.description, "Execute code in a sandbox");
+        assert!(!back.parallel_safe);
+    }
 }

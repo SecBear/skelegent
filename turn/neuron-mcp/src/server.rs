@@ -6,10 +6,13 @@
 //! and prompt templates.
 
 use std::borrow::Cow;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use layer0::StateReader;
-use neuron_tool::ToolRegistry;
+use layer0::operator::{Operator, TriggerType};
+use layer0::{StateReader, ToolMetadata};
+use neuron_tool::{ToolDyn, ToolError, ToolRegistry};
 use rmcp::model::{
     Annotated, CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams,
     GetPromptResult, Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult,
@@ -22,6 +25,51 @@ use rmcp::transport::io::stdio;
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
 
 use crate::error::McpError;
+
+/// Bridges an [`Operator`] and [`ToolMetadata`] into the [`ToolDyn`] interface.
+///
+/// [`McpServer::from_operators`] wraps each operator in this adapter and registers
+/// it in an internal [`ToolRegistry`], so operator-protocol implementations can be
+/// served over MCP without rewriting tool-based infrastructure.
+struct OperatorToolAdapter {
+    operator: Arc<dyn Operator>,
+    metadata: ToolMetadata,
+}
+
+impl ToolDyn for OperatorToolAdapter {
+    fn name(&self) -> &str {
+        &self.metadata.name
+    }
+
+    fn description(&self) -> &str {
+        &self.metadata.description
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        self.metadata.input_schema.clone()
+    }
+
+    fn call(
+        &self,
+        input: serde_json::Value,
+        _ctx: &neuron_tool::ToolCallContext,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
+        let operator = Arc::clone(&self.operator);
+        Box::pin(async move {
+            let json_str = serde_json::to_string(&input)
+                .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+            let op_input =
+                layer0::OperatorInput::new(layer0::Content::text(json_str), TriggerType::Task);
+            let output = operator
+                .execute(op_input)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+            let text = output.message.as_text().unwrap_or("null").to_owned();
+            serde_json::from_str(&text)
+                .map_err(|e| ToolError::ExecutionFailed(format!("output parse error: {e}")))
+        })
+    }
+}
 
 /// MCP server that exposes tools from a [`ToolRegistry`].
 ///
@@ -108,6 +156,23 @@ impl McpServer {
             .await
             .map_err(|e| McpError::Connection(e.to_string()))?;
         Ok(())
+    }
+
+    /// Create an MCP server from a set of operators with metadata.
+    ///
+    /// Each `(operator, metadata)` pair is wrapped in an `OperatorToolAdapter` and
+    /// registered in an internal [`ToolRegistry`].  This bridges the operator protocol
+    /// into the existing tool-based MCP serving infrastructure.
+    pub fn from_operators(
+        operators: Vec<(Arc<dyn Operator>, ToolMetadata)>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Self {
+        let mut registry = ToolRegistry::new();
+        for (operator, metadata) in operators {
+            registry.register(Arc::new(OperatorToolAdapter { operator, metadata }));
+        }
+        Self::new(registry, name, version)
     }
 }
 
@@ -197,7 +262,13 @@ impl ServerHandler for McpServerHandler {
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
-        match tool.call(input).await {
+        match tool
+            .call(
+                input,
+                &neuron_tool::ToolCallContext::new(layer0::OperatorId::new("mcp-server")),
+            )
+            .await
+        {
             Ok(result) => {
                 let text =
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
@@ -346,6 +417,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -367,6 +439,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
+            _ctx: &neuron_tool::ToolCallContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Err(ToolError::ExecutionFailed("deliberate failure".into())) })
@@ -541,7 +614,8 @@ mod tests {
         registry.register(Arc::new(TestTool { tool_name: "echo" }));
 
         let tool = registry.get("echo").unwrap();
-        let result = tool.call(json!({"msg": "hello"})).await;
+        let ctx = neuron_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
+        let result = tool.call(json!({"msg": "hello"}), &ctx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), json!({"echoed": {"msg": "hello"}}));
     }
@@ -552,7 +626,8 @@ mod tests {
         registry.register(Arc::new(FailingTool));
 
         let tool = registry.get("fail_tool").unwrap();
-        let result = tool.call(json!({})).await;
+        let ctx = neuron_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
+        let result = tool.call(json!({}), &ctx).await;
         assert!(result.is_err());
     }
 
@@ -610,5 +685,79 @@ mod tests {
         assert!(found_existing.is_some());
         let (_, _, template) = found_existing.unwrap();
         assert_eq!(template, "Hello");
+    }
+
+    #[tokio::test]
+    async fn mcp_server_from_operators_constructs() {
+        use async_trait::async_trait;
+        use layer0::OperatorError;
+        use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
+
+        struct EchoOperator;
+
+        #[async_trait]
+        impl layer0::operator::Operator for EchoOperator {
+            async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+                Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+            }
+        }
+
+        let meta = ToolMetadata::new(
+            "echo_op",
+            "Echoes operator input back",
+            serde_json::json!({"type": "object"}),
+            true,
+        );
+        let operators: Vec<(Arc<dyn layer0::operator::Operator>, ToolMetadata)> =
+            vec![(Arc::new(EchoOperator), meta)];
+        let server = McpServer::from_operators(operators, "test-ops", "0.1.0");
+        assert_eq!(server.registry.len(), 1);
+        assert_eq!(server.name, "test-ops");
+        assert!(server.registry.get("echo_op").is_some());
+    }
+
+    #[tokio::test]
+    async fn operator_tool_adapter_roundtrip() {
+        use async_trait::async_trait;
+        use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
+        use layer0::{Content, OperatorError};
+        use serde_json::json;
+
+        struct ConstOperator {
+            response: serde_json::Value,
+        }
+
+        #[async_trait]
+        impl layer0::operator::Operator for ConstOperator {
+            async fn execute(
+                &self,
+                _input: OperatorInput,
+            ) -> Result<OperatorOutput, OperatorError> {
+                let text = self.response.to_string();
+                Ok(OperatorOutput::new(
+                    Content::text(text),
+                    ExitReason::Complete,
+                ))
+            }
+        }
+
+        let schema = json!({"type": "object", "properties": {"query": {"type": "string"}}});
+        let meta = ToolMetadata::new("my_tool", "A test operator", schema.clone(), false);
+        let adapter = OperatorToolAdapter {
+            operator: Arc::new(ConstOperator {
+                response: json!({"result": "ok"}),
+            }),
+            metadata: meta,
+        };
+
+        // metadata bridge
+        assert_eq!(adapter.name(), "my_tool");
+        assert_eq!(adapter.description(), "A test operator");
+        assert_eq!(adapter.input_schema(), schema);
+
+        // call roundtrip: input is serialized → operator echoes JSON string → parsed back
+        let ctx = neuron_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
+        let result = adapter.call(json!({"query": "hello"}), &ctx).await.unwrap();
+        assert_eq!(result, json!({"result": "ok"}));
     }
 }

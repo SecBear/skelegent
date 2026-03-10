@@ -1,8 +1,8 @@
 //! Context assembly for sweep agents.
 //!
-//! Assembles a [`Vec<AnnotatedMessage>`] from state store data for a given
+//! Assembles a [`Vec<Message>`] from state store data for a given
 //! decision ID. The output is intended for downstream compaction by
-//! [`SaliencePackingStrategy`](crate::SaliencePackingStrategy).
+//! [`salience_packing_compactor`](crate::salience_packing_compactor).
 //!
 //! # Assembly pipeline
 //!
@@ -11,7 +11,7 @@
 //! 3. **Recent deltas** (Normal, recency-scored) — latest changes/findings.
 //! 4. **FTS search hits** (Normal, BM25-scored) — related evidence.
 //! 5. **Combine** — all messages, ready for
-//!    [`SaliencePackingStrategy::compact()`](crate::SaliencePackingStrategy).
+//!    [`salience_packing_compactor`](crate::salience_packing_compactor).
 //!
 //! # Key schema
 //!
@@ -24,11 +24,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use layer0::CompactionPolicy;
+use layer0::Content;
+use layer0::context::{Message, MessageMeta, Role};
 use layer0::effect::Scope;
 use layer0::error::StateError;
 use layer0::state::StateReader;
-use neuron_turn::context::AnnotatedMessage;
-use neuron_turn::types::{ContentPart, ProviderMessage, Role};
 
 /// Configuration for [`ContextAssembler`].
 #[derive(Debug, Clone)]
@@ -54,7 +54,7 @@ impl Default for ContextAssemblyConfig {
 /// Assembles context packages for sweep agents from state store data.
 ///
 /// Reads decision cards, recent deltas, and FTS search hits from a
-/// [`StateReader`], wrapping each as an [`AnnotatedMessage`] with
+/// [`StateReader`], wrapping each as a [`Message`] with
 /// appropriate salience scores and compaction policies.
 ///
 /// # Example
@@ -77,14 +77,14 @@ impl ContextAssembler {
 
     /// Assemble the context package for a decision.
     ///
-    /// Returns a `Vec<AnnotatedMessage>` containing:
+    /// Returns a `Vec<Message>` containing:
     /// - System instructions (Pinned, if `system_prompt` is `Some`)
     /// - Decision card (Pinned, salience = 1.0)
     /// - Recent deltas (Normal, recency-scored salience)
     /// - FTS search hits (Normal, BM25-normalized salience)
     ///
     /// The returned messages are NOT yet budget-enforced. Pass them through
-    /// [`SaliencePackingStrategy::compact()`](crate::SaliencePackingStrategy)
+    /// [`salience_packing_compactor`](crate::salience_packing_compactor)
     /// to enforce token limits.
     ///
     /// # Errors
@@ -96,21 +96,21 @@ impl ContextAssembler {
         scope: &Scope,
         decision_id: &str,
         system_prompt: Option<&str>,
-    ) -> Result<Vec<AnnotatedMessage>, StateError> {
+    ) -> Result<Vec<Message>, StateError> {
         let now_us = now_micros();
         let mut messages = Vec::new();
 
         // Step 1: System instructions (Pinned)
         if let Some(prompt) = system_prompt {
-            messages.push(AnnotatedMessage::pinned(text_msg(Role::User, prompt)));
+            messages.push(Message::pinned(Role::User, Content::text(prompt)));
         }
 
         // Step 2: Decision card (Pinned, salience = 1.0)
         let card_key = format!("card:{decision_id}");
         if let Some(card_value) = store.read(scope, &card_key).await? {
             let mut card_msg =
-                AnnotatedMessage::pinned(text_msg(Role::User, &value_to_text(&card_value)));
-            card_msg.salience = Some(1.0);
+                Message::pinned(Role::User, Content::text(value_to_text(&card_value)));
+            card_msg.meta.salience = Some(1.0);
             messages.push(card_msg);
         }
 
@@ -132,12 +132,11 @@ impl ContextAssembler {
         for (ts, key) in &delta_entries {
             if let Some(value) = store.read(scope, key).await? {
                 let salience = recency_score(*ts, now_us, self.config.recency_half_life_days);
-                messages.push(AnnotatedMessage {
-                    message: text_msg(Role::User, &value_to_text(&value)),
-                    policy: Some(CompactionPolicy::Normal),
-                    source: Some("sweep:delta".into()),
-                    salience: Some(salience),
-                });
+                let mut msg = Message::new(Role::User, Content::text(value_to_text(&value)));
+                msg.meta = MessageMeta::with_policy(CompactionPolicy::Normal)
+                    .set_source("sweep:delta")
+                    .set_salience(salience);
+                messages.push(msg);
             }
         }
 
@@ -167,12 +166,11 @@ impl ContextAssembler {
                     }
                 };
 
-                messages.push(AnnotatedMessage {
-                    message: text_msg(Role::User, &text),
-                    policy: Some(CompactionPolicy::Normal),
-                    source: Some("sweep:fts".into()),
-                    salience: Some(normalized[i]),
-                });
+                let mut msg = Message::new(Role::User, Content::text(text));
+                msg.meta = MessageMeta::with_policy(CompactionPolicy::Normal)
+                    .set_source("sweep:fts")
+                    .set_salience(normalized[i]);
+                messages.push(msg);
             }
         }
 
@@ -183,16 +181,6 @@ impl ContextAssembler {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Create a text-only provider message.
-fn text_msg(role: Role, text: &str) -> ProviderMessage {
-    ProviderMessage {
-        role,
-        content: vec![ContentPart::Text {
-            text: text.to_string(),
-        }],
-    }
-}
 
 /// Convert a JSON value to display text.
 ///

@@ -16,24 +16,24 @@ This page shows how neuron's crates depend on each other. The fundamental rule i
          ┌────────────────────┼────────────────────────┐
          │                    │                        │
          ▼                    ▼                        ▼
-  neuron-op-react    neuron-op-single-shot     neuron-orch-local
+  neuron-context-engine  neuron-op-single-shot     neuron-orch-local
   (Layer 1)          (Layer 1)                 (Layer 2)
-    │  │  │              │  │                    │  │
-    │  │  │              │  │                    │  └──► neuron-orch-kit (L2)
-    │  │  │              │  │                    │         │
-    │  │  └──────────────┼──┼────────────────────┘        │
-    │  │                 │  │                              │
-    │  ▼                 │  ▼                              │
-    │  neuron-hooks ◄────┘  neuron-turn ◄─────────────────┘
-    │  (Layer 5)            (Layer 1)
-    │    │                    ▲  ▲  ▲
-    │    │        ┌───────────┘  │  └───────────┐
-    │    │        │              │              │
-    │    │  neuron-provider-  neuron-provider-  neuron-provider-
-    │    │  anthropic         openai            ollama
-    │    │  (Layer 1)         (Layer 1)         (Layer 1)
-    │    │
-    ▼    ▼
+    │  │                 │                       │  │
+    │  │                 │                       │  └──► neuron-orch-kit (L2)
+    │  │                 │                       │         │
+    │  └─────────────────┼───────────────────────┘        │
+    │                    │                                │
+    │                    ▼                                │
+    │                 neuron-turn ◄───────────────────────┘
+    │                 (Layer 1)
+    │                    ▲  ▲  ▲
+    │        ┌───────────┘  │  └───────────┐
+    │        │              │              │
+    │  neuron-provider-  neuron-provider-  neuron-provider-
+    │  anthropic         openai            ollama
+    │  (Layer 1)         (Layer 1)         (Layer 1)
+    │
+    ▼
   neuron-tool              neuron-mcp
   (Layer 1)                (Layer 1)
     │                        │
@@ -74,8 +74,8 @@ The operator ecosystem has several internal dependencies:
 - **`neuron-turn`** provides the `Provider` trait and shared types. All three provider crates depend on it.
 - **`neuron-tool`** provides `ToolDyn` and `ToolRegistry`. It depends only on `layer0`.
 - **`neuron-mcp`** depends on `neuron-tool` (it creates tools from MCP servers).
-- **`neuron-op-react`** depends on `neuron-turn` (for `Provider`), `neuron-tool` (for `ToolRegistry`), and `neuron-hooks` (for `HookRegistry`).
-- **`neuron-op-single-shot`** depends on `neuron-turn` and `neuron-hooks`.
+- **`neuron-context-engine`** depends on `neuron-turn` (for `Provider`), `neuron-tool` (for `ToolRegistry`), and `layer0` (for middleware traits).
+- **`neuron-op-single-shot`** depends on `neuron-turn` and `layer0`.
 
 ### Layer 2: Orchestration
 
@@ -93,9 +93,7 @@ The operator ecosystem has several internal dependencies:
 
 ### Layer 5: Cross-cutting
 
-- **`neuron-hooks`** depends on `layer0` (for the `Hook` trait).
-- **`neuron-hook-security`** depends on `neuron-hooks` and `layer0`.
-
+- **`neuron-hook-security`** depends on `layer0` (for middleware traits). It provides `RedactionMiddleware` and `ExfilGuardMiddleware`.
 ### The umbrella
 
 - **`neuron`** depends on everything, all behind `optional = true` with feature flags. It re-exports but adds no logic.
@@ -109,7 +107,7 @@ The operator ecosystem has several internal dependencies:
 | 2 | `tokio` |
 | 3 | `tokio` |
 | 4 | Provider-specific SDKs (`aws-sdk`, `gcp`, `reqwest`) |
-| 5 | `layer0` only (hooks are pure logic) |
+| 5 | `layer0` only (middleware is pure logic) |
 
 ## Crates not shown in the ASCII diagram
 

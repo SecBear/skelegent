@@ -16,9 +16,8 @@ path = "src/lib.rs"
 [dependencies]
 layer0 = { path = "../layer0", optional = true, version = "0.4.0" }
 neuron-context = { path = "../turn/neuron-context", optional = true, version = "0.4.0" }
-neuron-hooks = { path = "../hooks/neuron-hooks", optional = true, version = "0.4.0" }
 neuron-mcp = { path = "../turn/neuron-mcp", optional = true, version = "0.4.0" }
-neuron-op-react = { path = "../op/neuron-op-react", optional = true, version = "0.4.0" }
+neuron-context-engine = { path = "../op/neuron-context-engine", optional = true, version = "0.4.0" }
 neuron-op-single-shot = { path = "../op/neuron-op-single-shot", optional = true, version = "0.4.0" }
 neuron-orch-kit = { path = "../orch/neuron-orch-kit", optional = true, version = "0.4.0" }
 neuron-orch-local = { path = "../orch/neuron-orch-local", optional = true, version = "0.4.0" }
@@ -32,7 +31,7 @@ neuron-tool = { path = "../turn/neuron-tool", optional = true, version = "0.4.0"
 neuron-turn = { path = "../turn/neuron-turn", optional = true, version = "0.4.0" }
 
 [features]
-default = ["core", "hooks"]
+default = ["core"]
 
 # Protocol + core wiring
 core = [
@@ -41,14 +40,13 @@ core = [
   "dep:neuron-tool",
   "dep:neuron-turn",
 ]
-hooks = ["core", "dep:neuron-hooks"]
 
 # Tooling / integration
 mcp = ["core", "dep:neuron-mcp"]
 
 # Operators
-op-react = ["hooks", "dep:neuron-op-react"]
-op-single-shot = ["hooks", "dep:neuron-op-single-shot"]
+context-engine = ["core", "dep:neuron-context-engine"]
+op-single-shot = ["core", "dep:neuron-op-single-shot"]
 
 # Orchestration implementations
 orch-kit = ["core", "dep:neuron-orch-kit"]
@@ -66,3 +64,9 @@ provider-openai = ["core", "dep:neuron-provider-openai"]
 provider-anthropic = ["core", "dep:neuron-provider-anthropic"]
 provider-ollama = ["core", "dep:neuron-provider-ollama"]
 providers-all = ["provider-openai", "provider-anthropic", "provider-ollama"]
+
+# High-level agent API
+agent = ["context-engine", "state-memory"]
+
+# Proc-macro support for deriving ToolDyn
+macros = ["neuron-tool/macros"]

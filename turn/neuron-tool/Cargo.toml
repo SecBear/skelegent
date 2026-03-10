@@ -11,8 +11,14 @@ categories = ["asynchronous"]
 keywords = ["neuron", "ai", "agent", "tools", "function-calling"]
 
 [dependencies]
+layer0 = { path = "../../layer0", version = "0.4.0" }
+async-trait = "0.1"
 serde_json = "1"
 thiserror = "2"
+neuron-tool-macro = { path = "../neuron-tool-macro", version = "0.4.0", optional = true }
+
+[features]
+macros = ["dep:neuron-tool-macro"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

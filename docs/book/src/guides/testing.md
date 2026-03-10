@@ -41,8 +41,8 @@ fn environment_is_object_safe_and_send_sync() {
 }
 
 #[test]
-fn hook_is_object_safe_and_send_sync() {
-    _assert_send_sync::<Box<dyn layer0::Hook>>();
+fn dispatch_middleware_is_object_safe_and_send_sync() {
+    _assert_send_sync::<Box<dyn layer0::DispatchMiddleware>>();
 }
 ```
 
@@ -80,45 +80,40 @@ To test operators without making real API calls, create a mock `Provider`:
 
 ```rust
 use neuron_turn::provider::{Provider, ProviderError};
-use neuron_turn::types::*;
-use serde_json::json;
+use neuron_turn::infer::{InferRequest, InferResponse};
 use std::future::Future;
 
 struct MockProvider {
-    responses: Vec<ProviderResponse>,
+    responses: Vec<InferResponse>,
 }
 
 impl Provider for MockProvider {
-    fn complete(
+    fn infer(
         &self,
-        _request: ProviderRequest,
-    ) -> impl Future<Output = Result<ProviderResponse, ProviderError>> + Send {
+        _request: InferRequest,
+    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
         let response = self.responses[0].clone(); // simplified
         async move { Ok(response) }
     }
 }
 ```
 
-Then construct an operator with the mock provider:
+Then construct a `Context` and call `react_loop` with the mock provider:
 
 ```rust,no_run
-use neuron_op_react::{ReactConfig, ReactOperator};
-use neuron_hooks::HookRegistry;
-use neuron_tool::ToolRegistry;
-use neuron_turn_kit::FullContext;
-use neuron_state_memory::MemoryStore;
-use std::sync::Arc;
+use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
+use neuron_tool::{ToolRegistry, ToolCallContext};
+use neuron_layer0::context::{Message, Role};
 
-let operator = ReactOperator::new(
-    mock_provider,
-    ToolRegistry::new(),
-    Box::new(FullContext),
-    HookRegistry::new(),
-    Arc::new(MemoryStore::new()),
-    ReactConfig::default(),
-);
+let mut ctx = Context::new("You are a helpful assistant.");
+ctx.inject_message(Message::new(Role::User, "Hello"));
 
-// Now test the operator without network calls
+let tools = ToolRegistry::new();
+let tool_ctx = ToolCallContext::empty();
+let config = ReactLoopConfig::default();
+
+// Now test without network calls
+react_loop(&mut ctx, &mock_provider, &tools, &tool_ctx, &config).await.unwrap();
 ```
 
 ## Mock tools
@@ -182,7 +177,7 @@ cargo test
 cargo test --features test-utils -p layer0
 
 # Run tests for a specific crate
-cargo test -p neuron-op-react
+cargo test -p neuron-context-engine
 
 # Verify no clippy warnings
 cargo clippy -- -D warnings

@@ -10,11 +10,16 @@ readme = "README.md"
 categories = ["asynchronous", "filesystem"]
 keywords = ["neuron", "ai", "agent", "state", "storage"]
 
+[features]
+default = []
+regex = ["dep:regex"]
+
 [dependencies]
 layer0 = { path = "../../layer0", version = "0.4.0" }
 async-trait = "0.1"
 serde_json = "1"
 tokio = { version = "1", features = ["fs", "sync"] }
+regex = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

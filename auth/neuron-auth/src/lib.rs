@@ -51,7 +51,7 @@ pub struct AuthRequest {
     pub scopes: Vec<String>,
     /// Target resource identifier (e.g., Vault path, AWS region).
     pub resource: Option<String>,
-    /// Actor identity for audit (workflow ID, agent ID).
+    /// Actor identity for audit (workflow ID, operator ID).
     pub actor: Option<String>,
 }
 

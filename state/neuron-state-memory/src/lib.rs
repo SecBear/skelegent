@@ -3,31 +3,96 @@
 //!
 //! Uses a `HashMap` behind a `RwLock` for concurrent access.
 //! Scopes are serialized to strings for use as key prefixes,
-//! providing full scope isolation. Search always returns empty
-//! (no semantic search support in the in-memory backend).
+//! providing full scope isolation. Supports optional LRU eviction
+//! via [`MemoryStore::bounded`] and basic case-insensitive substring search.
 
 use async_trait::async_trait;
 use layer0::effect::Scope;
 use layer0::error::StateError;
 use layer0::state::{SearchResult, StateStore, StoreOptions};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::RwLock;
 
 /// In-memory state store backed by a `HashMap` behind a `RwLock`.
 ///
 /// Suitable for testing, prototyping, and single-process use cases
 /// where persistence across restarts is not required.
+///
+/// Create an unbounded store with [`MemoryStore::new`] or a capacity-limited
+/// LRU store with [`MemoryStore::bounded`].
 pub struct MemoryStore {
     data: RwLock<HashMap<String, serde_json::Value>>,
     transient: RwLock<HashMap<String, serde_json::Value>>,
+    capacity: Option<usize>,
+    /// Composite keys ordered by last access, least-recently used at front.
+    access_order: RwLock<Vec<String>>,
+    /// Composite keys marked durable — never evicted by LRU.
+    durable_keys: RwLock<HashSet<String>>,
 }
 
 impl MemoryStore {
-    /// Create a new empty in-memory store.
+    /// Create a new empty in-memory store with no eviction limit.
     pub fn new() -> Self {
         Self {
             data: RwLock::new(HashMap::new()),
             transient: RwLock::new(HashMap::new()),
+            capacity: None,
+            access_order: RwLock::new(Vec::new()),
+            durable_keys: RwLock::new(HashSet::new()),
+        }
+    }
+
+    /// Create a bounded in-memory store that evicts least-recently-used entries
+    /// when the entry count exceeds `capacity`.
+    ///
+    /// Reads and writes both count as "use" for LRU ordering.
+    /// Pinned scope entries (written via `write_hinted` with `Lifetime::Durable`)
+    /// are never evicted.
+    pub fn bounded(capacity: usize) -> Self {
+        Self {
+            data: RwLock::new(HashMap::new()),
+            transient: RwLock::new(HashMap::new()),
+            capacity: Some(capacity),
+            access_order: RwLock::new(Vec::new()),
+            durable_keys: RwLock::new(HashSet::new()),
+        }
+    }
+
+    /// Insert or update `ck` in the data map, updating LRU tracking and evicting
+    /// if the store is bounded and over capacity.
+    ///
+    /// `is_durable` marks the key as non-evictable. Transient entries bypass this
+    /// path entirely (they go to the separate `transient` map).
+    ///
+    /// Lock order: `data` → `access_order` → `durable_keys`.
+    async fn write_inner(&self, ck: String, value: serde_json::Value, is_durable: bool) {
+        let mut data = self.data.write().await;
+        let mut order = self.access_order.write().await;
+        let mut durable = self.durable_keys.write().await;
+
+        if is_durable {
+            durable.insert(ck.clone());
+        }
+
+        // Remove any existing position, then push to back (most-recently used).
+        order.retain(|k| k != &ck);
+        order.push(ck.clone());
+        data.insert(ck, value);
+
+        // Evict least-recently-used non-durable entries until within capacity.
+        if let Some(cap) = self.capacity {
+            while data.len() > cap {
+                // Find the front-most key that is not durable.
+                let evict_idx = order.iter().position(|k| !durable.contains(k));
+                match evict_idx {
+                    Some(idx) => {
+                        let evict_ck = order.remove(idx);
+                        data.remove(&evict_ck);
+                    }
+                    // All remaining keys are durable — cannot evict further.
+                    None => break,
+                }
+            }
         }
     }
 }
@@ -59,8 +124,15 @@ impl StateStore for MemoryStore {
         key: &str,
     ) -> Result<Option<serde_json::Value>, StateError> {
         let ck = composite_key(scope, key);
-        let data = self.data.read().await;
-        Ok(data.get(&ck).cloned())
+        // Drop the read lock before acquiring the write lock on access_order
+        // to avoid holding two locks simultaneously (data.read + order.write).
+        let value = self.data.read().await.get(&ck).cloned();
+        if value.is_some() {
+            let mut order = self.access_order.write().await;
+            order.retain(|k| k != &ck);
+            order.push(ck);
+        }
+        Ok(value)
     }
 
     async fn write(
@@ -70,15 +142,15 @@ impl StateStore for MemoryStore {
         value: serde_json::Value,
     ) -> Result<(), StateError> {
         let ck = composite_key(scope, key);
-        let mut data = self.data.write().await;
-        data.insert(ck, value);
+        self.write_inner(ck, value, false).await;
         Ok(())
     }
 
     async fn delete(&self, scope: &Scope, key: &str) -> Result<(), StateError> {
         let ck = composite_key(scope, key);
-        let mut data = self.data.write().await;
-        data.remove(&ck);
+        self.data.write().await.remove(&ck);
+        self.access_order.write().await.retain(|k| k != &ck);
+        self.durable_keys.write().await.remove(&ck);
         Ok(())
     }
 
@@ -102,12 +174,49 @@ impl StateStore for MemoryStore {
 
     async fn search(
         &self,
-        _scope: &Scope,
-        _query: &str,
-        _limit: usize,
+        scope: &Scope,
+        query: &str,
+        limit: usize,
     ) -> Result<Vec<SearchResult>, StateError> {
-        // In-memory store does not support semantic search.
-        Ok(vec![])
+        if query.is_empty() || limit == 0 {
+            return Ok(vec![]);
+        }
+
+        let scope_prefix = serde_json::to_string(scope).unwrap_or_else(|_| "unknown".to_string());
+        let query_lower = query.to_lowercase();
+
+        let data = self.data.read().await;
+        let mut results: Vec<SearchResult> = data
+            .iter()
+            .filter_map(|(ck, value)| {
+                let key = extract_key(ck, &scope_prefix)?;
+                let text = value.to_string();
+                let text_lower = text.to_lowercase();
+
+                let count = text_lower.matches(query_lower.as_str()).count();
+                if count == 0 {
+                    return None;
+                }
+
+                // Score: occurrence density — more occurrences in shorter text ranks higher.
+                let score = count as f64 / text_lower.len().max(1) as f64;
+                let mut result = SearchResult::new(key, score);
+                result.snippet = Some(if text.len() > 200 {
+                    format!("{}...", &text[..200])
+                } else {
+                    text
+                });
+                Some(result)
+            })
+            .collect();
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
+        Ok(results)
     }
 
     async fn write_hinted(
@@ -118,13 +227,20 @@ impl StateStore for MemoryStore {
         options: &StoreOptions,
     ) -> Result<(), StateError> {
         use layer0::state::Lifetime;
-        if matches!(options.lifetime, Some(Lifetime::Transient)) {
-            let ck = composite_key(scope, key);
-            self.transient.write().await.insert(ck, value);
-            Ok(())
-        } else {
-            self.write(scope, key, value).await
+        match options.lifetime {
+            Some(Lifetime::Transient) => {
+                let ck = composite_key(scope, key);
+                self.transient.write().await.insert(ck, value);
+            }
+            Some(Lifetime::Durable) => {
+                let ck = composite_key(scope, key);
+                self.write_inner(ck, value, true).await;
+            }
+            _ => {
+                self.write(scope, key, value).await?;
+            }
         }
+        Ok(())
     }
 
     fn clear_transient(&self) {
@@ -245,11 +361,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_returns_empty() {
+    async fn search_returns_empty_on_no_match() {
         let store = MemoryStore::new();
         let scope = Scope::Global;
 
-        let results = store.search(&scope, "query", 10).await.unwrap();
+        store
+            .write(&scope, "k1", json!("hello world"))
+            .await
+            .unwrap();
+        let results = store.search(&scope, "xyzzy", 10).await.unwrap();
         assert!(results.is_empty());
     }
 
@@ -305,5 +425,141 @@ mod tests {
             Some(serde_json::json!("persisted")),
             "durable entry must survive clear_transient()"
         );
+    }
+
+    // ── LRU / bounded tests ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn bounded_evicts_oldest() {
+        let store = MemoryStore::bounded(3);
+        let scope = Scope::Global;
+
+        for k in ["a", "b", "c", "d", "e"] {
+            store.write(&scope, k, json!(k)).await.unwrap();
+        }
+
+        assert_eq!(
+            store.read(&scope, "a").await.unwrap(),
+            None,
+            "a should be evicted"
+        );
+        assert_eq!(
+            store.read(&scope, "b").await.unwrap(),
+            None,
+            "b should be evicted"
+        );
+        assert_eq!(store.read(&scope, "c").await.unwrap(), Some(json!("c")));
+        assert_eq!(store.read(&scope, "d").await.unwrap(), Some(json!("d")));
+        assert_eq!(store.read(&scope, "e").await.unwrap(), Some(json!("e")));
+    }
+
+    #[tokio::test]
+    async fn bounded_read_refreshes_lru() {
+        let store = MemoryStore::bounded(3);
+        let scope = Scope::Global;
+
+        store.write(&scope, "a", json!("a")).await.unwrap();
+        store.write(&scope, "b", json!("b")).await.unwrap();
+        store.write(&scope, "c", json!("c")).await.unwrap();
+
+        // Touch "a" — it becomes most-recently used; order becomes [b, c, a].
+        let _ = store.read(&scope, "a").await.unwrap();
+
+        // Write "d" — should evict "b" (now at front), not "a".
+        store.write(&scope, "d", json!("d")).await.unwrap();
+
+        assert_eq!(
+            store.read(&scope, "b").await.unwrap(),
+            None,
+            "b should be evicted"
+        );
+        assert!(
+            store.read(&scope, "a").await.unwrap().is_some(),
+            "a should survive"
+        );
+        assert!(
+            store.read(&scope, "c").await.unwrap().is_some(),
+            "c should survive"
+        );
+        assert!(
+            store.read(&scope, "d").await.unwrap().is_some(),
+            "d should survive"
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_unlimited_default() {
+        let store = MemoryStore::new();
+        let scope = Scope::Global;
+
+        for i in 0..100u32 {
+            store.write(&scope, &i.to_string(), json!(i)).await.unwrap();
+        }
+
+        for i in 0..100u32 {
+            assert!(
+                store.read(&scope, &i.to_string()).await.unwrap().is_some(),
+                "key {i} should not be evicted from unbounded store",
+            );
+        }
+    }
+
+    // ── Search tests ─────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn search_finds_substring() {
+        let store = MemoryStore::new();
+        let scope = Scope::Global;
+
+        store
+            .write(&scope, "k1", json!("hello world"))
+            .await
+            .unwrap();
+        store
+            .write(&scope, "k2", json!("goodbye world"))
+            .await
+            .unwrap();
+        store.write(&scope, "k3", json!(42)).await.unwrap();
+
+        let results = store.search(&scope, "world", 10).await.unwrap();
+        let keys: Vec<&str> = results.iter().map(|r| r.key.as_str()).collect();
+        assert!(keys.contains(&"k1"), "k1 should match");
+        assert!(keys.contains(&"k2"), "k2 should match");
+        assert!(!keys.contains(&"k3"), "k3 should not match");
+    }
+
+    #[tokio::test]
+    async fn search_case_insensitive() {
+        let store = MemoryStore::new();
+        let scope = Scope::Global;
+
+        store
+            .write(&scope, "k1", json!("Hello World"))
+            .await
+            .unwrap();
+        store.write(&scope, "k2", json!("HELLO")).await.unwrap();
+        store.write(&scope, "k3", json!("unrelated")).await.unwrap();
+
+        let results = store.search(&scope, "hello", 10).await.unwrap();
+        let keys: Vec<&str> = results.iter().map(|r| r.key.as_str()).collect();
+        assert!(keys.contains(&"k1"), "k1 should match case-insensitively");
+        assert!(keys.contains(&"k2"), "k2 should match case-insensitively");
+        assert!(!keys.contains(&"k3"), "k3 should not match");
+    }
+
+    #[tokio::test]
+    async fn search_respects_limit() {
+        let store = MemoryStore::new();
+        let scope = Scope::Global;
+
+        for i in 0..10u32 {
+            store
+                .write(&scope, &format!("k{i}"), json!("needle in haystack"))
+                .await
+                .unwrap();
+        }
+
+        let results = store.search(&scope, "needle", 3).await.unwrap();
+        assert_eq!(results.len(), 3, "results must be capped at the limit");
     }
 }

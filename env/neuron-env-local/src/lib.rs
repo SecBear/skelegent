@@ -5,34 +5,27 @@
 //! credential resolution and injection:
 //! - Resolve credentials through a [`neuron_secret::SecretResolver`]
 //! - Inject credential material according to `EnvironmentSpec.credentials`
-//! - Emit audit/lifecycle events through [`EnvironmentEventSink`]
+//! - Emit audit events through [`EnvironmentEventSink`]
 //!
 //! This crate is intentionally "local mode" only: no container isolation,
 //! no remote execution boundaries, no network policy enforcement.
 
 use async_trait::async_trait;
-use layer0::duration::DurationMs;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
-use layer0::lifecycle::{EventSource, ObservableEvent};
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
 use layer0::secret::{SecretAccessEvent, SecretAccessOutcome};
 use neuron_secret::{SecretError, SecretLease, SecretResolver};
-use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Sink for environment credential/audit events.
+/// Sink for environment audit events.
 ///
-/// This allows local mode to emit both:
-/// - `SecretAccessEvent` audit records for credential resolution attempts
-/// - `ObservableEvent` lifecycle events for resolution/injection milestones
+/// Allows local mode to emit `SecretAccessEvent` audit records
+/// for credential resolution attempts.
 pub trait EnvironmentEventSink: Send + Sync {
-    /// Emit an observable lifecycle event.
-    fn emit_observable(&self, event: ObservableEvent);
-
     /// Emit an audit event for secret access activity.
     fn emit_secret_access(&self, event: SecretAccessEvent);
 }
@@ -76,7 +69,6 @@ impl LocalEnv {
         &self,
         spec: &EnvironmentSpec,
         correlation: &CorrelationContext,
-        started_at: Instant,
     ) -> Result<InjectionCleanup, EnvError> {
         let mut cleanup = InjectionCleanup::default();
 
@@ -85,7 +77,7 @@ impl LocalEnv {
                 Some(resolver) => resolver,
                 None => {
                     let reason = "resolver not configured";
-                    self.emit_resolution_failure(credential, reason, correlation, started_at);
+                    self.emit_resolution_failure(credential, reason, correlation);
                     return Err(EnvError::CredentialFailed(format!(
                         "credential '{}' resolution failed for source '{}': {}",
                         credential.name,
@@ -99,7 +91,7 @@ impl LocalEnv {
                 Ok(lease) => lease,
                 Err(err) => {
                     let reason = sanitize_secret_error(&err);
-                    self.emit_resolution_failure(credential, reason, correlation, started_at);
+                    self.emit_resolution_failure(credential, reason, correlation);
                     return Err(EnvError::CredentialFailed(format!(
                         "credential '{}' resolution failed for source '{}': {}",
                         credential.name,
@@ -109,19 +101,15 @@ impl LocalEnv {
                 }
             };
 
-            self.emit_resolution_success(credential, &lease, correlation, started_at);
+            self.emit_resolution_success(credential, &lease, correlation);
 
             if let Err(reason) = inject_credential(credential, &lease, &mut cleanup) {
-                self.emit_observable(
-                    "environment.credential_injection_failed",
-                    json!({
-                        "credential_name": credential.name,
-                        "source_kind": credential.source.kind(),
-                        "injection": injection_kind(&credential.injection),
-                        "reason": reason,
-                    }),
-                    correlation,
-                    started_at,
+                tracing::warn!(
+                    event = "environment.credential_injection_failed",
+                    credential_name = credential.name,
+                    source_kind = credential.source.kind(),
+                    injection = injection_kind(&credential.injection),
+                    reason = reason,
                 );
                 return Err(EnvError::CredentialFailed(format!(
                     "credential '{}' injection failed: {}",
@@ -129,15 +117,11 @@ impl LocalEnv {
                 )));
             }
 
-            self.emit_observable(
-                "environment.credential_injected",
-                json!({
-                    "credential_name": credential.name,
-                    "source_kind": credential.source.kind(),
-                    "injection": injection_kind(&credential.injection),
-                }),
-                correlation,
-                started_at,
+            tracing::info!(
+                event = "environment.credential_injected",
+                credential_name = credential.name,
+                source_kind = credential.source.kind(),
+                injection = injection_kind(&credential.injection),
             );
         }
 
@@ -149,7 +133,6 @@ impl LocalEnv {
         credential: &CredentialRef,
         lease: &SecretLease,
         correlation: &CorrelationContext,
-        started_at: Instant,
     ) {
         self.emit_secret_access(
             credential,
@@ -159,15 +142,11 @@ impl LocalEnv {
             lease_ttl_secs(lease),
             correlation,
         );
-        self.emit_observable(
-            "environment.credential_resolved",
-            json!({
-                "credential_name": credential.name,
-                "source_kind": credential.source.kind(),
-                "injection": injection_kind(&credential.injection),
-            }),
-            correlation,
-            started_at,
+        tracing::info!(
+            event = "environment.credential_resolved",
+            credential_name = credential.name,
+            source_kind = credential.source.kind(),
+            injection = injection_kind(&credential.injection),
         );
     }
 
@@ -176,7 +155,6 @@ impl LocalEnv {
         credential: &CredentialRef,
         reason: &str,
         correlation: &CorrelationContext,
-        started_at: Instant,
     ) {
         self.emit_secret_access(
             credential,
@@ -186,16 +164,12 @@ impl LocalEnv {
             None,
             correlation,
         );
-        self.emit_observable(
-            "environment.credential_resolution_failed",
-            json!({
-                "credential_name": credential.name,
-                "source_kind": credential.source.kind(),
-                "injection": injection_kind(&credential.injection),
-                "reason": reason,
-            }),
-            correlation,
-            started_at,
+        tracing::warn!(
+            event = "environment.credential_resolution_failed",
+            credential_name = credential.name,
+            source_kind = credential.source.kind(),
+            injection = injection_kind(&credential.injection),
+            reason = reason,
         );
     }
 
@@ -222,32 +196,9 @@ impl LocalEnv {
         event.lease_id = lease_id;
         event.lease_ttl_secs = lease_ttl_secs;
         event.workflow_id = correlation.workflow_id.clone();
-        event.agent_id = correlation.agent_id.clone();
+        event.operator_id = correlation.operator_id.clone();
         event.trace_id = correlation.trace_id.clone();
         sink.emit_secret_access(event);
-    }
-
-    fn emit_observable(
-        &self,
-        event_type: &str,
-        data: serde_json::Value,
-        correlation: &CorrelationContext,
-        started_at: Instant,
-    ) {
-        let Some(sink) = &self.event_sink else {
-            return;
-        };
-
-        let mut event = ObservableEvent::new(
-            EventSource::Environment,
-            event_type,
-            DurationMs::from_millis(started_at.elapsed().as_millis() as u64),
-            data,
-        );
-        event.trace_id = correlation.trace_id.clone();
-        event.workflow_id = correlation.workflow_id.clone().map(Into::into);
-        event.agent_id = correlation.agent_id.clone().map(Into::into);
-        sink.emit_observable(event);
     }
 }
 
@@ -258,11 +209,8 @@ impl Environment for LocalEnv {
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
-        let started_at = Instant::now();
         let correlation = CorrelationContext::from_metadata(&input.metadata);
-        let cleanup = self
-            .resolve_and_inject(spec, &correlation, started_at)
-            .await?;
+        let cleanup = self.resolve_and_inject(spec, &correlation).await?;
 
         let result = self
             .op
@@ -417,7 +365,7 @@ fn unix_time_ms() -> u64 {
 #[derive(Default)]
 struct CorrelationContext {
     workflow_id: Option<String>,
-    agent_id: Option<String>,
+    operator_id: Option<String>,
     trace_id: Option<String>,
 }
 
@@ -428,8 +376,8 @@ impl CorrelationContext {
                 .get("workflow_id")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
-            agent_id: metadata
-                .get("agent_id")
+            operator_id: metadata
+                .get("operator_id")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
             trace_id: metadata

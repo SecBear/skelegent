@@ -27,7 +27,7 @@ Credential *source backend* is a secret/auth/crypto concern.
 
 ## Credential Injection Pattern
 
-From `ARCHITECTURE.md §Tool Execution`:
+From `ARCHITECTURE.md §Sub-Operator Dispatch`:
 
 > Boundary injection preferred — credentials added at the edge, stripped from
 > context. Tests must prove no secret leakage.
@@ -42,7 +42,7 @@ This means:
    no raw secret value appears in `OperatorOutput.message` or in any effect payload.
 
 The `CredentialRef` in `EnvironmentSpec` names the credential; the `Environment`
-implementation resolves it at execution time and injects it into the tool call without
+implementation resolves it at execution time and injects it into the sub-dispatch without
 exposing the value to the operator.
 
 ## Current Implementation Status

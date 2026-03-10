@@ -16,12 +16,14 @@ Neuron uses six conceptual layers. These are governance and dependency boundarie
 At runtime, it’s often clearer to think in this order:
 
 1. A single operator cycle runs (`Operator::execute`).
-2. That cycle runs in an environment boundary (`Environment::run`).
+2. Orchestrator implementations call `Environment::run(operator, input)` to execute that cycle within an isolation boundary (credentials, resource limits, sandboxing).
 3. It reads/writes state via declared effects (outer execution decides when/how).
 4. Orchestration coordinates many cycles (routing, signals, retries, durability).
 5. Hooks/lifecycle provide intervention and cross-layer coordination vocabulary.
 
 This teaching order must not contradict canonical layer numbering.
+
+`Environment::run()` is called by **orchestrator implementations** (Layer 2), not by operators or composition code directly. Operators receive dispatch capability via `Arc<dyn Orchestrator>` injected at construction time; the orchestrator mediates the environment boundary transparently.
 
 ## Dependency Rules
 

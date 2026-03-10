@@ -1,6 +1,6 @@
 use layer0::content::Content;
 use layer0::effect::{Effect, Scope, SignalPayload};
-use layer0::id::{AgentId, WorkflowId};
+use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::state::StateStore;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 struct MockOrch {
-    dispatches: Mutex<Vec<(AgentId, OperatorInput)>>,
+    dispatches: Mutex<Vec<(OperatorId, OperatorInput)>>,
     signals: Mutex<Vec<(WorkflowId, SignalPayload)>>,
 }
 
@@ -23,7 +23,7 @@ impl MockOrch {
         }
     }
 
-    async fn recorded_dispatches(&self) -> Vec<(AgentId, OperatorInput)> {
+    async fn recorded_dispatches(&self) -> Vec<(OperatorId, OperatorInput)> {
         self.dispatches.lock().await.clone()
     }
 
@@ -36,13 +36,13 @@ impl MockOrch {
 impl Orchestrator for MockOrch {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, layer0::error::OrchError> {
         self.dispatches
             .lock()
             .await
-            .push((agent.clone(), input.clone()));
+            .push((operator.clone(), input.clone()));
         Ok(OperatorOutput::new(
             Content::text("ok"),
             ExitReason::Complete,
@@ -51,7 +51,7 @@ impl Orchestrator for MockOrch {
 
     async fn dispatch_many(
         &self,
-        tasks: Vec<(AgentId, OperatorInput)>,
+        tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, layer0::error::OrchError>> {
         let mut out = Vec::with_capacity(tasks.len());
         for (a, i) in tasks {
@@ -127,14 +127,14 @@ async fn delegate_handoff_and_signal_call_orchestrator_in_order() {
 
     let effects = vec![
         Effect::Delegate {
-            agent: AgentId::new("child"),
+            operator: OperatorId::new("child"),
             input: Box::new(OperatorInput::new(
                 Content::text("child task"),
                 TriggerType::Task,
             )),
         },
         Effect::Handoff {
-            agent: AgentId::new("handoff_target"),
+            operator: OperatorId::new("handoff_target"),
             state: json!({"ticket": 123}),
         },
         Effect::Signal {
@@ -148,10 +148,10 @@ async fn delegate_handoff_and_signal_call_orchestrator_in_order() {
     // Verify dispatch order preserved: delegate then handoff
     let dispatches = orch.recorded_dispatches().await;
     assert_eq!(dispatches.len(), 2);
-    assert_eq!(dispatches[0].0, AgentId::new("child"));
+    assert_eq!(dispatches[0].0, OperatorId::new("child"));
     assert_eq!(dispatches[0].1.message.as_text().unwrap(), "child task");
 
-    assert_eq!(dispatches[1].0, AgentId::new("handoff_target"));
+    assert_eq!(dispatches[1].0, OperatorId::new("handoff_target"));
     // Handoff metadata flag present
     let meta = &dispatches[1].1.metadata;
     assert_eq!(meta.get("handoff").and_then(|v| v.as_bool()), Some(true));
@@ -185,7 +185,7 @@ async fn preserves_effect_order_across_memory_and_orch_calls() {
             key: "k_order".into(),
         },
         Effect::Delegate {
-            agent: AgentId::new("a"),
+            operator: OperatorId::new("a"),
             input: Box::new(OperatorInput::new(Content::text("x"), TriggerType::Task)),
         },
         Effect::WriteMemory {
@@ -213,7 +213,7 @@ async fn preserves_effect_order_across_memory_and_orch_calls() {
     // Orchestrator call order preserved relative to other orch calls
     let dispatches = orch.recorded_dispatches().await;
     assert_eq!(dispatches.len(), 1);
-    assert_eq!(dispatches[0].0, AgentId::new("a"));
+    assert_eq!(dispatches[0].0, OperatorId::new("a"));
 
     let signals = orch.recorded_signals().await;
     assert_eq!(signals.len(), 1);

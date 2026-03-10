@@ -1,9 +1,9 @@
-//! Typed ID wrappers for agent, session, workflow, and scope identifiers.
+//! Typed ID wrappers for operator, session, workflow, and scope identifiers.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Typed ID wrappers prevent mixing up agent IDs, session IDs, etc.
+/// Typed ID wrappers prevent mixing up operator IDs, session IDs, etc.
 /// These are just strings underneath — no UUID enforcement, no format
 /// requirement. The protocol doesn't care what your IDs look like.
 macro_rules! typed_id {
@@ -44,7 +44,7 @@ macro_rules! typed_id {
     };
 }
 
-typed_id!(AgentId, "Unique identifier for an agent.");
+typed_id!(OperatorId, "Unique identifier for an operator.");
 typed_id!(SessionId, "Unique identifier for a conversation session.");
 typed_id!(WorkflowId, "Unique identifier for a workflow execution.");
 typed_id!(ScopeId, "Unique identifier for a state scope.");

@@ -1,36 +1,35 @@
 use async_trait::async_trait;
 use layer0::effect::{Effect, Scope};
-use layer0::error::HookError;
-use layer0::hook::{Hook, HookAction, HookContext, HookPoint};
-use layer0::id::AgentId;
-use layer0::state::StateStore;
+use layer0::error::StateError;
+use layer0::id::OperatorId;
+use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
+use layer0::state::{StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
-use neuron_hooks::HookRegistry;
 use neuron_orch_kit::{EffectInterpreter, ExecutionEvent, ExecutionTrace, LocalEffectInterpreter};
 use serde_json::json;
 use std::sync::Arc;
 
-// ── Test hooks ──────────────────────────────────────────────────────────────
+// ── Test middleware ──────────────────────────────────────────────────────────
 
-struct HaltHook {
-    points: Vec<HookPoint>,
-    reason: String,
-}
+/// Guard that silently blocks every write without error.
+struct HaltMiddleware;
 
 #[async_trait]
-impl Hook for HaltHook {
-    fn points(&self) -> &[HookPoint] {
-        &self.points
-    }
-
-    async fn on_event(&self, _ctx: &HookContext) -> Result<HookAction, HookError> {
-        Ok(HookAction::Halt {
-            reason: self.reason.clone(),
-        })
+impl StoreMiddleware for HaltMiddleware {
+    async fn write(
+        &self,
+        _scope: &Scope,
+        _key: &str,
+        _value: serde_json::Value,
+        _options: Option<&StoreOptions>,
+        _next: &dyn StoreWriteNext,
+    ) -> Result<(), StateError> {
+        // Do not call next — silently skip the write (not an error).
+        Ok(())
     }
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────────
+// ── Tests ────────────────────────────────────────────────────────────────────
 
 /// Halt guardrail at `PreMemoryWrite` skips the write and produces no
 /// `MemoryWritten` trace event.
@@ -38,13 +37,11 @@ impl Hook for HaltHook {
 async fn interpreter_halt_hook_skips_write() {
     let state = Arc::new(InMemoryStore::new());
 
-    let mut registry = HookRegistry::new();
-    registry.add_guardrail(Arc::new(HaltHook {
-        points: vec![HookPoint::PreMemoryWrite],
-        reason: "blocked".into(),
-    }));
+    let stack = StoreStack::builder()
+        .guard(Arc::new(HaltMiddleware))
+        .build();
 
-    let interp = LocalEffectInterpreter::new(state.clone()).with_hooks(Arc::new(registry));
+    let interp = LocalEffectInterpreter::new(state.clone()).with_store_middleware(stack);
 
     let effect = Effect::WriteMemory {
         scope: Scope::Global,
@@ -94,7 +91,7 @@ async fn interpreter_no_hooks_writes_normally() {
         ttl: None,
     };
 
-    let mut followups: Vec<(AgentId, layer0::operator::OperatorInput)> = vec![];
+    let mut followups: Vec<(OperatorId, layer0::operator::OperatorInput)> = vec![];
     let mut trace = ExecutionTrace::new();
 
     interp

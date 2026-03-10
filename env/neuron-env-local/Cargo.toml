@@ -15,6 +15,7 @@ layer0 = { path = "../../layer0", version = "0.4.0" }
 async-trait = "0.1"
 neuron-secret = { path = "../../secret/neuron-secret", version = "0.4.0" }
 serde_json = "1"
+tracing = "0.1"
 
 [dev-dependencies]
 layer0 = { path = "../../layer0", features = ["test-utils"], version = "0.4.0" }

@@ -15,9 +15,9 @@ dependency entry point for the most common combination of crates, controlled by 
 The framework is built on a **6-layer protocol model** where each layer is a Rust trait:
 
 ```
-layer0: Operator | StateStore | Environment | Orchestrator | Hook | Observable
-         ↓           ↓             ↓               ↓          ↓        ↓
-      operators   state        credentials    workflows   middleware  events
+layer0: Operator | StateStore | Environment | Orchestrator | Observable
+         ↓           ↓             ↓               ↓          ↓
+      operators   state        credentials    workflows   events
 ```
 
 Every layer is independently replaceable. You can use the Anthropic provider with the OpenAI
@@ -28,27 +28,22 @@ changing your operator code, and so on.
 
 ```toml
 [dependencies]
-neuron = { version = "0.4", features = ["op-react", "provider-anthropic", "state-memory", "env-local"] }
+neuron = { version = "0.4", features = ["agent", "provider-anthropic"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
 ```rust
-use neuron::prelude::*;
-use std::sync::Arc;
-
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let provider = AnthropicProvider::from_env()?;
-    let operator = ReactOperator::new(
-        Arc::new(provider),
-        Arc::new(ToolRegistry::new()),
-        Arc::new(HookRegistry::new()),
-    );
-    let env = LocalEnv::new(Arc::new(EnvResolver));
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let output = neuron::agent("claude-sonnet-4-20250514")
+        .system("You are a helpful assistant.")
+        .build()?
+        .run("What is the capital of France?")
+        .await?;
 
-    let input = OperatorInput::new("What is 2 + 2?");
-    let output = operator.invoke(input, &env).await?;
-    println!("{}", output.content.as_text().unwrap_or_default());
+    if let Some(text) = output.message.as_text() {
+        println!("{text}");
+    }
     Ok(())
 }
 ```
@@ -58,9 +53,8 @@ async fn main() -> anyhow::Result<()> {
 | Flag | Includes | Description |
 |------|----------|-------------|
 | `core` (default) | `layer0`, `neuron-context`, `neuron-tool`, `neuron-turn` | Protocol + wiring |
-| `hooks` (default) | `core` + `neuron-hooks` | Hook middleware |
-| `op-react` | `hooks` + `neuron-op-react` | ReAct loop operator |
-| `op-single-shot` | `hooks` + `neuron-op-single-shot` | Single-turn operator |
+| `context-engine` | `core` + `neuron-context-engine` | Composable context engine |
+| `op-single-shot` | `core` + `neuron-op-single-shot` | Single-turn operator |
 | `mcp` | `core` + `neuron-mcp` | MCP bridge |
 | `orch-kit` | `core` + `neuron-orch-kit` | Orchestration wiring |
 | `orch-local` | `orch-kit` + `neuron-orch-local` | In-process orchestrator |
@@ -71,6 +65,8 @@ async fn main() -> anyhow::Result<()> {
 | `provider-openai` | `core` + `neuron-provider-openai` | OpenAI GPT |
 | `provider-ollama` | `core` + `neuron-provider-ollama` | Ollama local models |
 | `providers-all` | all three providers | All built-in providers |
+| `agent` | `context-engine` + `state-memory` | High-level agent API |
+| `macros` | `neuron-tool/macros` | Proc-macro support for deriving ToolDyn |
 
 ## Workspace crates
 
@@ -83,7 +79,7 @@ The workspace is split into focused crates you can depend on individually:
 - [`neuron-context`](https://crates.io/crates/neuron-context) — context window strategies
 
 ### Operators
-- [`neuron-op-react`](https://crates.io/crates/neuron-op-react) — ReAct reasoning loop
+- [`neuron-context-engine`](https://crates.io/crates/neuron-context-engine) — Composable context engine
 - [`neuron-op-single-shot`](https://crates.io/crates/neuron-op-single-shot) — single model call
 
 ### Providers
@@ -95,9 +91,8 @@ The workspace is split into focused crates you can depend on individually:
 - [`neuron-orch-kit`](https://crates.io/crates/neuron-orch-kit) — wiring kit
 - [`neuron-orch-local`](https://crates.io/crates/neuron-orch-local) — in-process orchestrator
 
-### Hooks & security
-- [`neuron-hooks`](https://crates.io/crates/neuron-hooks) — hook registry and middleware
-- [`neuron-hook-security`](https://crates.io/crates/neuron-hook-security) — redaction + DLP hooks
+### Middleware & security
+- [`neuron-hook-security`](https://crates.io/crates/neuron-hook-security) — security middleware (redaction + DLP)
 
 ### State
 - [`neuron-state-memory`](https://crates.io/crates/neuron-state-memory) — in-memory store

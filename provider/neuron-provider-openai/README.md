@@ -33,7 +33,7 @@ Set `OPENAI_API_KEY` in your environment (or inject via `neuron-env-local`).
 use neuron_provider_openai::OpenAIProvider;
 
 let provider = OpenAIProvider::from_env()?;
-// Use provider with ReactOperator or SingleShotOperator
+// Use provider with react_loop() from neuron-context-engine
 ```
 
 ### OpenAI-compatible endpoints (Ollama, vLLM, LM Studio, etc.)

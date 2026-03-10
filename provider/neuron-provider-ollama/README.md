@@ -32,7 +32,7 @@ Start Ollama (`ollama serve`) and pull a model (`ollama pull llama3.2`).
 use neuron_provider_ollama::OllamaProvider;
 
 let provider = OllamaProvider::default(); // connects to http://localhost:11434
-// Use provider with ReactOperator or SingleShotOperator
+// Use provider with react_loop() from neuron-context-engine
 ```
 
 ### Custom host

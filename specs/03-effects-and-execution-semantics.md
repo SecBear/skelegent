@@ -23,7 +23,7 @@ declares this effect and the executing layer handles delivery.
 
 ```rust
 Effect::WriteMemory {
-    scope: Scope,                      // where to write (session / workflow / agent / global)
+    scope: Scope,                      // where to write (session / workflow / operator / global)
     key: String,                       // storage key
     value: serde_json::Value,          // value to store
     tier: Option<MemoryTier>,          // advisory: hot / warm / cold
@@ -40,7 +40,7 @@ Effect::WriteMemory {
 
 | Field | Type | Description |
 |---|---|---|
-| `scope` | `Scope` | Scope hierarchy: `Session`, `Workflow`, `Agent { workflow, agent }`, `Global`, or `Custom`. |
+| `scope` | `Scope` | Scope hierarchy: `Session`, `Workflow`, `Operator { workflow, operator }`, `Global`, or `Custom`. |
 | `key` | `String` | Storage key within the scope. |
 | `value` | `serde_json::Value` | Value to write. Any JSON-serializable data. |
 | `tier` | `Option<MemoryTier>` | Storage tier hint. `Hot` (default) = low-latency; `Warm` = in-process/near cache; `Cold` = slow/cheap. |
@@ -67,7 +67,7 @@ the agent directly — it declares the intent.
 
 ```rust
 Effect::Delegate {
-    agent: AgentId,
+    operator: OperatorId,
     input: Box<OperatorInput>,
 }
 ```
@@ -86,7 +86,7 @@ the next agent takes over entirely.
 
 ```rust
 Effect::Handoff {
-    agent: AgentId,
+    operator: OperatorId,
     state: serde_json::Value,  // context to pass to the next agent
 }
 ```
@@ -175,6 +175,10 @@ Effects should be executed by orchestration/runtime glue, not by the operator it
 - Local orchestration may execute them immediately.
 - Durable orchestration may serialize and execute them inside workflow engines.
 
+### Own-Scope State Access
+
+Operators that need to read/write their own state partition can do so via `FlushToStore` and `InjectFromStore` context ops in `neuron-context-engine`, or by receiving a `StateStore` reference at construction time. Own-scope reads are direct calls to `StateStore::read()` / `StateStore::search()` — they do not go through the effects pipeline. Cross-scope writes remain as `Effect::WriteMemory` and are handled by the executing layer.
+
 ## Executor Guidance: Threading Advisory Fields
 
 ### Contract
@@ -206,7 +210,7 @@ Two executors in this workspace demonstrate the pattern:
 
 - **`LocalEffectExecutor`** (`neuron-effects-local`) — standalone executor implementing
   the `EffectExecutor` trait. Constructs `StoreOptions` from all five advisory fields,
-  fires the optional `PreMemoryWrite` hook (which may halt or modify the value), then
+  runs the `StoreMiddleware` chain (which may halt or modify the value), then
   calls `write_hinted()`.
 
 - **`LocalEffectInterpreter`** (`neuron-orch-kit`) — per-effect interpreter used by
@@ -217,6 +221,6 @@ Both follow the same pattern. New executors for durable or remote backends must 
 same — construct `StoreOptions` and call `write_hinted()`, leaving backend-specific
 interpretation of the hints to the backend.
 
-### Hook Integration
+### Middleware Integration
 
-Before calling `write_hinted()`, executors with a `HookRegistry` fire the `PreMemoryWrite` hook point. See `specs/09-hooks-lifecycle-and-governance.md` for hook dispatch semantics and actions.
+Before calling `write_hinted()`, executors with a `StoreStack` run the `StoreMiddleware` chain. See `specs/09-hooks-lifecycle-and-governance.md` for middleware dispatch semantics.

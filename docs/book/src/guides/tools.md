@@ -2,6 +2,8 @@
 
 Tools give operators the ability to take actions: read files, make HTTP requests, query databases, or perform any side-effecting operation. The tool system is built around the `ToolDyn` trait and the `ToolRegistry`.
 
+> **Unified model:** In the neuron architecture, tools are operators registered with `ToolMetadata`. `ToolDyn` and `ToolRegistry` are the Layer 1 convenience API; at the protocol level, tools are dispatched as operators. The `ToolOperator` adapter (from `neuron_tool::adapter`) bridges `ToolDyn` to the `Operator` trait, so any `ToolDyn` implementation can be used anywhere an `Operator` is expected.
+
 ## The ToolDyn trait
 
 ```rust
@@ -21,7 +23,7 @@ pub trait ToolDyn: Send + Sync {
 - **`name()`** -- Unique identifier for the tool. This is what the model uses to request the tool.
 - **`description()`** -- Human-readable description. Sent to the model as part of the tool definition.
 - **`input_schema()`** -- JSON Schema describing the tool's parameters. The model generates input conforming to this schema.
-- **`call()`** -- Async execution. Takes JSON input, returns JSON output or a `ToolError`.
+- **`call()`** -- Async execution. Takes JSON input and a `&ToolCallContext`, returns JSON output or a `ToolError`.
 
 ## Creating a tool
 
@@ -60,6 +62,7 @@ impl ToolDyn for ReadFileTool {
     fn call(
         &self,
         input: Value,
+        ctx: &ToolCallContext,
     ) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
         Box::pin(async move {
             let path = input["path"]
@@ -130,12 +133,12 @@ pub enum ToolError {
 
 ## How tools integrate with operators
 
-The `ReactOperator` uses a `ToolRegistry` internally. When the model responds with a `ToolUse` content block, the operator:
+The `react_loop` function uses a `ToolRegistry` internally. When the model responds with a `ToolUse` content block, the loop:
 
 1. Looks up the tool by name in the registry.
-2. Fires `PreToolUse` hooks (which may skip or modify the call).
-3. Calls `tool.call(input)`.
-4. Fires `PostToolUse` hooks (which may modify the output).
+2. Fires `PreSubDispatch` hooks (which may skip or modify the call).
+3. Calls `tool.call(input, ctx)`.
+4. Fires `PostSubDispatch` hooks (which may modify the output).
 5. Backfills the tool result into the conversation context.
 6. Calls the model again with the updated context.
 

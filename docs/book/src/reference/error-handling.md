@@ -17,7 +17,7 @@ Errors from operator execution (Layer 0, `layer0::error::OperatorError`):
 ```rust
 pub enum OperatorError {
     Model(String),           // LLM provider error
-    Tool { tool, message },  // Tool execution error
+    SubDispatch { operator, message },  // Sub-dispatch execution error
     ContextAssembly(String), // Context assembly failed
     Retryable(String),       // Transient, may succeed on retry
     NonRetryable(String),    // Permanent failure (budget, safety, invalid input)
@@ -33,7 +33,7 @@ Errors from orchestration (Layer 0, `layer0::error::OrchError`):
 
 ```rust
 pub enum OrchError {
-    AgentNotFound(String),    // Agent ID not registered
+    OperatorNotFound(String),    // Operator ID not registered
     WorkflowNotFound(String), // Workflow ID not found
     DispatchFailed(String),   // Dispatch failed
     SignalFailed(String),     // Signal delivery failed
@@ -75,19 +75,6 @@ pub enum EnvError {
 ```
 
 Like `OrchError`, `OperatorError` propagates into `EnvError` via `From`.
-
-### HookError
-
-Errors from hook execution (Layer 0, `layer0::error::HookError`):
-
-```rust
-pub enum HookError {
-    Failed(String),         // Hook execution failed
-    Other(Box<dyn Error>),  // Catch-all
-}
-```
-
-Hook errors are **not** fatal. The hook registry logs them and continues with `HookAction::Continue`. To halt execution, a hook should return `Ok(HookAction::Halt { reason })`, not `Err(...)`.
 
 ### ProviderError
 
@@ -131,6 +118,6 @@ ProviderError / ToolError
   OrchError / EnvError
 ```
 
-Provider and tool errors are mapped to `OperatorError` by the operator implementation (e.g., `ReactOperator` maps `ProviderError::RateLimited` to `OperatorError::Retryable`). Operator errors propagate into orchestration and environment errors automatically via `From` impls.
+Provider and tool errors are mapped to `OperatorError` by the operator implementation (e.g., the `react_loop`-based operator maps `ProviderError::RateLimited` to `OperatorError::Retryable`). Operator errors propagate into orchestration and environment errors automatically via `From` impls.
 
 This layered propagation ensures that callers at each level see errors appropriate to their abstraction. An orchestrator sees `OrchError`, never `ProviderError`.

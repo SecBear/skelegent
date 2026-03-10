@@ -3,8 +3,10 @@
 //! The [`Provider`] trait uses RPITIT (return-position `impl Trait` in traits)
 //! and is intentionally NOT object-safe. The object-safe boundary is
 //! `layer0::Turn` — NeuronTurn<P: Provider> implements Turn.
+//!
+//! [`Message`]: layer0::context::Message
 
-use crate::types::{ProviderRequest, ProviderResponse};
+use crate::infer::{InferRequest, InferResponse};
 use std::future::Future;
 use thiserror::Error;
 
@@ -59,17 +61,19 @@ impl ProviderError {
 ///
 /// Each provider (Anthropic, OpenAI, Ollama) implements this trait.
 /// Provider-native features (truncation, caching, thinking blocks)
-/// are handled by the provider impl using `ProviderRequest.extra`.
+/// are handled by the provider impl using `InferRequest.extra`.
 ///
 /// This trait uses RPITIT and is NOT object-safe. That's intentional —
 /// `NeuronTurn<P: Provider>` is generic, and the object-safe boundary
 /// is `layer0::Turn`.
 pub trait Provider: Send + Sync {
-    /// Send a completion request to the provider.
-    fn complete(
+    /// Run inference using [`layer0::context::Message`] types directly.
+    ///
+    /// Operators call this. The provider converts to its wire format internally.
+    fn infer(
         &self,
-        request: ProviderRequest,
-    ) -> impl Future<Output = Result<ProviderResponse, ProviderError>> + Send;
+        request: InferRequest,
+    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send;
 }
 
 #[cfg(test)]

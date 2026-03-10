@@ -1,97 +1,88 @@
-# Hooks, Lifecycle, and Governance
+# Middleware, Lifecycle, and Governance
 
 ## Purpose
 
-Hooks and lifecycle vocabulary provide controlled intervention and cross-layer coordination.
+Middleware and lifecycle vocabulary provide controlled intervention and cross-layer coordination.
 
 This is how you enforce budget, tool policy, redaction, audit, and observability without baking those concerns into every operator.
 
-## Hooks
+## Middleware
 
-`layer0::Hook` defines:
+Neuron uses per-boundary middleware traits defined in `layer0::middleware`:
 
-- hook points (pre/post inference, tool use, exit checks, steering, memory writes)
-- actions (continue, halt, skip tool, modify input/output)
+- `DispatchMiddleware` — intercepts operator dispatch (pre/post inference, sub-dispatch, exit checks, steering)
+- `StoreMiddleware` — intercepts state store operations (pre-memory-write)
+- `ExecMiddleware` — intercepts effect execution
 
-Hook errors should not implicitly halt execution; a hook must explicitly choose `Halt`.
-Hook errors MUST be logged via `tracing::warn` — silent swallowing is prohibited.
+Each middleware trait follows a continuation-passing style: the middleware receives the request and a `next` function, and can inspect/modify the request, call `next`, and inspect/modify the response.
 
-### Hook Points
+Middleware errors MUST be logged via `tracing::warn` — silent swallowing is prohibited.
 
-All hook points carry a common baseline context: `tokens_used`, `cost`, `turns_completed`,
-and `elapsed`. The table lists only the fields that are *unique* to each point.
+### Middleware Boundaries
 
-| HookPoint | When | Key Context Fields |
+All middleware boundaries carry a common baseline context: `tokens_used`, `cost`, `turns_completed`,
+and `elapsed`. The table lists only the fields that are *unique* to each boundary.
+
+| Boundary | When | Key Context Fields |
 |---|---|---|
 | `PreInference` | Before each model call | *(baseline only)* |
-| `PostInference` | After model responds, before tool execution | `model_output` |
-| `PreToolUse` | Before each tool executes | `tool_name`, `tool_input` |
-| `PostToolUse` | After tool completes, before result enters context | `tool_name`, `tool_result` |
+| `PostInference` | After model responds, before sub-operator dispatch | `model_output` |
+| `PreSubDispatch` | Before each tool executes | `operator_name`, `operator_input` |
+| `PostSubDispatch` | After tool completes, before result enters context | `operator_name`, `operator_result` |
 | `ExitCheck` | At each exit-condition check | *(baseline only)* |
-| `ToolExecutionUpdate` | Streaming chunk available | `tool_name`, `tool_chunk` |
+| `SubDispatchUpdate` | Streaming chunk available | `operator_name`, `operator_chunk` |
 | `PreSteeringInject` | After steering drain, before messages enter context | `steering_messages` |
-| `PostSteeringSkip` | After tools skipped due to steering | `skipped_tools` |
+| `PostSteeringSkip` | After tools skipped due to steering | `skipped_operators` |
 | `PreMemoryWrite` | Before WriteMemory effect executes | `memory_key`, `memory_value`, `memory_options` |
 
-### Hook Kinds and Composition
+### Middleware Stacks and Composition
 
-Hooks are registered with a `HookKind` that determines how multiple hooks at the same point compose:
+Middleware is composed into stacks that determine execution order:
 
-| HookKind | Composition | Use for |
+| Stack | Middleware Trait | Use for |
 |---|---|---|
-| `Guardrail` | Sequential, short-circuits on Halt/Skip | Policy enforcement, safety gates |
-| `Transformer` | Sequential chain — each feeds modified context to next | Redaction, formatting, sanitization |
-| `Observer` | All run, actions ignored | Logging, telemetry, audit |
+| `DispatchStack` | `DispatchMiddleware` | Operator dispatch interception: policy enforcement, safety gates, redaction, logging |
+| `StoreStack` | `StoreMiddleware` | State store interception: memory write guardrails, redaction |
+| `ExecStack` | `ExecMiddleware` | Effect execution interception: audit, policy |
 
-#### Dispatch order
+Middleware in a stack runs in registration order. Each middleware calls `next` to continue
+the chain, or returns early to short-circuit (e.g., to halt or skip an operation).
 
-At each hook point, the registry runs three phases in this order:
+### Typed Interceptors
 
-1. **Observers** — All run regardless of what any observer returns. Actions are
-   discarded. Errors are logged via `tracing::warn` and execution continues.
-   Observers cannot affect the pipeline.
-
-2. **Transformers** — Run in registration order. Each transformer receives the
-   context as *modified by the previous transformer* (chaining). Accumulated
-   `ModifyToolInput`/`ModifyToolOutput` actions are applied to `working_ctx` so
-   the next transformer sees them. A `Halt` from any transformer escalates
-   immediately and short-circuits the entire pipeline (no guardrails run).
-   Errors are logged and treated as `Continue`.
-
-3. **Guardrails** — Run in registration order against the **original, unmodified**
-   context (not the transformer-modified working context). Policy must be enforced
-   against what actually arrived, not what transformers produced. Short-circuit on
-   the first `Halt` or `SkipTool`. Errors are logged and execution continues to
-   the next guardrail.
-
-If no phase produced a `Halt` or `SkipTool`, the last transformer modification
-(if any) is returned; otherwise `Continue` is returned.
-
-`HookKind` lives in `neuron-hooks` (Layer 1), NOT in `layer0`. The `Hook` trait
-in Layer 0 does not know its kind — kind is a registration-time property of the
-registry, not the hook itself. This preserves Layer 0 stability.
+`neuron-context-engine` provides the `Rule` system for typed, operator-local interception
+points. Rules offer a higher-level abstraction over `DispatchMiddleware` with typed access
+to ReAct-specific context (tool calls, model responses, etc.). For cross-cutting concerns
+that span operators, use the continuation-based middleware traits in `layer0::middleware`.
 
 ### Exit Priority
 
 See `specs/04-operator-turn-runtime.md §Exit Priority Ordering` for the authoritative
-priority table. ExitCheck hooks MUST dispatch before all limit checks in the operator
+priority table. ExitCheck middleware MUST fire before all limit checks in the operator
 loop — a guardrail must not be checked after a limit has already returned.
 
-### Hooks vs Steering
+### Middleware vs Steering
 
-Hooks observe steering without being steering:
+Middleware observes steering without being steering:
 
-- `PreSteeringInject`: fires after `SteeringSource::drain()` returns messages but before they enter context. A guardrail here can block malicious steering injection.
-- `PostSteeringSkip`: fires after tools are skipped due to steering. Observers log what was skipped.
+- `PreSteeringInject`: fires after `SteeringSource::drain()` returns messages but before they enter context. Guardrail middleware here can block malicious steering injection.
+- `PostSteeringSkip`: fires after tools are skipped due to steering. Observer middleware logs what was skipped.
 
-Steering is NOT a HookKind because the primitives are structurally different:
+Steering is NOT middleware because the primitives are structurally different:
 
-| | Hooks | Steering |
+| | Middleware | Steering |
 |---|---|---|
-| Control flow | Event-driven | Poll-driven |
-| Returns | Actions (Halt/Skip/Modify) | Messages to inject |
-| Composition | By kind (short-circuit/chain/parallel) | Concatenate |
+| Control flow | Continuation-passing | Poll-driven |
+| Returns | Pass-through / halt / modify | Messages to inject |
+| Composition | Stack (sequential chain) | Concatenate |
 | Statefulness | Stateless per invocation | Buffers between polls |
+
+### Security Middleware
+
+`neuron-hook-security` provides two ready-made middleware implementations:
+
+- `RedactionMiddleware` — scans content for sensitive patterns (regex or literal) and redacts matches before they reach the model or output sink.
+- `ExfilGuardMiddleware` — inspects tool results and model responses for data-loss-prevention (DLP) signals; configurable block-or-alert policy. Detects exfiltration in any tool input via generic URL+sensitive-data patterns, shell-specific patterns, and base64 blobs.
 
 ## Lifecycle Vocabulary
 
@@ -106,9 +97,9 @@ and takes action.
 | `CostIncurred` | Turn | After each model inference call; carries per-call and cumulative cost |
 | `BudgetWarning` | Orchestrator | When a workflow's cumulative spend nears its configured limit |
 | `BudgetAction` | Orchestrator | When the orchestrator decides how to respond to budget pressure (continue / downgrade model / halt / request increase) |
-| `StepLimitApproaching` | Operator | When tool call count approaches the configured `max_tool_calls` limit |
-| `StepLimitReached` | Operator | When the step (tool call) limit is reached and the operator must exit |
-| `LoopDetected` | Operator | When identical consecutive tool calls exceed the configured loop detection threshold |
+| `StepLimitApproaching` | Operator | When sub-dispatch count approaches the configured `max_sub_dispatches` limit |
+| `StepLimitReached` | Operator | When the step (sub-dispatch) limit is reached and the operator must exit |
+| `LoopDetected` | Operator | When identical consecutive sub-dispatches exceed the configured loop detection threshold |
 | `TimeoutApproaching` | Operator | When elapsed time approaches the configured `max_duration` |
 | `TimeoutReached` | Operator | When the elapsed time limit is reached and the operator must exit |
 
@@ -117,7 +108,7 @@ and takes action.
 > `BudgetEvent::LoopDetected` to sinks (observability notification) **and** returns
 > `ExitReason::Custom("stuck_detected")` (control-flow exit). These are complementary:
 > the event is for observability and audit; the exit reason is for orchestrators deciding
-> what to do next. Similarly, step limit (`max_tool_calls`) emits
+> what to do next. Similarly, step limit (`max_sub_dispatches`) emits
 > `BudgetEvent::StepLimitReached` and returns `ExitReason::BudgetExhausted`.
 
 ### Budget Governance Authority
@@ -142,22 +133,23 @@ disabled when the orchestrator manages budget governance.
 | `CompactionComplete` | Turn/Orchestrator | After compaction finishes successfully; carries strategy used and tokens freed |
 | `ProviderManaged` | Turn | When the model provider (e.g. Anthropic server-side compaction) compacted the context; carries tokens before/after and optional summary |
 | `CompactionFailed` | Turn/Orchestrator | When compaction fails with an error; carries strategy and error description |
-| `CompactionSkipped` | Turn/Orchestrator | When compaction conditions are not met or a hook blocked it; carries reason |
+| `CompactionSkipped` | Turn/Orchestrator | When compaction conditions are not met or middleware blocked it; carries reason |
 | `FlushFailed` | Turn/Orchestrator | When a pre-compaction memory flush fails; carries scope, key, and error |
 | `CompactionQuality` | Turn/Orchestrator | After compaction, reports quality metrics: tokens before/after, items preserved/lost |
 
 ## Current Implementation Status
 
-- Hook traits exist in layer0.
-- HookKind-aware three-phase dispatch (Observer → Transformer → Guardrail) is implemented in `neuron-hooks`.
-- All nine hook points — including `PreSteeringInject`, `PostSteeringSkip`, and `PreMemoryWrite` — are in layer0 and tested.
-- Hook error logging via `tracing::warn` is implemented in `neuron-hooks` dispatch.
-- Policy/security hooks exist in `neuron-hook-security`; `ExfilGuardHook` detects exfiltration in any tool input via generic URL+sensitive-data patterns, shell-specific patterns, and base64 blobs.
+- Middleware traits exist in layer0 (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`).
+- `DispatchStack`, `StoreStack`, `ExecStack` compose middleware in registration order.
+- All nine middleware boundaries — including `PreSteeringInject`, `PostSteeringSkip`, and `PreMemoryWrite` — are in layer0.
+- Middleware error logging via `tracing::warn` is implemented.
+- Security middleware exists in `neuron-hook-security`: `RedactionMiddleware` and `ExfilGuardMiddleware`.
+- The `Rule` system in `neuron-context-engine` provides typed, operator-local interception.
 
 Still required for "core complete":
 
 - Explicit examples showing how orchestration consumes lifecycle vocab to coordinate compaction/budget
-- Tests for edge hook actions (skip tool, modify tool input/output) across the operator runtime
+- Tests for edge middleware actions (skip tool, modify tool input/output) across the operator runtime
 
 ## Observability: Common Event Interface
 

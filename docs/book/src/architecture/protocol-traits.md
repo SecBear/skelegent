@@ -44,12 +44,14 @@ pub struct OperatorConfig {
     pub max_cost: Option<Decimal>,        // Budget in USD
     pub max_duration: Option<DurationMs>, // Wall-clock timeout
     pub model: Option<String>,            // Model override
-    pub allowed_tools: Option<Vec<String>>, // Tool restrictions
+    pub allowed_operators: Option<Vec<String>>, // Operator restrictions
     pub system_addendum: Option<String>,  // Additional system prompt
 }
 ```
 
 Every field is optional. `None` means "use the implementation's default."
+
+Tools are operators registered with `ToolMetadata`. The `allowed_operators` field restricts which operators can be sub-dispatched during a turn; tool names in this list are operator names.
 
 ### OperatorOutput
 
@@ -73,7 +75,7 @@ pub enum ExitReason {
     BudgetExhausted,            // Hit cost budget
     CircuitBreaker,             // Consecutive failures
     Timeout,                    // Wall-clock timeout
-    ObserverHalt { reason },    // Hook halted execution
+    MiddlewareHalt { reason },    // Middleware halted execution
     Error,                      // Unrecoverable error
     Custom(String),             // Extension point
 }
@@ -87,12 +89,24 @@ pub struct OperatorMetadata {
     pub tokens_out: u64,
     pub cost: Decimal,                    // USD, precise
     pub turns_used: u32,
-    pub tools_called: Vec<ToolCallRecord>,
+    pub sub_dispatches: Vec<SubDispatchRecord>,
     pub duration: DurationMs,
 }
 ```
 
 Every field is concrete (not optional) because every operator produces this data. Implementations that cannot track a field (e.g., cost for a local model) use zero.
+
+### SubDispatchRecord
+
+`SubDispatchRecord` captures the result of a single sub-operator dispatch within a turn:
+
+```rust
+pub struct SubDispatchRecord {
+    pub name: String,         // Operator name that was dispatched
+    pub duration: DurationMs, // Wall-clock time for that dispatch
+    pub success: bool,        // Whether the dispatch completed without error
+}
+```
 
 ## Protocol 2: Orchestrator
 
@@ -105,13 +119,13 @@ How operators from different agents compose, and how execution survives failures
 pub trait Orchestrator: Send + Sync {
     async fn dispatch(
         &self,
-        agent: &AgentId,
+        operator: &OperatorId,
         input: OperatorInput,
     ) -> Result<OperatorOutput, OrchError>;
 
     async fn dispatch_many(
         &self,
-        tasks: Vec<(AgentId, OperatorInput)>,
+        tasks: Vec<(OperatorId, OperatorInput)>,
     ) -> Vec<Result<OperatorOutput, OrchError>>;
 
     async fn signal(
@@ -205,43 +219,60 @@ pub struct EnvironmentSpec {
 }
 ```
 
-## Interface 5: Hook
+## Interface 5: Per-Boundary Middleware
 
-**Crate:** `layer0::hook`
+**Crate:** `layer0::middleware`
 
-Observation and intervention in the operator's inner loop.
+Observation and intervention at protocol boundaries. Three traits cover the three boundaries where cross-cutting logic is needed:
 
 ```rust
 #[async_trait]
-pub trait Hook: Send + Sync {
-    fn points(&self) -> &[HookPoint];
-    async fn on_event(&self, ctx: &HookContext) -> Result<HookAction, HookError>;
+pub trait DispatchMiddleware: Send + Sync {
+    async fn on_dispatch(
+        &self,
+        operator: &OperatorId,
+        input: OperatorInput,
+        next: DispatchNext<'_>,
+    ) -> Result<OperatorOutput, OrchError>;
+}
+
+#[async_trait]
+pub trait StoreMiddleware: Send + Sync {
+    async fn on_read(
+        &self,
+        scope: &Scope,
+        key: &str,
+        next: StoreNext<'_>,
+    ) -> Result<Option<serde_json::Value>, StateError>;
+
+    async fn on_write(
+        &self,
+        scope: &Scope,
+        key: &str,
+        value: serde_json::Value,
+        next: StoreNext<'_>,
+    ) -> Result<(), StateError>;
+}
+
+#[async_trait]
+pub trait ExecMiddleware: Send + Sync {
+    async fn on_exec(
+        &self,
+        input: OperatorInput,
+        next: ExecNext<'_>,
+    ) -> Result<OperatorOutput, OperatorError>;
 }
 ```
 
-Hooks fire at five defined points:
+Each middleware wraps the next layer in the stack. The `next` parameter is a callback that invokes the rest of the middleware chain (and ultimately the real implementation). Middleware can inspect/modify inputs before calling `next`, inspect/modify outputs after, or short-circuit by returning early without calling `next`.
 
-| HookPoint | When |
-|-----------|------|
-| `PreInference` | Before each model call |
-| `PostInference` | After model responds, before tool execution |
-| `PreToolUse` | Before each tool is executed |
-| `PostToolUse` | After each tool completes |
-| `ExitCheck` | At each exit-condition check |
+Middleware is composed into stacks:
 
-`HookContext` provides read-only access to the current state: tool name/input/result, model output, running token count, running cost, turns completed, elapsed time.
+- **`DispatchStack`** -- wraps orchestrator dispatch (budget enforcement, logging, routing)
+- **`StoreStack`** -- wraps state store access (redaction, audit logging)
+- **`ExecStack`** -- wraps operator execution (security guardrails, telemetry)
 
-`HookAction` determines what happens next:
-
-| Action | Effect |
-|--------|--------|
-| `Continue` | Proceed normally |
-| `Halt { reason }` | Stop the operator with `ExitReason::ObserverHalt` |
-| `SkipTool { reason }` | Skip this tool call (PreToolUse only) |
-| `ModifyToolInput { new_input }` | Replace tool input before execution (PreToolUse only) |
-| `ModifyToolOutput { new_output }` | Replace tool output (PostToolUse only) |
-
-Hook errors are logged but do **not** halt execution. Use `HookAction::Halt` to halt.
+The Rule system provides typed interception within the context engine specifically, for use cases like tool-call filtering that are operator-internal rather than cross-cutting. Rules fire via Trigger enum: Before (pre-inference, pre-tool), After (post-inference, post-tool), or When (exit checks, steering).
 
 ## Interface 6: Lifecycle Events
 

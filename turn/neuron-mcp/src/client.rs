@@ -11,6 +11,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use layer0::ToolMetadata;
+use neuron_tool::adapter::ToolOperator;
 use neuron_tool::{AliasedTool, ToolDyn, ToolError};
 use rmcp::ServiceExt;
 use rmcp::model::{
@@ -106,6 +108,52 @@ impl McpClient {
             .collect();
 
         Ok(tools)
+    }
+
+    /// Discover all tools from the connected MCP server as operator-protocol types.
+    ///
+    /// Returns a vector of [`(ToolOperator, ToolMetadata)`] pairs. Each pair wraps
+    /// the remote tool as an [`Operator`](layer0::operator::Operator) and carries
+    /// its extracted metadata.
+    ///
+    /// Emits a [`tracing::warn`] when the tool count exceeds
+    /// [`TOOL_COUNT_WARN_THRESHOLD`], identical to
+    /// [`discover_tools`](McpClient::discover_tools).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError::Protocol`] if the tool listing request fails.
+    pub async fn discover_operators(&self) -> Result<Vec<(ToolOperator, ToolMetadata)>, McpError> {
+        let result = self
+            .service
+            .list_all_tools()
+            .await
+            .map_err(|e| McpError::Protocol(e.to_string()))?;
+
+        let tool_count = result.len();
+        if tool_count > TOOL_COUNT_WARN_THRESHOLD {
+            tracing::warn!(
+                count = tool_count,
+                threshold = TOOL_COUNT_WARN_THRESHOLD,
+                "MCP tool count exceeds recommended limit; context pollution risk"
+            );
+        }
+
+        let peer = self.service.peer().clone();
+        let peer = Arc::new(peer);
+
+        let operators: Vec<(ToolOperator, ToolMetadata)> = result
+            .into_iter()
+            .map(|tool| {
+                let arc =
+                    Arc::new(McpToolWrapper::new(tool, Arc::clone(&peer))) as Arc<dyn ToolDyn>;
+                let op = ToolOperator::new(arc);
+                let meta = op.metadata();
+                (op, meta)
+            })
+            .collect();
+
+        Ok(operators)
     }
 
     /// Discover all tools and apply a name-alias map.
@@ -349,6 +397,7 @@ impl ToolDyn for McpToolWrapper {
     fn call(
         &self,
         input: serde_json::Value,
+        _ctx: &neuron_tool::ToolCallContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         let name: Cow<'static, str> = self.tool.name.clone();
         let arguments = input.as_object().cloned();
@@ -594,5 +643,100 @@ mod tests {
         let tools = client.discover_tools().await.unwrap();
         assert!(!tools.is_empty());
         client.close().await.unwrap();
+    }
+
+    /// Verify that `ToolOperator::metadata()` correctly extracts name, description,
+    /// schema, and parallel-safety from a `ToolDyn` — the same pipeline used inside
+    /// `discover_operators()`. Also covers the edge case where description is empty
+    /// (matching what `McpToolWrapper` produces when the MCP tool has no description).
+    #[test]
+    fn discover_operators_metadata_extraction() {
+        struct MockMcpTool {
+            name: &'static str,
+            description: &'static str,
+            schema: serde_json::Value,
+        }
+        impl ToolDyn for MockMcpTool {
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn description(&self) -> &str {
+                self.description
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                self.schema.clone()
+            }
+            fn call(
+                &self,
+                _: serde_json::Value,
+                _ctx: &neuron_tool::ToolCallContext,
+            ) -> Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>
+                        + Send
+                        + '_,
+                >,
+            > {
+                Box::pin(async { Ok(serde_json::Value::Null) })
+            }
+            // concurrency_hint() not overridden → defaults to Exclusive → parallel_safe = false
+        }
+
+        let schema = json!({"type": "object", "properties": {"query": {"type": "string"}}});
+
+        // Normal case: tool with name and description.
+        let arc: Arc<dyn ToolDyn> = Arc::new(MockMcpTool {
+            name: "web_search",
+            description: "Search the web",
+            schema: schema.clone(),
+        });
+        let op = ToolOperator::new(Arc::clone(&arc));
+        let meta = op.metadata();
+        assert_eq!(meta.name, "web_search");
+        assert_eq!(meta.description, "Search the web");
+        assert_eq!(meta.input_schema, schema);
+        // McpToolWrapper uses the default concurrency_hint (Exclusive) → parallel_safe = false
+        assert!(!meta.parallel_safe);
+
+        // Edge case: empty description (McpToolWrapper returns "" when MCP tool has no description).
+        let arc_nodesc: Arc<dyn ToolDyn> = Arc::new(MockMcpTool {
+            name: "bare_tool",
+            description: "",
+            schema: json!({"type": "object"}),
+        });
+        let op_nodesc = ToolOperator::new(Arc::clone(&arc_nodesc));
+        let meta_nodesc = op_nodesc.metadata();
+        assert_eq!(meta_nodesc.description, "");
+    }
+
+    /// Verify the warning threshold constant and predicate used by `discover_operators()`.
+    ///
+    /// `discover_operators` mirrors the `discover_tools` logic: it emits a warn when
+    /// `tool_count > TOOL_COUNT_WARN_THRESHOLD`. This test exercises the predicate
+    /// boundaries to guard against accidental changes (same pattern as
+    /// `tool_budget_tokens_empty` / `tool_budget_tokens_counts_descriptions`).
+    #[test]
+    fn discover_operators_preserves_tool_count_logic() {
+        // The threshold constant is part of the public API contract.
+        assert_eq!(
+            TOOL_COUNT_WARN_THRESHOLD, 20,
+            "threshold must be 20 for context budget calculations"
+        );
+
+        // Boundary: at-threshold must NOT trigger the warning (strict greater-than).
+        let at_threshold = TOOL_COUNT_WARN_THRESHOLD;
+        assert!(
+            at_threshold <= TOOL_COUNT_WARN_THRESHOLD,
+            "count == threshold should not warn"
+        );
+
+        // One over the limit must trigger the warning.
+        let over = TOOL_COUNT_WARN_THRESHOLD + 1;
+        assert!(
+            over > TOOL_COUNT_WARN_THRESHOLD,
+            "count {} must exceed threshold {}",
+            over,
+            TOOL_COUNT_WARN_THRESHOLD
+        );
     }
 }

@@ -7,8 +7,16 @@ repository.workspace = true
 homepage.workspace = true
 description = "Turn-level planning and execution primitives: planner, concurrency decider, batch executor, steering"
 
+[features]
+typed-output = ["dep:schemars", "dep:serde"]
+
 [dependencies]
 serde_json = "1"
 neuron-turn = { path = "../neuron-turn", version = "0.4.0" }
+layer0 = { path = "../../layer0", version = "0.4.0" }
+schemars = { version = "0.8", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
+schemars = "0.8"
+serde = { version = "1", features = ["derive"] }

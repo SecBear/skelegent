@@ -8,7 +8,7 @@ neuron organizes its crates into six layers plus an umbrella crate. Each layer h
  │         Feature-gated re-exports of all layers    │
  ├──────────────────────────────────────────────────┤
  │  LAYER 5 — Cross-Cutting                         │
- │  Hook registry, security hooks, lifecycle coord.  │
+ │  Security middleware, lifecycle coordination       │
  ├──────────────────────────────────────────────────┤
  │  LAYER 4 — Environment                           │
  │  Isolation, credentials, secret backends,         │
@@ -33,7 +33,7 @@ neuron organizes its crates into six layers plus an umbrella crate. Each layer h
 
 **Crate:** `layer0`
 
-Layer 0 is the stability contract. It defines the four protocol traits (`Operator`, `Orchestrator`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (`Hook`, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs).
+Layer 0 is the stability contract. It defines the four protocol traits (`Operator`, `Orchestrator`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (per-boundary middleware traits, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs).
 
 **Dependencies:** `serde`, `async-trait`, `thiserror`, `rust_decimal`, `serde_json`. Nothing else. No runtime, no HTTP, no provider-specific types.
 
@@ -42,7 +42,7 @@ Layer 0 is the stability contract. It defines the four protocol traits (`Operato
 ## Layer 1 -- Operator Implementations
 
 **Crates:**
-- `neuron-turn` -- Shared toolkit: `Provider` trait, `ContextStrategy`, type conversions
+- `neuron-turn` -- Shared toolkit: `Provider` trait, `InferRequest`, `InferResponse`, `TokenUsage`, type conversions
 - `neuron-turn-kit` -- Turn decomposition primitives and helpers
 - `neuron-provider-anthropic` -- Anthropic Claude API provider
 - `neuron-provider-openai` -- OpenAI API provider
@@ -50,10 +50,10 @@ Layer 0 is the stability contract. It defines the four protocol traits (`Operato
 - `neuron-tool` -- `ToolDyn` trait, `ToolRegistry`, `AliasedTool`
 - `neuron-context` -- Conversation context management and compaction strategies
 - `neuron-mcp` -- MCP (Model Context Protocol) client
-- `neuron-op-react` -- ReAct operator (reason-act-observe loop with tools)
+- `neuron-context-engine` -- Composable three-phase context engine (assembly, inference, reaction) with tool execution
 - `neuron-op-single-shot` -- Single-shot operator (one model call, no tools)
 
-Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `neuron-turn`) is intentionally not object-safe -- it uses RPITIT for zero-cost abstraction. The object-safe boundary is `layer0::Operator`. The bridge is `ReactOperator<P: Provider>`, which is generic over the provider type but implements the object-safe `Operator` trait.
+Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `neuron-turn`) is intentionally not object-safe -- it uses RPITIT for zero-cost abstraction. The object-safe boundary is `layer0::Operator`. The bridge is a context engine implementation (generic over the provider type) that implements the object-safe `Operator` trait.
 
 ## Layer 2 -- Orchestration
 
@@ -63,7 +63,7 @@ Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `
 - `neuron-effects-core` -- `EffectExecutor` trait and shared effect execution types
 - `neuron-effects-local` -- Local effect interpreter (executes effects in-process)
 
-Layer 2 implements `layer0::Orchestrator`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `AgentId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
+Layer 2 implements `layer0::Orchestrator`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `OperatorId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
 
 Future implementations could include Temporal workflows (durable, replayable) or Restate (durable execution with virtual objects).
 
@@ -91,16 +91,15 @@ Layer 4 implements `layer0::Environment` and provides the credential infrastruct
 ## Layer 5 -- Cross-Cutting
 
 **Crates:**
-- `neuron-hooks` -- `HookRegistry` for ordered hook pipeline dispatch
-- `neuron-hook-security` -- Security-focused hooks (guardrails, policy enforcement)
+- `neuron-hook-security` -- Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware`)
 
-Layer 5 provides the hook registry that operators use to dispatch hook events. The `HookRegistry` collects `Arc<dyn Hook>` implementations into an ordered pipeline. At each hook point, hooks fire in registration order. The pipeline short-circuits on `Halt`, `SkipTool`, or `ModifyToolInput`.
+Layer 5 provides security middleware that wraps operator dispatch, store access, and execution boundaries. The per-boundary middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`) are defined in Layer 0 and composed into stacks (`DispatchStack`, `StoreStack`, `ExecStack`). Layer 5 crates supply concrete middleware implementations — for example, `RedactionMiddleware` scrubs sensitive data from model outputs, and `ExfilGuardMiddleware` blocks unauthorized data exfiltration through tool calls.
 
 ## The umbrella crate
 
 **Crate:** `neuron`
 
-The umbrella crate re-exports all layers behind feature flags. It exists so users can write `neuron = { features = ["op-react", "provider-anthropic"] }` instead of depending on 5+ individual crates. See [Installation](../getting-started/installation.md) for the full feature flag table.
+The umbrella crate re-exports all layers behind feature flags. It exists so users can write `neuron = { features = ["context-engine", "provider-anthropic"] }` instead of depending on 5+ individual crates. See [Installation](../getting-started/installation.md) for the full feature flag table.
 
 ## Dependency rules
 

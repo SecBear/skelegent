@@ -1,18 +1,16 @@
 # Quickstart
 
-This example creates an Anthropic provider, registers a tool, builds a ReAct operator, and runs a single invocation. The operator will call the model, use tools if needed, and return the result.
+This example creates an Anthropic provider, registers a tool, builds a `Context`, and runs `react_loop` directly. The loop will call the model, use tools if needed, and return the result.
 
 ## Full example
 
 ```rust,no_run
 use layer0::content::Content;
-use layer0::operator::{Operator, OperatorInput, TriggerType};
-use neuron_hooks::HookRegistry;
-use neuron_op_react::{ReactConfig, ReactOperator};
+use layer0::context::{Message, Role};
+use layer0::id::OperatorId;
+use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
 use neuron_provider_anthropic::AnthropicProvider;
-use neuron_tool::{ToolDyn, ToolError, ToolRegistry};
-use neuron_state_memory::MemoryStore;
-use neuron_turn_kit::FullContext;
+use neuron_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;
@@ -41,6 +39,7 @@ impl ToolDyn for CurrentTimeTool {
     fn call(
         &self,
         _input: serde_json::Value,
+        _ctx: &ToolCallContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         Box::pin(async {
             // In a real tool, you'd use chrono or std::time
@@ -60,38 +59,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(CurrentTimeTool));
 
-    // 3. Configure the operator
-    let config = ReactConfig {
+    // 3. Configure the react loop
+    let config = ReactLoopConfig {
         system_prompt: "You are a helpful assistant. Use tools when needed.".into(),
-        default_model: "claude-haiku-4-5-20251001".into(),
-        default_max_tokens: 4096,
-        default_max_turns: 10,
+        model: Some("claude-haiku-4-5-20251001".into()),
+        max_tokens: Some(4096),
+        temperature: None,
     };
 
-    // 4. Create the state reader
-    let state_reader = Arc::new(MemoryStore::new());
+    // 4. Create a tool-call context (identifies the calling agent)
+    let tool_ctx = ToolCallContext::new(OperatorId::from("assistant"));
 
-    // 5. Create the context strategy
-    let context_strategy = Box::new(FullContext);
+    // 5. Build a Context and inject the user message
+    let mut ctx = Context::new();
+    ctx.inject_message(Message::new(Role::User, Content::text("What time is it right now?")))
+        .await?;
 
-    // 6. Build the ReAct operator
-    let operator = ReactOperator::new(
-        provider,
-        tools,
-        context_strategy,
-        HookRegistry::new(),
-        state_reader,
-        config,
-    );
-
-    // 7. Create the input
-    let input = OperatorInput::new(
-        Content::text("What time is it right now?"),
-        TriggerType::User,
-    );
-
-    // 8. Execute
-    let output = operator.execute(input).await?;
+    // 6. Run the react loop
+    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config).await?;
 
     println!("Response: {:?}", output.message);
     println!("Exit reason: {:?}", output.exit_reason);
@@ -111,11 +96,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 2. **Tool registration.** The `CurrentTimeTool` implements `ToolDyn` -- an object-safe trait that defines a tool's name, description, JSON Schema, and async execution. Tools are stored as `Arc<dyn ToolDyn>` in the `ToolRegistry`.
 
-3. **Operator construction.** `ReactOperator` implements `layer0::Operator`. It is generic over `P: Provider`, so it is constructed with a concrete provider type. The object-safe boundary is the `Operator` trait itself -- callers interact with `&dyn Operator` or `Box<dyn Operator>`.
+3. **Loop configuration.** `ReactLoopConfig` holds the system prompt, model, and token limits. It is a plain config struct -- not an operator. The react loop uses it to build a `CompileConfig` for each inference call.
 
-4. **Execution.** `operator.execute(input)` runs the ReAct loop: assemble context, call the model, check for tool use, execute tools, repeat until the model produces a final response or a limit is reached.
+4. **Context and execution.** `Context` is the conversation store -- it holds messages, assembly ops, and rules. You inject a user message, then call `react_loop()` which composes the core primitives: compile context, infer with the provider, apply context ops (append response, execute tools), repeat until the model produces a final response or a limit is reached.
 
-5. **Output.** `OperatorOutput` contains the response message, exit reason (why the loop stopped), and metadata (tokens, cost, duration, tool call records).
+5. **Output.** `OperatorOutput` contains the response message, exit reason (why the loop stopped), and metadata (tokens, cost, duration, sub-dispatch records).
+
+> **Tip:** To use `react_loop` behind the object-safe `Operator` trait boundary, wrap it in your own struct that implements `Operator`. See the [Operators guide](../guides/operators.md) for the pattern.
 
 ## Next steps
 
