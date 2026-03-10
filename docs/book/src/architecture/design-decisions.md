@@ -1,6 +1,6 @@
 # Design Decisions
 
-This page summarizes the key architectural decisions in neuron and the reasoning behind each one.
+This page summarizes the key architectural decisions in skelegent and the reasoning behind each one.
 
 ## Why `#[async_trait]` instead of native async traits
 
@@ -65,7 +65,7 @@ The effect declaration pattern makes operators pure functions over data: input i
 
 ## Why the Provider trait is not object-safe
 
-**Decision:** The `Provider` trait (in `neuron-turn`) uses RPITIT and is not object-safe. It is never used behind `dyn Provider`.
+**Decision:** The `Provider` trait (in `skg-turn`) uses RPITIT and is not object-safe. It is never used behind `dyn Provider`.
 
 **Reasoning:** Provider implementations are performance-critical -- they make HTTP calls to LLM APIs. The zero-cost abstraction of RPITIT (no heap allocation for the future) is worth the restriction of not using `dyn Provider`. The object-safe boundary is one layer up: a concrete operator wrapper (generic over `P: Provider`) implements `dyn Operator`. The generic type parameter is erased at the protocol boundary.
 

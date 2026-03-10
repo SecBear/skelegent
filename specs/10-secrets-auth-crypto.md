@@ -4,7 +4,7 @@
 
 Agentic systems need safe credential handling.
 
-Neuron separates this into:
+Skelegent separates this into:
 
 - **Vocabulary** (Layer 0): where secrets live and how access is described (`SecretSource`, access events)
 - **Behavior** (implementation crates): how secrets are resolved, how auth tokens are issued, how crypto operations are performed

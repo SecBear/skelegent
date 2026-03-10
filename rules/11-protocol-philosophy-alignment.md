@@ -77,8 +77,8 @@ For each protocol trait, the philosophy is captured in this checklist. Implement
 
 ## Examples
 
-- Good: `neuron-state-sqlite` implements `search()` via FTS5, stores metadata from `write_hinted()`, returns empty vec when FTS5 query matches nothing.
-- Good: `neuron-state-memory` implements `search()` as empty vec (no search capability), `write_hinted()` routes transient entries to separate table.
+- Good: `skg-state-sqlite` implements `search()` via FTS5, stores metadata from `write_hinted()`, returns empty vec when FTS5 query matches nothing.
+- Good: `skg-state-memory` implements `search()` as empty vec (no search capability), `write_hinted()` routes transient entries to separate table.
 - Good: `SweepOperator` takes `Box<dyn ResearchProvider>` — never imports `SweepProvider` directly.
 - Bad: A state store that throws `StateError::NotSupported` when `search()` is called (should return empty vec).
 - Bad: An operator that `use reqwest::Client` to call an API directly (should go through injected provider trait).

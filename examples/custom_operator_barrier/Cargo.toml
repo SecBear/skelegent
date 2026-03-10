@@ -2,7 +2,7 @@
 name = "custom-operator-barrier"
 version = "0.4.0"
 edition = "2024"
-authors = ["Neuron Contributors"]
+authors = ["Skelegent Contributors"]
 publish = false
 
 [lib]
@@ -13,7 +13,7 @@ async-trait = "0.1"
 serde_json = "1"
 thiserror = "2"
 layer0 = { path = "../../layer0", version = "0.4.0" }
-neuron-tool = { path = "../../turn/neuron-tool", version = "0.4.0" }
+skg-tool = { path = "../../turn/skg-tool", version = "0.4.0" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

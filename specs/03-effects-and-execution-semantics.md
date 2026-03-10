@@ -4,7 +4,7 @@
 
 Effects are the boundary between "reasoning" and "side effects." Operators declare effects; outer layers decide how and when effects execute.
 
-This is the key mechanism that makes Neuron composable.
+This is the key mechanism that makes Skelegent composable.
 
 ## Effect Vocabulary
 
@@ -159,7 +159,7 @@ named variant.
 
 ## Required Semantics (Core)
 
-Neuron is "core complete" only when there is a clear, test-proven definition of how effects are handled.
+Skelegent is "core complete" only when there is a clear, test-proven definition of how effects are handled.
 
 At minimum:
 
@@ -177,7 +177,7 @@ Effects should be executed by orchestration/runtime glue, not by the operator it
 
 ### Own-Scope State Access
 
-Operators that need to read/write their own state partition can do so via `FlushToStore` and `InjectFromStore` context ops in `neuron-context-engine`, or by receiving a `StateStore` reference at construction time. Own-scope reads are direct calls to `StateStore::read()` / `StateStore::search()` — they do not go through the effects pipeline. Cross-scope writes remain as `Effect::WriteMemory` and are handled by the executing layer.
+Operators that need to read/write their own state partition can do so via `FlushToStore` and `InjectFromStore` context ops in `skg-context-engine`, or by receiving a `StateStore` reference at construction time. Own-scope reads are direct calls to `StateStore::read()` / `StateStore::search()` — they do not go through the effects pipeline. Cross-scope writes remain as `Effect::WriteMemory` and are handled by the executing layer.
 
 ## Executor Guidance: Threading Advisory Fields
 
@@ -208,12 +208,12 @@ for backends that do not support hints.
 
 Two executors in this workspace demonstrate the pattern:
 
-- **`LocalEffectExecutor`** (`neuron-effects-local`) — standalone executor implementing
+- **`LocalEffectExecutor`** (`skg-effects-local`) — standalone executor implementing
   the `EffectExecutor` trait. Constructs `StoreOptions` from all five advisory fields,
   runs the `StoreMiddleware` chain (which may halt or modify the value), then
   calls `write_hinted()`.
 
-- **`LocalEffectInterpreter`** (`neuron-orch-kit`) — per-effect interpreter used by
+- **`LocalEffectInterpreter`** (`skg-orch-kit`) — per-effect interpreter used by
   `OrchestratedRunner`. Identical advisory-field threading as `LocalEffectExecutor`.
   Additionally records a `MemoryWritten` event to the `ExecutionTrace`.
 

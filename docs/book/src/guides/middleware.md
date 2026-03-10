@@ -1,11 +1,11 @@
 # Middleware & Interception
 
-neuron uses two complementary interception mechanisms:
+skelegent uses two complementary interception mechanisms:
 
 - **Per-boundary middleware** (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`) — wraps protocol-level operations using the continuation pattern. Defined in `layer0::middleware`.
-- **Operator-local interception** (Rule system) — typed per-trigger rules inside the context engine. Rules fire via Trigger enum: Before (pre-inference, pre-tool), After (post-inference, post-tool), or When (exit checks). Defined in `neuron-context-engine::rules`.
+- **Operator-local interception** (Rule system) — typed per-trigger rules inside the context engine. Rules fire via Trigger enum: Before (pre-inference, pre-tool), After (post-inference, post-tool), or When (exit checks). Defined in `skg-context-engine::rules`.
 
-Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware`) lives in the `neuron-hook-security` crate.
+Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware`) lives in the `skg-hook-security` crate.
 
 ## Per-boundary middleware
 
@@ -177,8 +177,8 @@ pub trait Rule: Send + Sync {
 ### Attaching a rule
 
 ```rust,no_run
-use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
-use neuron_context_engine::rule::Rule;
+use skg_context_engine::{Context, react_loop, ReactLoopConfig};
+use skg_context_engine::rule::Rule;
 
 // Rules are attached to Context, then passed to react_loop
 let mut ctx = Context::new();
@@ -192,7 +192,7 @@ let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config).await?;
 
 ```rust,no_run
 use async_trait::async_trait;
-use neuron_context_engine::rules::{Rule, RuleAction, LoopState};
+use skg_context_engine::rules::{Rule, RuleAction, LoopState};
 use rust_decimal_macros::dec;
 
 struct BudgetRule;
@@ -215,7 +215,7 @@ impl Rule for BudgetRule {
 
 ```rust,no_run
 use async_trait::async_trait;
-use neuron_context_engine::rules::{Rule, RuleAction, LoopState};
+use skg_context_engine::rules::{Rule, RuleAction, LoopState};
 use serde_json::Value;
 
 struct StripSecretRule;
@@ -244,7 +244,7 @@ impl Rule for StripSecretRule {
 
 ## Security middleware
 
-The `neuron-hook-security` crate provides two production-ready middleware implementations:
+The `skg-hook-security` crate provides two production-ready middleware implementations:
 
 - **`RedactionMiddleware`** — redacts sensitive data from dispatch output (implements `DispatchMiddleware`).
 - **`ExfilGuardMiddleware`** — blocks exfiltration attempts in dispatch input (implements `DispatchMiddleware`).

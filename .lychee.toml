@@ -7,14 +7,14 @@ exclude = [
   "https://api\\.anthropic\\.com",
   "https://api\\.openai\\.com",
   # docs.rs links may 404/429 until crate is published and indexed
-  "https://docs\\.rs/neuron",
+  "https://docs\\.rs/skelegent",
   # External sites that are intermittently unreachable from CI
   "https://www\\.conventionalcommits\\.org",
   # Pre-publish: generic docs.rs & crates.io pages, and book site
   "https://docs\\.rs/.*",
   "https://crates\\.io/crates/.*",
-  "https://secbear\\.github\\.io/neuron",
-  "https://secbear\\.github\\.io/neuron",
+  "https://secbear\\.github\\.io/skelegent",
+  "https://secbear\\.github\\.io/skelegent",
   "https://platform\\.openai\\.com/.*",
 ]
 

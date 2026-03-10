@@ -14,7 +14,7 @@ are tracked here as candidates for future work.
 ## A2: Turn-level middleware boundaries
 
 **Source**: spec 04, spec 09 (described PreInference, PostInference, ExitCheck, SubDispatchUpdate, PreSteeringInject, PostSteeringSkip, PreMemoryWrite as named boundaries)
-**Current reality**: Three middleware stacks exist at protocol boundaries (`DispatchMiddleware`, `ExecMiddleware`, `StoreMiddleware`). Turn-internal boundaries are handled by the Rule system in `neuron-context-engine` (before/after triggers on specific ops).
+**Current reality**: Three middleware stacks exist at protocol boundaries (`DispatchMiddleware`, `ExecMiddleware`, `StoreMiddleware`). Turn-internal boundaries are handled by the Rule system in `skg-context-engine` (before/after triggers on specific ops).
 **Question**: Are named turn-level boundaries needed as first-class traits, or does the Rule system cover the use cases?
 
 ## A3: Four-zone TieredStrategy compaction
@@ -44,19 +44,19 @@ are tracked here as candidates for future work.
 ## A7: Vector search in state stores
 
 **Source**: extras state architecture
-**Current reality**: `StateStore::search()` does text search only. `neuron-state-sqlite` in extras could support `sqlite-vec` for vector similarity.
+**Current reality**: `StateStore::search()` does text search only. `skg-state-sqlite` in extras could support `sqlite-vec` for vector similarity.
 **Question**: Should this be a separate trait (`VectorStore`), an extension to `StateStore`, or a feature flag on specific backends?
 
 ## A8: MCP client integration
 
 **Source**: architecture roadmap
-**Current reality**: `neuron-mcp` exists as an MCP server (exposing neuron operators as MCP tools). No MCP client (discovering/calling external MCP tools).
-**Question**: New crate? Extension to `neuron-tool`? How does tool discovery compose with `ToolFilter`?
+**Current reality**: `skg-mcp` exists as an MCP server (exposing skelegent operators as MCP tools). No MCP client (discovering/calling external MCP tools).
+**Question**: New crate? Extension to `skg-tool`? How does tool discovery compose with `ToolFilter`?
 
 ## A9: Durable orchestrator
 
 **Source**: spec 03 mentions durable orchestration serializing effects
-**Current reality**: `neuron-orch-local` is in-process only. `neuron-orch-kit` provides composition but no persistence.
+**Current reality**: `skg-orch-local` is in-process only. `skg-orch-kit` provides composition but no persistence.
 **Question**: Checkpoint/replay vs event-sourcing vs Temporal-style? What's the minimum viable durability?
 
 ## A10: HTTP serving harness

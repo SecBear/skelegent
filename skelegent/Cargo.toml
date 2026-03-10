@@ -1,0 +1,72 @@
+[package]
+name = "skelegent"
+version = "0.4.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Composable async agentic AI framework for Rust"
+readme = "README.md"
+categories = ["asynchronous"]
+keywords = ["skelegent", "ai", "agent", "async", "framework"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+layer0 = { path = "../layer0", optional = true, version = "0.4.0" }
+skg-context = { path = "../turn/skg-context", optional = true, version = "0.4.0" }
+skg-mcp = { path = "../turn/skg-mcp", optional = true, version = "0.4.0" }
+skg-context-engine = { path = "../op/skg-context-engine", optional = true, version = "0.4.0" }
+skg-op-single-shot = { path = "../op/skg-op-single-shot", optional = true, version = "0.4.0" }
+skg-orch-kit = { path = "../orch/skg-orch-kit", optional = true, version = "0.4.0" }
+skg-orch-local = { path = "../orch/skg-orch-local", optional = true, version = "0.4.0" }
+skg-env-local = { path = "../env/skg-env-local", optional = true, version = "0.4.0" }
+skg-provider-anthropic = { path = "../provider/skg-provider-anthropic", optional = true, version = "0.4.0" }
+skg-provider-ollama = { path = "../provider/skg-provider-ollama", optional = true, version = "0.4.0" }
+skg-provider-openai = { path = "../provider/skg-provider-openai", optional = true, version = "0.4.0" }
+skg-state-fs = { path = "../state/skg-state-fs", optional = true, version = "0.4.0" }
+skg-state-memory = { path = "../state/skg-state-memory", optional = true, version = "0.4.0" }
+skg-tool = { path = "../turn/skg-tool", optional = true, version = "0.4.0" }
+skg-turn = { path = "../turn/skg-turn", optional = true, version = "0.4.0" }
+
+[features]
+default = ["core"]
+
+# Protocol + core wiring
+core = [
+  "dep:layer0",
+  "dep:skg-context",
+  "dep:skg-tool",
+  "dep:skg-turn",
+]
+
+# Tooling / integration
+mcp = ["core", "dep:skg-mcp"]
+
+# Operators
+context-engine = ["core", "dep:skg-context-engine"]
+op-single-shot = ["core", "dep:skg-op-single-shot"]
+
+# Orchestration implementations
+orch-kit = ["core", "dep:skg-orch-kit"]
+orch-local = ["orch-kit", "dep:skg-orch-local"]
+
+# Environment implementations
+env-local = ["core", "dep:skg-env-local"]
+
+# State backends
+state-memory = ["core", "dep:skg-state-memory"]
+state-fs = ["core", "dep:skg-state-fs"]
+
+# Providers
+provider-openai = ["core", "dep:skg-provider-openai"]
+provider-anthropic = ["core", "dep:skg-provider-anthropic"]
+provider-ollama = ["core", "dep:skg-provider-ollama"]
+providers-all = ["provider-openai", "provider-anthropic", "provider-ollama"]
+
+# High-level agent API
+agent = ["context-engine", "state-memory"]
+
+# Proc-macro support for deriving ToolDyn
+macros = ["skg-tool/macros"]

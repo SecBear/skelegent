@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Neuron should be provably composable.
+Skelegent should be provably composable.
 
 The tests and examples are the backpressure that makes this architecture real.
 
 ## Required Example Suite (Core)
 
-Neuron must have a small set of “proof of composition” examples that demonstrate the primitives working together:
+Skelegent must have a small set of “proof of composition” examples that demonstrate the primitives working together:
 
 - scheduled + state + signal (daily digest)
 - multi-agent escalation + policy controls (triage)
@@ -29,9 +29,9 @@ Examples:
 Workspace tests:
 - `tests/poc.rs` — mock-based composability: provider swap, state swap, operator swap, multi-agent orchestration; runs in CI
 - `tests/cross_provider.rs` — provider parity against Anthropic, OpenAI, Ollama; `#[ignore]`, opt-in with API keys
-- `tests/umbrella_neuron.rs` — prelude compilation smoke test
+- `tests/umbrella_skelegent.rs` — prelude compilation smoke test
 
-Wiring kit: `neuron-orch-kit` exists at `orch/neuron-orch-kit/`.
+Wiring kit: `skg-orch-kit` exists at `orch/skg-orch-kit/`.
 
 Future examples (not yet implemented):
 

@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest a new feature for neuron
+about: Suggest a new feature for skelegent
 labels: enhancement
 ---
 
@@ -22,4 +22,4 @@ What other approaches did you consider?
 
 ## Which Crate?
 
-Where should this live? (e.g., layer0, neuron-tool, neuron-orch-local, new crate)
+Where should this live? (e.g., layer0, skg-tool, skg-orch-local, new crate)

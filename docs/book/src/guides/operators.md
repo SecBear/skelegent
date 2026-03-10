@@ -1,6 +1,6 @@
 # Operators
 
-Operators are the core execution unit in neuron. An operator implements `layer0::Operator` and encapsulates everything needed to process one agent cycle: context assembly, model calls, tool execution, and output construction.
+Operators are the core execution unit in skelegent. An operator implements `layer0::Operator` and encapsulates everything needed to process one agent cycle: context assembly, model calls, tool execution, and output construction.
 
 ## The Operator trait
 
@@ -14,11 +14,11 @@ pub trait Operator: Send + Sync {
 }
 ```
 
-neuron ships a context engine (`neuron-context-engine`) — a set of composable primitives around `react_loop` — and `SingleShotOperator` (one model call, no tools). External consumers wrap `react_loop` in their own `impl Operator` struct for the object-safe boundary.
+skelegent ships a context engine (`skg-context-engine`) — a set of composable primitives around `react_loop` — and `SingleShotOperator` (one model call, no tools). External consumers wrap `react_loop` in their own `impl Operator` struct for the object-safe boundary.
 
 ## Context Engine
 
-**Crate:** `neuron-context-engine`
+**Crate:** `skg-context-engine`
 
 The context engine is **not** a monolithic struct. It is a set of composable primitives centered on `react_loop()`, which orchestrates the assembly → inference → reaction loop:
 
@@ -36,9 +36,9 @@ To use the context engine as an `Operator`, create a wrapper struct that holds a
 use async_trait::async_trait;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, OperatorError};
 use layer0::context::{Message, Role};
-use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
-use neuron_turn::provider::Provider;
-use neuron_tool::{ToolRegistry, ToolCallContext};
+use skg_context_engine::{Context, react_loop, ReactLoopConfig};
+use skg_turn::provider::Provider;
+use skg_tool::{ToolRegistry, ToolCallContext};
 
 struct MyOperator<P: Provider> {
     provider: P,
@@ -137,7 +137,7 @@ The context engine supports effect-producing tools. If a tool is registered in t
 
 ## SingleShotOperator
 
-**Crate:** `neuron-op-single-shot`
+**Crate:** `skg-op-single-shot`
 
 The single-shot operator makes exactly one model call with no tool use. It is useful for:
 
@@ -147,8 +147,8 @@ The single-shot operator makes exactly one model call with no tool use. It is us
 - Any task where tool use is not needed
 
 ```rust,no_run
-use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
-use neuron_provider_anthropic::AnthropicProvider;
+use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
+use skg_provider_anthropic::AnthropicProvider;
 
 let config = SingleShotConfig {
     system_prompt: "Classify the following text into one of: positive, negative, neutral.".into(),
@@ -213,8 +213,8 @@ That guide covers:
 The brief example skeleton below shows the shape of a custom operator that wraps `react_loop` with additional rule-based behavior:
 
 ```rust,no_run
-use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
-use neuron_tool::ToolRegistry;
+use skg_context_engine::{Context, react_loop, ReactLoopConfig};
+use skg_tool::ToolRegistry;
 
 // Build your operator struct wrapping Provider + ToolRegistry + ReactLoopConfig
 // (see the Construction example above), then add Rules to the Context

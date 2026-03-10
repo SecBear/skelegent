@@ -47,7 +47,7 @@ exposing the value to the operator.
 
 ## Current Implementation Status
 
-- `neuron-env-local` exists.
+- `skg-env-local` exists.
 
 Stubs are acceptable for docker/k8s implementations right now.
 

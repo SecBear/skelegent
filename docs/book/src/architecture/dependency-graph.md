@@ -1,40 +1,40 @@
 # Dependency Graph
 
-This page shows how neuron's crates depend on each other. The fundamental rule is that dependencies flow downward: higher layers depend on lower layers, never the reverse.
+This page shows how skelegent's crates depend on each other. The fundamental rule is that dependencies flow downward: higher layers depend on lower layers, never the reverse.
 
 > **Note:** The ASCII diagram below reflects the core dependency relationships but is
-> incomplete — `neuron-effects-core`, `neuron-effects-local`, `neuron-turn-kit`,
-> `neuron-auth`, and `neuron-crypto` are not shown. See the crate list in
+> incomplete — `skg-effects-core`, `skg-effects-local`, `skg-turn-kit`,
+> `skg-auth`, and `skg-crypto` are not shown. See the crate list in
 > [layers.md](layers.md) for the complete and authoritative crate inventory.
 
 ## ASCII dependency graph
 
 ```
-                        neuron (umbrella)
+                        skelegent (umbrella)
                  feature-gated re-exports of all layers
                               │
          ┌────────────────────┼────────────────────────┐
          │                    │                        │
          ▼                    ▼                        ▼
-  neuron-context-engine  neuron-op-single-shot     neuron-orch-local
+  skg-context-engine  skg-op-single-shot     skg-orch-local
   (Layer 1)          (Layer 1)                 (Layer 2)
     │  │                 │                       │  │
-    │  │                 │                       │  └──► neuron-orch-kit (L2)
+    │  │                 │                       │  └──► skg-orch-kit (L2)
     │  │                 │                       │         │
     │  └─────────────────┼───────────────────────┘        │
     │                    │                                │
     │                    ▼                                │
-    │                 neuron-turn ◄───────────────────────┘
+    │                 skg-turn ◄───────────────────────┘
     │                 (Layer 1)
     │                    ▲  ▲  ▲
     │        ┌───────────┘  │  └───────────┐
     │        │              │              │
-    │  neuron-provider-  neuron-provider-  neuron-provider-
+    │  skg-provider-  skg-provider-  skg-provider-
     │  anthropic         openai            ollama
     │  (Layer 1)         (Layer 1)         (Layer 1)
     │
     ▼
-  neuron-tool              neuron-mcp
+  skg-tool              skg-mcp
   (Layer 1)                (Layer 1)
     │                        │
     │                        │
@@ -47,10 +47,10 @@ This page shows how neuron's crates depend on each other. The fundamental rule i
              │
     ┌────────┼──────────┬──────────────┐
     │        │          │              │
-neuron-   neuron-    neuron-       neuron-
+skg-   skg-    skg-       skg-
 state-    state-     env-local     secret-*
-memory    fs         (Layer 4)     neuron-auth-*
-(Layer 3) (Layer 3)                neuron-crypto-*
+memory    fs         (Layer 4)     skg-auth-*
+(Layer 3) (Layer 3)                skg-crypto-*
                                    (Layer 4)
 ```
 
@@ -71,32 +71,32 @@ Every other crate in the workspace depends on `layer0`, directly or transitively
 
 The operator ecosystem has several internal dependencies:
 
-- **`neuron-turn`** provides the `Provider` trait and shared types. All three provider crates depend on it.
-- **`neuron-tool`** provides `ToolDyn` and `ToolRegistry`. It depends only on `layer0`.
-- **`neuron-mcp`** depends on `neuron-tool` (it creates tools from MCP servers).
-- **`neuron-context-engine`** depends on `neuron-turn` (for `Provider`), `neuron-tool` (for `ToolRegistry`), and `layer0` (for middleware traits).
-- **`neuron-op-single-shot`** depends on `neuron-turn` and `layer0`.
+- **`skg-turn`** provides the `Provider` trait and shared types. All three provider crates depend on it.
+- **`skg-tool`** provides `ToolDyn` and `ToolRegistry`. It depends only on `layer0`.
+- **`skg-mcp`** depends on `skg-tool` (it creates tools from MCP servers).
+- **`skg-context-engine`** depends on `skg-turn` (for `Provider`), `skg-tool` (for `ToolRegistry`), and `layer0` (for middleware traits).
+- **`skg-op-single-shot`** depends on `skg-turn` and `layer0`.
 
 ### Layer 2: Orchestration
 
-- **`neuron-orch-local`** depends on `layer0` and `neuron-orch-kit`. It holds `Arc<dyn Operator>` references.
-- **`neuron-orch-kit`** provides shared utilities for orchestrator implementations.
+- **`skg-orch-local`** depends on `layer0` and `skg-orch-kit`. It holds `Arc<dyn Operator>` references.
+- **`skg-orch-kit`** provides shared utilities for orchestrator implementations.
 
 ### Layer 3: State
 
-- **`neuron-state-memory`** and **`neuron-state-fs`** depend only on `layer0` (and `tokio` for async I/O). They are completely independent of each other and of all other layers.
+- **`skg-state-memory`** and **`skg-state-fs`** depend only on `layer0` (and `tokio` for async I/O). They are completely independent of each other and of all other layers.
 
 ### Layer 4: Environment and credentials
 
-- **`neuron-env-local`** depends on `layer0`. It holds an `Arc<dyn Operator>`.
-- The secret backends (`neuron-secret-*`), auth backends (`neuron-auth-*`), and crypto backends (`neuron-crypto-*`) depend on `neuron-secret`/`neuron-auth`/`neuron-crypto` respectively, and transitively on `layer0`.
+- **`skg-env-local`** depends on `layer0`. It holds an `Arc<dyn Operator>`.
+- The secret backends (`skg-secret-*`), auth backends (`skg-auth-*`), and crypto backends (`skg-crypto-*`) depend on `skg-secret`/`skg-auth`/`skg-crypto` respectively, and transitively on `layer0`.
 
 ### Layer 5: Cross-cutting
 
-- **`neuron-hook-security`** depends on `layer0` (for middleware traits). It provides `RedactionMiddleware` and `ExfilGuardMiddleware`.
+- **`skg-hook-security`** depends on `layer0` (for middleware traits). It provides `RedactionMiddleware` and `ExfilGuardMiddleware`.
 ### The umbrella
 
-- **`neuron`** depends on everything, all behind `optional = true` with feature flags. It re-exports but adds no logic.
+- **`skelegent`** depends on everything, all behind `optional = true` with feature flags. It re-exports but adds no logic.
 
 ## External dependencies by layer
 
@@ -116,8 +116,8 @@ the ASCII art above:
 
 | Crate | Layer | Depends on |
 |---|---|---|
-| `neuron-turn-kit` | 1 | `layer0`, `neuron-turn` |
-| `neuron-effects-core` | 2 | `layer0` |
-| `neuron-effects-local` | 2 | `layer0`, `neuron-effects-core` |
-| `neuron-auth` | 4 | `layer0` |
-| `neuron-crypto` | 4 | `layer0` |
+| `skg-turn-kit` | 1 | `layer0`, `skg-turn` |
+| `skg-effects-core` | 2 | `layer0` |
+| `skg-effects-local` | 2 | `layer0`, `skg-effects-core` |
+| `skg-auth` | 4 | `layer0` |
+| `skg-crypto` | 4 | `layer0` |

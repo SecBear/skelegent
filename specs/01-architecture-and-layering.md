@@ -2,7 +2,7 @@
 
 ## Canonical Layers
 
-Neuron uses six conceptual layers. These are governance and dependency boundaries, not a claim about physical deployment.
+Skelegent uses six conceptual layers. These are governance and dependency boundaries, not a claim about physical deployment.
 
 - Layer 0: Protocol contract (`layer0`)
 - Layer 1: Turn implementations (operator runtimes + providers + tools + context)
@@ -37,5 +37,5 @@ Composition/glue is an opinionated layer above the protocol contract.
 
 - The *protocol* should not encode product-level routing policy.
 - Composition factories should live with orchestrator implementations (Layer 2) because they define wiring/topology and are inherently orchestration concerns.
-- A separate wrapper product can exist (outside this workspace) to add YAML workflow DSLs, Slack delivery, etc. That wrapper depends on Neuron; it does not belong inside `layer0`.
+- A separate wrapper product can exist (outside this workspace) to add YAML workflow DSLs, Slack delivery, etc. That wrapper depends on Skelegent; it does not belong inside `layer0`.
 

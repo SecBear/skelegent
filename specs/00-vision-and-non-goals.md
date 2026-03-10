@@ -2,7 +2,7 @@
 
 ## Vision
 
-Neuron is a Rust workspace for building agentic systems from composable primitives.
+Skelegent is a Rust workspace for building agentic systems from composable primitives.
 
 The redesign is centered on a protocol contract (`layer0`) that defines stable boundaries between concerns that *must* be separable if we want to build many different agentic systems without rewriting everything:
 
@@ -12,7 +12,7 @@ The redesign is centered on a protocol contract (`layer0`) that defines stable b
 - environment (isolation + credentials + resource/network policy)
 - cross-cutting governance (hooks + lifecycle coordination vocabulary)
 
-Neuron is not “one agent product.” It is the foundation that many agentic products can be built on.
+Skelegent is not “one agent product.” It is the foundation that many agentic products can be built on.
 
 ## Success Criteria
 
@@ -28,5 +28,5 @@ The redesign is “core complete” when:
 - A fully distributed production orchestrator implementation (Temporal/Restate/etc.).
 - Full isolation environments (Docker/K8s) beyond local passthrough.
 - Completing every secret/auth/crypto backend implementation (stubs are acceptable).
-- A “workflow DSL.” Neuron favors protocol composition and factories.
+- A “workflow DSL.” Skelegent favors protocol composition and factories.
 

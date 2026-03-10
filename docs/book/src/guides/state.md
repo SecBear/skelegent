@@ -1,6 +1,6 @@
 # State
 
-The state system provides scoped key-value persistence through the `StateStore` and `StateReader` traits. neuron ships two implementations: `MemoryStore` (in-memory, ephemeral) and `FsStore` (filesystem-backed, durable).
+The state system provides scoped key-value persistence through the `StateStore` and `StateReader` traits. skelegent ships two implementations: `MemoryStore` (in-memory, ephemeral) and `FsStore` (filesystem-backed, durable).
 
 ## StateStore and StateReader
 
@@ -38,12 +38,12 @@ pub enum Scope {
 
 Scopes provide isolation: an agent's state does not collide with another agent's state, and session-scoped data is separate from workflow-scoped data.
 
-## MemoryStore (`neuron-state-memory`)
+## MemoryStore (`skg-state-memory`)
 
 In-memory storage using a `HashMap`. Data is lost when the process exits.
 
 ```rust
-use neuron_state_memory::MemoryStore;
+use skg_state_memory::MemoryStore;
 
 let store = MemoryStore::new();
 ```
@@ -61,7 +61,7 @@ The memory store supports concurrent access through internal locking.
 use layer0::state::StateStore;
 use layer0::effect::Scope;
 use layer0::id::SessionId;
-use neuron_state_memory::MemoryStore;
+use skg_state_memory::MemoryStore;
 use serde_json::json;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -89,20 +89,20 @@ assert_eq!(value, None);
 # }
 ```
 
-## FsStore (`neuron-state-fs`)
+## FsStore (`skg-state-fs`)
 
 Filesystem-backed storage. Each scope/key pair maps to a file on disk. Data persists across process restarts.
 
 ```rust,no_run
-use neuron_state_fs::FsStore;
+use skg_state_fs::FsStore;
 
-let store = FsStore::new("/tmp/neuron-state");
+let store = FsStore::new("/tmp/skg-state");
 ```
 
 The directory structure mirrors the scope hierarchy:
 
 ```
-/tmp/neuron-state/
+/tmp/skg-state/
   session/
     sess-001/
       user_preference.json
@@ -187,8 +187,8 @@ information at different points in time.
 ### Crate boundaries follow technology, not capability
 
 Name crates after what you `cargo add` — the library or database they wrap — not after the
-abstract capability they provide. `neuron-state-sqlite` wraps SQLite. `neuron-state-cozo`
-wraps CozoDB. Names like `neuron-state-search` or `neuron-state-vector` are wrong because
+abstract capability they provide. `skg-state-sqlite` wraps SQLite. `skg-state-cozo`
+wraps CozoDB. Names like `skg-state-search` or `skg-state-vector` are wrong because
 they describe capability, not technology.
 
 A single technology can provide multiple capabilities: SQLite provides KV storage, full-text
@@ -207,7 +207,7 @@ search — not an error.
 ### Compaction strategies are ContextOps, not crates
 
 Compaction strategies implement `ContextOp`, live in
-`neuron-context-engine/src/rules/compaction.rs`, and activate via `Rule` + `Trigger` — the
+`skg-context-engine/src/rules/compaction.rs`, and activate via `Rule` + `Trigger` — the
 same mechanism as `BudgetGuard` and `TelemetryRecorder`. They are not a separate crate
 because they share the same dependency footprint, the same type universe (`Context`,
 `Message`, `CompactionPolicy`), and the same activation mechanism as the rest of the context

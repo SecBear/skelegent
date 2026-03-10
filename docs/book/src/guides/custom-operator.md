@@ -7,8 +7,8 @@
 A Rule pairs a **trigger** with a **`ContextOp`** (any async operation that takes `&mut Context`). Rules fire automatically during `Context::run()` — the same entry point that every pipeline operation goes through.
 
 ```rust,ignore
-use neuron_context_engine::rule::{Rule, Trigger};
-use neuron_context_engine::context::Context;
+use skg_context_engine::rule::{Rule, Trigger};
+use skg_context_engine::context::Context;
 use std::any::TypeId;
 
 // Three trigger types:
@@ -31,8 +31,8 @@ Rules fire in **priority order** (highest first). Rules cannot trigger other rul
 ### Attaching rules to a Context
 
 ```rust,ignore
-use neuron_context_engine::context::Context;
-use neuron_context_engine::rule::Rule;
+use skg_context_engine::context::Context;
+use skg_context_engine::rule::Rule;
 
 // At construction:
 let ctx = Context::with_rules(vec![rule_a, rule_b]);
@@ -46,12 +46,12 @@ The `Context` (with its rules) is then passed into `react_loop`, which fires rul
 
 ## Budget guards
 
-The `BudgetGuard` rule from `neuron_context_engine::rules::budget` halts execution when any configured limit is exceeded. It implements `ContextOp` and is designed to fire as a `BeforeAny` rule:
+The `BudgetGuard` rule from `skg_context_engine::rules::budget` halts execution when any configured limit is exceeded. It implements `ContextOp` and is designed to fire as a `BeforeAny` rule:
 
 ```rust,ignore
-use neuron_context_engine::rule::{Rule, Trigger};
-use neuron_context_engine::rules::budget::{BudgetGuard, BudgetGuardConfig};
-use neuron_context_engine::context::Context;
+use skg_context_engine::rule::{Rule, Trigger};
+use skg_context_engine::rules::budget::{BudgetGuard, BudgetGuardConfig};
+use skg_context_engine::context::Context;
 use rust_decimal::Decimal;
 use std::time::Duration;
 
@@ -73,11 +73,11 @@ When any limit is exceeded, the guard returns `EngineError::Halted` which stops 
 To inject a system instruction after every model response (for example, a reminder or guardrail), write a `ContextOp` and attach it as an `After` rule on `AppendResponse` — the op that appends the model's response to the conversation:
 
 ```rust,ignore
-use neuron_context_engine::rule::Rule;
-use neuron_context_engine::ops::AppendResponse;
-use neuron_context_engine::context::Context;
-use neuron_context_engine::op::ContextOp;
-use neuron_context_engine::error::EngineError;
+use skg_context_engine::rule::Rule;
+use skg_context_engine::ops::AppendResponse;
+use skg_context_engine::context::Context;
+use skg_context_engine::op::ContextOp;
+use skg_context_engine::error::EngineError;
 use async_trait::async_trait;
 
 struct InjectReminder {
@@ -108,11 +108,11 @@ This fires after every model response is appended, before the next inference or 
 Observation is just another rule. A `ContextOp` that logs metrics and returns `Ok(())` won't alter the pipeline:
 
 ```rust,ignore
-use neuron_context_engine::rule::Rule;
-use neuron_context_engine::ops::AppendResponse;
-use neuron_context_engine::context::Context;
-use neuron_context_engine::op::ContextOp;
-use neuron_context_engine::error::EngineError;
+use skg_context_engine::rule::Rule;
+use skg_context_engine::ops::AppendResponse;
+use skg_context_engine::context::Context;
+use skg_context_engine::op::ContextOp;
+use skg_context_engine::error::EngineError;
 use async_trait::async_trait;
 
 struct TurnTelemetry;
@@ -140,7 +140,7 @@ let rule = Rule::after::<AppendResponse>("telemetry", 10, TurnTelemetry);
 `When` rules evaluate a predicate against the `Context` at the start of every `run()` call. Useful for dynamic behaviour that depends on accumulated state:
 
 ```rust,ignore
-use neuron_context_engine::rule::Rule;
+use skg_context_engine::rule::Rule;
 
 let rule = Rule::when(
     "warn_high_cost",

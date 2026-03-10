@@ -1,6 +1,6 @@
 # Testing
 
-neuron is designed for testability. Every protocol trait is object-safe, so you can create mock implementations for any component. Layer 0 provides test utilities, and the workspace includes patterns for unit, integration, and object-safety testing.
+skelegent is designed for testability. Every protocol trait is object-safe, so you can create mock implementations for any component. Layer 0 provides test utilities, and the workspace includes patterns for unit, integration, and object-safety testing.
 
 ## test-utils feature in layer0
 
@@ -53,7 +53,7 @@ The same pattern is used for non-Layer-0 traits:
 ```rust
 #[test]
 fn tool_dyn_is_object_safe() {
-    _assert_send_sync::<std::sync::Arc<dyn neuron_tool::ToolDyn>>();
+    _assert_send_sync::<std::sync::Arc<dyn skg_tool::ToolDyn>>();
 }
 ```
 
@@ -79,8 +79,8 @@ fn operator_input_roundtrips() {
 To test operators without making real API calls, create a mock `Provider`:
 
 ```rust
-use neuron_turn::provider::{Provider, ProviderError};
-use neuron_turn::infer::{InferRequest, InferResponse};
+use skg_turn::provider::{Provider, ProviderError};
+use skg_turn::infer::{InferRequest, InferResponse};
 use std::future::Future;
 
 struct MockProvider {
@@ -101,9 +101,9 @@ impl Provider for MockProvider {
 Then construct a `Context` and call `react_loop` with the mock provider:
 
 ```rust,no_run
-use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
-use neuron_tool::{ToolRegistry, ToolCallContext};
-use neuron_layer0::context::{Message, Role};
+use skg_context_engine::{Context, react_loop, ReactLoopConfig};
+use skg_tool::{ToolRegistry, ToolCallContext};
+use layer0::context::{Message, Role};
 
 let mut ctx = Context::new("You are a helpful assistant.");
 ctx.inject_message(Message::new(Role::User, "Hello"));
@@ -121,7 +121,7 @@ react_loop(&mut ctx, &mock_provider, &tools, &tool_ctx, &config).await.unwrap();
 Create test tools by implementing `ToolDyn`:
 
 ```rust
-use neuron_tool::{ToolDyn, ToolError};
+use skg_tool::{ToolDyn, ToolError};
 use serde_json::{json, Value};
 use std::future::Future;
 use std::pin::Pin;
@@ -177,7 +177,7 @@ cargo test
 cargo test --features test-utils -p layer0
 
 # Run tests for a specific crate
-cargo test -p neuron-context-engine
+cargo test -p skg-context-engine
 
 # Verify no clippy warnings
 cargo clippy -- -D warnings

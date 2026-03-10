@@ -1,6 +1,6 @@
 # TDD And Tests
 
-Neuron is built to be composable, and composability requires backpressure.
+Skelegent is built to be composable, and composability requires backpressure.
 
 ## Default Workflow
 

@@ -13,7 +13,7 @@ base="${2:-$(git rev-parse --abbrev-ref HEAD)}"
 root="$(git rev-parse --show-toplevel)"
 parent="$(cd "$root/.." && pwd)"
 branch="feat/${topic}"
-path="${parent}/neuron-explore-${topic}"
+path="${parent}/skg-explore-${topic}"
 
 echo "[worktree] base:   ${base}"
 echo "[worktree] branch: ${branch}"

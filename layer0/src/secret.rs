@@ -1,8 +1,8 @@
 //! Secret management data types — the stability contract for credential resolution.
 //!
 //! These are data types only. The actual resolution traits (`SecretResolver`,
-//! `AuthProvider`, `CryptoProvider`) live in separate crates (`neuron-secret`,
-//! `neuron-auth`, `neuron-crypto`). Layer 0 defines the vocabulary; higher
+//! `AuthProvider`, `CryptoProvider`) live in separate crates (`skg-secret`,
+//! `skg-auth`, `skg-crypto`). Layer 0 defines the vocabulary; higher
 //! layers define the behavior.
 
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,6 @@
 # Providers
 
-Providers are the LLM backend abstraction in neuron. Each provider implements the `Provider` trait (defined in `neuron-turn`), which sends a completion request to an LLM API and returns the response.
+Providers are the LLM backend abstraction in skelegent. Each provider implements the `Provider` trait (defined in `skg-turn`), which sends a completion request to an LLM API and returns the response.
 
 ## The Provider trait
 
@@ -17,12 +17,12 @@ This trait uses RPITIT (return-position `impl Trait` in traits) and is intention
 
 ## Available providers
 
-### Anthropic (`neuron-provider-anthropic`)
+### Anthropic (`skg-provider-anthropic`)
 
 Connects to the Anthropic Messages API for Claude models.
 
 ```rust,no_run
-use neuron_provider_anthropic::AnthropicProvider;
+use skg_provider_anthropic::AnthropicProvider;
 
 let provider = AnthropicProvider::new("sk-ant-...");
 ```
@@ -34,7 +34,7 @@ Configuration:
 - **API URL:** Override with `.with_url()` for proxies or testing.
 
 ```rust,no_run
-use neuron_provider_anthropic::AnthropicProvider;
+use skg_provider_anthropic::AnthropicProvider;
 
 let provider = AnthropicProvider::new("sk-ant-...")
     .with_url("https://proxy.example.com/v1/messages");
@@ -42,12 +42,12 @@ let provider = AnthropicProvider::new("sk-ant-...")
 
 Cost is calculated per-response based on input and output token counts using the Haiku pricing model.
 
-### OpenAI (`neuron-provider-openai`)
+### OpenAI (`skg-provider-openai`)
 
 Connects to the OpenAI Chat Completions API.
 
 ```rust,no_run
-use neuron_provider_openai::OpenAiProvider;
+use skg_provider_openai::OpenAiProvider;
 
 let provider = OpenAiProvider::new("sk-...");
 ```
@@ -56,12 +56,12 @@ Configuration:
 - **API key:** Passed to `new()`. Read it from `OPENAI_API_KEY` in production.
 - **API URL:** Override with `.with_url()` for Azure OpenAI or proxies.
 
-### Ollama (`neuron-provider-ollama`)
+### Ollama (`skg-provider-ollama`)
 
 Connects to a local Ollama instance for running open-weight models.
 
 ```rust,no_run
-use neuron_provider_ollama::OllamaProvider;
+use skg_provider_ollama::OllamaProvider;
 
 let provider = OllamaProvider::new(); // defaults to http://localhost:11434
 ```
@@ -106,9 +106,9 @@ pub struct InferResponse {
 Providers are not used directly in most application code. Instead, you pass a provider to an operator:
 
 ```rust,no_run
-use neuron_context_engine::{Context, react_loop, ReactLoopConfig};
-use neuron_provider_anthropic::AnthropicProvider;
-use neuron_tool::{ToolRegistry, ToolCallContext};
+use skg_context_engine::{Context, react_loop, ReactLoopConfig};
+use skg_provider_anthropic::AnthropicProvider;
+use skg_tool::{ToolRegistry, ToolCallContext};
 
 let provider = AnthropicProvider::new("sk-ant-...");
 let config = ReactLoopConfig {

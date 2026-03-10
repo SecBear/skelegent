@@ -1,11 +1,11 @@
-# Contributing to neuron
+# Contributing to skelegent
 
-Thank you for your interest in contributing to neuron! This document covers the
+Thank you for your interest in contributing to skelegent! This document covers the
 process for contributing and the standards we maintain.
 
 ## Project overview
 
-neuron is a Rust workspace implementing a 6-layer composable agentic AI
+skelegent is a Rust workspace implementing a 6-layer composable agentic AI
 architecture. Each layer builds on the protocol traits defined in `layer0`.
 See the root `Cargo.toml` for the full list of workspace members.
 
@@ -41,8 +41,8 @@ rustup component add clippy rustfmt
 1. Fork the repository on GitHub.
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/<your-username>/neuron.git
-   cd neuron
+   git clone https://github.com/<your-username>/skelegent.git
+   cd skelegent
    ```
 3. Create a feature branch from `main`:
    ```bash
@@ -73,12 +73,12 @@ The workspace is organized in 6 layers:
 | Layer | Purpose | Crates |
 |-------|---------|--------|
 | 0 | Protocol traits + types | `layer0` |
-| 1 | Turn implementations | `neuron-turn`, `neuron-context`, `neuron-tool`, `neuron-mcp`, `neuron-provider-*`, `neuron-op-*` |
-| 2 | Orchestration | `neuron-orch-local`, `neuron-orch-kit` |
-| 3 | State | `neuron-state-memory`, `neuron-state-fs` |
-| 4 | Environment | `neuron-env-local`, `neuron-secret-*`, `neuron-auth-*`, `neuron-crypto-*` |
-| 5 | Cross-cutting | `neuron-hook-security` |
-| - | Umbrella | `neuron` |
+| 1 | Turn implementations | `skg-turn`, `skg-context`, `skg-tool`, `skg-mcp`, `skg-provider-*`, `skg-op-*` |
+| 2 | Orchestration | `skg-orch-local`, `skg-orch-kit` |
+| 3 | State | `skg-state-memory`, `skg-state-fs` |
+| 4 | Environment | `skg-env-local`, `skg-secret-*`, `skg-auth-*`, `skg-crypto-*` |
+| 5 | Cross-cutting | `skg-hook-security` |
+| - | Umbrella | `skelegent` |
 
 ### Documentation
 
@@ -104,7 +104,7 @@ Format:
 
 Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `ci`, `perf`.
 
-Scope is typically the crate name without the `neuron-` prefix (e.g., `tool`,
+Scope is typically the crate name without the `skg-` prefix (e.g., `tool`,
 `orch-local`, `provider-anthropic`). Use `layer0` for the trait crate. Use no
 scope for workspace-wide changes.
 
@@ -140,7 +140,7 @@ checks. If `cargo doc` warnings matter for your change, also run:
 
 ## License
 
-By contributing to neuron, you agree that your contributions will be dual
+By contributing to skelegent, you agree that your contributions will be dual
 licensed under the [MIT License](./LICENSE-MIT) and the
 [Apache License 2.0](./LICENSE-APACHE), at the user's option. This is the same
 license used by the project itself.

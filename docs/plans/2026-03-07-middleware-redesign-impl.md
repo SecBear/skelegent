@@ -664,7 +664,7 @@ Replace the generic `AgentContext<M>` with the concrete `Context` type and migra
 - Modify: `neuron/layer0/src/context.rs`
 - Modify: `neuron/layer0/src/lib.rs`
 
-`AgentContext<M>` is defined but has ZERO consumers in neuron/ or extras/. Replace it in-place with `Context` that uses the concrete `Message` type from Task 1.1.
+`AgentContext<M>` is defined but has ZERO consumers in skelegent/ or extras/. Replace it in-place with `Context` that uses the concrete `Message` type from Task 1.1.
 
 **Step 1: Write the failing test**
 
@@ -756,10 +756,10 @@ git commit -m "feat(layer0): add concrete Context type replacing AgentContext<M>
 ### Task 2.2: Migrate AnnotatedMessage → Message
 
 **Files:**
-- Modify: `neuron/turn/neuron-turn/src/context.rs`
-- Modify: `neuron/turn/neuron-turn/src/lib.rs`
-- Modify: `neuron/turn/neuron-context/src/lib.rs` (SlidingWindow, TieredStrategy)
-- Modify: `neuron/turn/neuron-context/src/context_assembly.rs` (ContextAssembler)
+- Modify: `neuron/turn/skg-turn/src/context.rs`
+- Modify: `neuron/turn/skg-turn/src/lib.rs`
+- Modify: `neuron/turn/skg-context/src/lib.rs` (SlidingWindow, TieredStrategy)
+- Modify: `neuron/turn/skg-context/src/context_assembly.rs` (ContextAssembler)
 
 `AnnotatedMessage` has these fields:
 - `message: ProviderMessage` (role + content)
@@ -776,7 +776,7 @@ These map 1:1 to `Message`:
 
 **Step 1:** Update `ContextStrategy` trait to use `Vec<Message>` instead of `Vec<AnnotatedMessage>`. Keep `AnnotatedMessage` temporarily with a `From<AnnotatedMessage> for Message` conversion.
 
-**Step 2:** Update `SlidingWindow` and `TieredStrategy` in `neuron-context` to work with `Message`.
+**Step 2:** Update `SlidingWindow` and `TieredStrategy` in `skg-context` to work with `Message`.
 
 **Step 3:** Update `ContextAssembler` to produce `Vec<Message>`.
 
@@ -794,9 +794,9 @@ git commit -m "refactor(turn): migrate AnnotatedMessage to layer0::Message"
 ### Task 2.3: Migrate ContextStrategy → Context methods
 
 **Files:**
-- Modify: `neuron/turn/neuron-turn/src/context.rs`
-- Modify: `neuron/turn/neuron-context/src/lib.rs`
-- Modify: `neuron/op/neuron-op-react/src/lib.rs`
+- Modify: `neuron/turn/skg-turn/src/context.rs`
+- Modify: `neuron/turn/skg-context/src/lib.rs`
+- Modify: `neuron/op/skg-op-react/src/lib.rs`
 
 The `ContextStrategy` trait has:
 - `token_estimate(&self, messages: &[AnnotatedMessage]) -> usize`
@@ -848,7 +848,7 @@ git commit -m "refactor: replace ContextStrategy trait with Context::compact_wit
 
 **Files:**
 - Modify: `neuron/layer0/src/context.rs` — remove `AgentContext<M>`, `ContextMessage<M>`
-- Modify: `neuron/turn/neuron-turn/src/context.rs` — remove `AnnotatedMessage`, `ContextStrategy`
+- Modify: `neuron/turn/skg-turn/src/context.rs` — remove `AnnotatedMessage`, `ContextStrategy`
 - Modify: `neuron/layer0/src/lib.rs` — remove deprecated re-exports
 
 **Step 1:** Delete old types. Fix any remaining compile errors.
@@ -880,8 +880,8 @@ Convert existing Hook consumers to use the middleware stack.
 ### Task 3.1: Migrate LocalOrchestrator to DispatchStack
 
 **Files:**
-- Modify: `neuron/orch/neuron-orch-local/src/lib.rs`
-- Modify: `neuron/orch/neuron-orch-local/tests/orch.rs`
+- Modify: `neuron/orch/skg-orch-local/src/lib.rs`
+- Modify: `neuron/orch/skg-orch-local/tests/orch.rs`
 
 LocalOrch currently has an `Option<HookRegistry>` and fires `PreDispatch`/`PostDispatch` hooks. Replace with `DispatchStack`:
 
@@ -914,9 +914,9 @@ git commit -m "refactor(orch-local): replace HookRegistry with DispatchStack"
 ### Task 3.2: Migrate effect handlers to StoreMiddleware
 
 **Files:**
-- Modify: `neuron/effects/neuron-effects-local/src/lib.rs`
-- Modify: `neuron/effects/neuron-effects-local/tests/hooks.rs`
-- Modify: `neuron/orch/neuron-orch-kit/src/runner.rs`
+- Modify: `neuron/effects/skg-effects-local/src/lib.rs`
+- Modify: `neuron/effects/skg-effects-local/tests/hooks.rs`
+- Modify: `neuron/orch/skg-orch-kit/src/runner.rs`
 
 These currently fire `PreMemoryWrite` hooks before state writes. Replace with `StoreStack` wrapping the `StateStore`.
 
@@ -933,9 +933,9 @@ git commit -m "refactor(effects): replace PreMemoryWrite hooks with StoreMiddlew
 ### Task 3.3: Migrate security hooks to middleware
 
 **Files:**
-- Modify: `neuron/hooks/neuron-hook-security/src/lib.rs`
+- Modify: `neuron/hooks/skg-hook-security/src/lib.rs`
 
-`RedactionHook` (PostSubDispatch) and `ExfilGuardHook` (PreSubDispatch) are ReactOperator-internal concerns. They move to `neuron-op-react` as operator-local middleware or become `DispatchMiddleware` implementations.
+`RedactionHook` (PostSubDispatch) and `ExfilGuardHook` (PreSubDispatch) are ReactOperator-internal concerns. They move to `skg-op-react` as operator-local middleware or become `DispatchMiddleware` implementations.
 
 Decision: Since these operate on sub-dispatch input/output, they're most naturally `DispatchMiddleware`:
 
@@ -970,8 +970,8 @@ git commit -m "refactor(security): migrate RedactionHook/ExfilGuardHook to Dispa
 ### Task 3.4: Migrate ReactOperator internal hook points
 
 **Files:**
-- Modify: `neuron/op/neuron-op-react/src/lib.rs`
-- (Optional) Create: `neuron/op/neuron-op-react/src/intercept.rs`
+- Modify: `neuron/op/skg-op-react/src/lib.rs`
+- (Optional) Create: `neuron/op/skg-op-react/src/intercept.rs`
 
 ReactOperator fires hooks at: PreInference, PostInference, PreSubDispatch, PostSubDispatch, ExitCheck, SubDispatchUpdate, PreSteeringInject, PostSteeringSkip, PreCompaction, PostCompaction.
 
@@ -982,10 +982,10 @@ These are operator-local. Replace with:
 4. **Compaction hooks** → `ContextWatcher` on `Context` (already exists)
 5. **Exit check** → operator-local logic, not a hook
 
-Define a `ReactInterceptor` trait local to `neuron-op-react` for operator-specific extension points that don't belong in layer0:
+Define a `ReactInterceptor` trait local to `skg-op-react` for operator-specific extension points that don't belong in layer0:
 
 ```rust
-// In neuron-op-react, NOT layer0
+// In skg-op-react, NOT layer0
 #[async_trait]
 pub trait ReactInterceptor: Send + Sync {
     async fn pre_inference(&self, _messages: &[Message]) -> ReactAction { ReactAction::Continue }
@@ -1020,7 +1020,7 @@ Expected: All tests pass. No clippy warnings.
 **Files:**
 - Modify: `neuron/layer0/src/hook.rs` — delete everything (entire file or gut it)
 - Modify: `neuron/layer0/src/lib.rs` — remove `pub mod hook` and all Hook re-exports
-- Delete: `neuron/hooks/neuron-hooks/src/lib.rs` (HookRegistry)
+- Delete: `neuron/hooks/skg-hooks/src/lib.rs` (HookRegistry)
 - Delete: `neuron/layer0/src/test_utils/logging_hook.rs`
 
 Before deleting, verify with `cargo check --workspace` that no crate imports Hook types.
@@ -1049,26 +1049,26 @@ git commit -m "cleanup: remove ObservableEvent and EventSource (replaced by trac
 
 ---
 
-### Task 4.3: Clean up neuron-hooks crate
+### Task 4.3: Clean up skg-hooks crate
 
 **Files:**
-- Modify: `neuron/hooks/neuron-hooks/Cargo.toml` — if crate is now empty, remove it
+- Modify: `neuron/hooks/skg-hooks/Cargo.toml` — if crate is now empty, remove it
 - Modify: `neuron/Cargo.toml` workspace members — remove if crate deleted
 
-If `neuron-hook-security` was migrated to middleware in Task 3.3, it may also be removable or renamed.
+If `skg-hook-security` was migrated to middleware in Task 3.3, it may also be removable or renamed.
 
 Also update `neuron/neuron/Cargo.toml` facade crate:
 - Remove `hooks` feature gate from `default`
-- Remove `hooks = ["core", "dep:neuron-hooks"]` feature
+- Remove `hooks = ["core", "dep:skg-hooks"]` feature
 - Change `op-react` and `op-single-shot` features to no longer depend on `hooks`
-  (`neuron-op-single-shot` has zero hook usage — the dependency was a false gate)
+  (`skg-op-single-shot` has zero hook usage — the dependency was a false gate)
 - Remove `Hook`, `HookAction`, `HookContext`, `HookPoint` from the prelude re-exports
 - Add `DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`, `DispatchStack` to prelude
 
 **Commit:**
 
 ```bash
-git commit -m "cleanup: remove neuron-hooks crate (HookRegistry replaced by DispatchStack)"
+git commit -m "cleanup: remove skg-hooks crate (HookRegistry replaced by DispatchStack)"
 ```
 
 ---
@@ -1167,7 +1167,7 @@ Phase 1 adds these conversions to `layer0/src/context.rs`:
 
 ```rust
 // ProviderMessage (turn-layer) → Message (layer0)
-// This lives in neuron-turn because it knows both types.
+// This lives in skg-turn because it knows both types.
 // layer0::Message does NOT depend on ProviderMessage.
 
 impl From<ProviderMessage> for Message {
@@ -1209,8 +1209,8 @@ impl From<AnnotatedMessage> for Message {
 }
 ```
 
-Note: This `From` impl lives in `neuron-turn/src/convert.rs` (or `context.rs`),
-NOT in layer0 — because layer0 must not depend on neuron-turn. The turn crate
+Note: This `From` impl lives in `skg-turn/src/convert.rs` (or `context.rs`),
+NOT in layer0 — because layer0 must not depend on skg-turn. The turn crate
 sees both types and provides the bridge.
 
 ### Token estimation helper (shared by all compaction tasks)
@@ -1253,12 +1253,12 @@ impl Message {
 
 ### Task R.1: SlidingWindow → `sliding_window_compactor()` closure
 
-**Crate:** `neuron-context`
-**Files:** Modify `neuron/turn/neuron-context/src/lib.rs`
+**Crate:** `skg-context`
+**Files:** Modify `neuron/turn/skg-context/src/lib.rs`
 **Depends on:** Task 1.1 (Message type exists)
 **One agent. One file.**
 
-**Current code** (in `neuron-context/src/lib.rs`, lines 25–129):
+**Current code** (in `skg-context/src/lib.rs`, lines 25–129):
 
 ```rust
 // SlidingWindow implements ContextStrategy for AnnotatedMessage.
@@ -1330,8 +1330,8 @@ The new function is additive.
 
 ### Task R.2: SaliencePackingStrategy → `salience_packing_compactor()` closure
 
-**Crate:** `neuron-context`
-**Files:** Modify `neuron/turn/neuron-context/src/salience_packing.rs`
+**Crate:** `skg-context`
+**Files:** Modify `neuron/turn/skg-context/src/salience_packing.rs`
 **Depends on:** Task 1.1 (Message type exists)
 **One agent. One file.**
 
@@ -1430,8 +1430,8 @@ The `term_jaccard` tests are pure and unchanged.
 
 ### Task R.3: TieredStrategy → `tiered_compactor()` closure
 
-**Crate:** `neuron-turn` (the `tiered.rs` module)
-**Files:** Modify `neuron/turn/neuron-turn/src/tiered.rs`
+**Crate:** `skg-turn` (the `tiered.rs` module)
+**Files:** Modify `neuron/turn/skg-turn/src/tiered.rs`
 **Depends on:** Task 1.1 (Message type exists)
 **One agent. One file.**
 
@@ -1502,9 +1502,9 @@ to return `Message` instead of `ProviderMessage`.
 
 ### Task R.4: ContextAssembler → produce `Vec<Message>`
 
-**Crate:** `neuron-context`
-**Files:** Modify `neuron/turn/neuron-context/src/context_assembly.rs`
-**Depends on:** Task 1.1 (Message type exists), conversion bridge in neuron-turn
+**Crate:** `skg-context`
+**Files:** Modify `neuron/turn/skg-context/src/context_assembly.rs`
+**Depends on:** Task 1.1 (Message type exists), conversion bridge in skg-turn
 **One agent. One file.**
 
 **Current code** (context_assembly.rs, 380 lines):
@@ -1561,8 +1561,8 @@ The `text_msg()` helper is deleted — replaced by `Message::new(role, Content::
 
 ### Task R.5: RedactionHook → `RedactionMiddleware`
 
-**Crate:** `neuron-hook-security`
-**Files:** Modify `neuron/hooks/neuron-hook-security/src/lib.rs`
+**Crate:** `skg-hook-security`
+**Files:** Modify `neuron/hooks/skg-hook-security/src/lib.rs`
 **Depends on:** Task 1.2 (DispatchMiddleware trait exists)
 **One agent. One file.**
 
@@ -1628,8 +1628,8 @@ No more `HookContext` construction.
 
 ### Task R.6: ExfilGuardHook → `ExfilGuardMiddleware`
 
-**Crate:** `neuron-hook-security`
-**Files:** Modify `neuron/hooks/neuron-hook-security/src/lib.rs` (same file as R.5)
+**Crate:** `skg-hook-security`
+**Files:** Modify `neuron/hooks/skg-hook-security/src/lib.rs` (same file as R.5)
 **Depends on:** Task 1.2 (DispatchMiddleware trait exists)
 **One agent. Same file as R.5 — schedule AFTER R.5.**
 

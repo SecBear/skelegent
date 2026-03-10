@@ -8,7 +8,7 @@ homepage.workspace = true
 description = "Protocol traits for composable agentic AI systems"
 readme = "README.md"
 categories = ["asynchronous", "rust-patterns"]
-keywords = ["neuron", "ai", "agent", "async", "protocol"]
+keywords = ["skelegent", "ai", "agent", "async", "protocol"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

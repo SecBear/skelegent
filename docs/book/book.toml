@@ -1,5 +1,5 @@
 [book]
-title = "neuron — Composable Agentic AI Architecture in Rust"
+title = "skelegent — Composable Agentic AI Architecture in Rust"
 authors = ["SecBear"]
 language = "en"
 src = "src"
@@ -8,6 +8,6 @@ src = "src"
 build-dir = "../../target/book"
 
 [output.html]
-git-repository-url = "https://github.com/secbear/neuron"
-edit-url-template = "https://github.com/secbear/neuron/edit/main/docs/book/{path}"
+git-repository-url = "https://github.com/secbear/skelegent"
+edit-url-template = "https://github.com/secbear/skelegent/edit/main/docs/book/{path}"
 additional-css = []

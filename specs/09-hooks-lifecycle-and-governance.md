@@ -8,7 +8,7 @@ This is how you enforce budget, tool policy, redaction, audit, and observability
 
 ## Middleware
 
-Neuron uses per-boundary middleware traits defined in `layer0::middleware`:
+Skelegent uses per-boundary middleware traits defined in `layer0::middleware`:
 
 - `DispatchMiddleware` — intercepts operator dispatch (pre/post inference, sub-dispatch, exit checks, steering)
 - `StoreMiddleware` — intercepts state store operations (pre-memory-write)
@@ -50,7 +50,7 @@ the chain, or returns early to short-circuit (e.g., to halt or skip an operation
 
 ### Typed Interceptors
 
-`neuron-context-engine` provides the `Rule` system for typed, operator-local interception
+`skg-context-engine` provides the `Rule` system for typed, operator-local interception
 points. Rules offer a higher-level abstraction over `DispatchMiddleware` with typed access
 to ReAct-specific context (tool calls, model responses, etc.). For cross-cutting concerns
 that span operators, use the continuation-based middleware traits in `layer0::middleware`.
@@ -79,7 +79,7 @@ Steering is NOT middleware because the primitives are structurally different:
 
 ### Security Middleware
 
-`neuron-hook-security` provides two ready-made middleware implementations:
+`skg-hook-security` provides two ready-made middleware implementations:
 
 - `RedactionMiddleware` — scans content for sensitive patterns (regex or literal) and redacts matches before they reach the model or output sink.
 - `ExfilGuardMiddleware` — inspects tool results and model responses for data-loss-prevention (DLP) signals; configurable block-or-alert policy. Detects exfiltration in any tool input via generic URL+sensitive-data patterns, shell-specific patterns, and base64 blobs.
@@ -143,8 +143,8 @@ disabled when the orchestrator manages budget governance.
 - `DispatchStack`, `StoreStack`, `ExecStack` compose middleware in registration order.
 - All nine middleware boundaries — including `PreSteeringInject`, `PostSteeringSkip`, and `PreMemoryWrite` — are in layer0.
 - Middleware error logging via `tracing::warn` is implemented.
-- Security middleware exists in `neuron-hook-security`: `RedactionMiddleware` and `ExfilGuardMiddleware`.
-- The `Rule` system in `neuron-context-engine` provides typed, operator-local interception.
+- Security middleware exists in `skg-hook-security`: `RedactionMiddleware` and `ExfilGuardMiddleware`.
+- The `Rule` system in `skg-context-engine` provides typed, operator-local interception.
 
 Still required for "core complete":
 

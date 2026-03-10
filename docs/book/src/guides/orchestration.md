@@ -32,12 +32,12 @@ pub trait Orchestrator: Send + Sync {
 }
 ```
 
-## LocalOrch (`neuron-orch-local`)
+## LocalOrch (`skg-orch-local`)
 
 The local orchestrator dispatches operator invocations in-process using tokio. It maps `OperatorId` values to `Arc<dyn Operator>` references and calls `execute()` directly.
 
 ```rust,no_run
-use neuron_orch_local::LocalOrch;
+use skg_orch_local::LocalOrch;
 use layer0::operator::Operator;
 use layer0::id::OperatorId;
 use std::sync::Arc;
@@ -153,9 +153,9 @@ println!("Workflow status: {}", result);
 # }
 ```
 
-## OrchKit (`neuron-orch-kit`)
+## OrchKit (`skg-orch-kit`)
 
-The `neuron-orch-kit` crate provides shared utilities for orchestrator implementations. These are building blocks that any orchestrator (local, Temporal, Restate) can reuse.
+The `skg-orch-kit` crate provides shared utilities for orchestrator implementations. These are building blocks that any orchestrator (local, Temporal, Restate) can reuse.
 
 ## Error handling
 
@@ -185,7 +185,7 @@ The trait is transport-agnostic by design. All protocol types (`OperatorInput`, 
 
 ## Effects, signals, and custom operators
 
-Neuron draws a hard boundary: operators declare `effects`; orchestrators execute them. This separation lets you reuse the same operator across transports (in-process, Temporal, Restate) without leaking execution mechanics.
+Skelegent draws a hard boundary: operators declare `effects`; orchestrators execute them. This separation lets you reuse the same operator across transports (in-process, Temporal, Restate) without leaking execution mechanics.
 
 Custom operators (e.g., barrier-scheduled loops) can freely declare effects like `Effect::Log`, `Effect::Delegate`, or `Effect::Signal`. The orchestrator decides when to execute them relative to dispatch lifecycles, and exposes `signal()`/`query()` for out-of-band communication.
 

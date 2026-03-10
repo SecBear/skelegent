@@ -1,10 +1,10 @@
 # The 6-Layer Model
 
-neuron organizes its crates into six layers plus an umbrella crate. Each layer has a clear responsibility. The fundamental rule: **higher layers depend on lower layers, never the reverse.**
+skelegent organizes its crates into six layers plus an umbrella crate. Each layer has a clear responsibility. The fundamental rule: **higher layers depend on lower layers, never the reverse.**
 
 ```
  ┌──────────────────────────────────────────────────┐
- │            neuron (umbrella crate)                │
+ │            skelegent (umbrella crate)                │
  │         Feature-gated re-exports of all layers    │
  ├──────────────────────────────────────────────────┤
  │  LAYER 5 — Cross-Cutting                         │
@@ -42,26 +42,26 @@ Layer 0 is the stability contract. It defines the four protocol traits (`Operato
 ## Layer 1 -- Operator Implementations
 
 **Crates:**
-- `neuron-turn` -- Shared toolkit: `Provider` trait, `InferRequest`, `InferResponse`, `TokenUsage`, type conversions
-- `neuron-turn-kit` -- Turn decomposition primitives and helpers
-- `neuron-provider-anthropic` -- Anthropic Claude API provider
-- `neuron-provider-openai` -- OpenAI API provider
-- `neuron-provider-ollama` -- Ollama local model provider
-- `neuron-tool` -- `ToolDyn` trait, `ToolRegistry`, `AliasedTool`
-- `neuron-context` -- Conversation context management and compaction strategies
-- `neuron-mcp` -- MCP (Model Context Protocol) client
-- `neuron-context-engine` -- Composable three-phase context engine (assembly, inference, reaction) with tool execution
-- `neuron-op-single-shot` -- Single-shot operator (one model call, no tools)
+- `skg-turn` -- Shared toolkit: `Provider` trait, `InferRequest`, `InferResponse`, `TokenUsage`, type conversions
+- `skg-turn-kit` -- Turn decomposition primitives and helpers
+- `skg-provider-anthropic` -- Anthropic Claude API provider
+- `skg-provider-openai` -- OpenAI API provider
+- `skg-provider-ollama` -- Ollama local model provider
+- `skg-tool` -- `ToolDyn` trait, `ToolRegistry`, `AliasedTool`
+- `skg-context` -- Conversation context management and compaction strategies
+- `skg-mcp` -- MCP (Model Context Protocol) client
+- `skg-context-engine` -- Composable three-phase context engine (assembly, inference, reaction) with tool execution
+- `skg-op-single-shot` -- Single-shot operator (one model call, no tools)
 
-Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `neuron-turn`) is intentionally not object-safe -- it uses RPITIT for zero-cost abstraction. The object-safe boundary is `layer0::Operator`. The bridge is a context engine implementation (generic over the provider type) that implements the object-safe `Operator` trait.
+Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `skg-turn`) is intentionally not object-safe -- it uses RPITIT for zero-cost abstraction. The object-safe boundary is `layer0::Operator`. The bridge is a context engine implementation (generic over the provider type) that implements the object-safe `Operator` trait.
 
 ## Layer 2 -- Orchestration
 
 **Crates:**
-- `neuron-orch-local` -- In-process orchestrator using tokio tasks
-- `neuron-orch-kit` -- Shared orchestration utilities
-- `neuron-effects-core` -- `EffectExecutor` trait and shared effect execution types
-- `neuron-effects-local` -- Local effect interpreter (executes effects in-process)
+- `skg-orch-local` -- In-process orchestrator using tokio tasks
+- `skg-orch-kit` -- Shared orchestration utilities
+- `skg-effects-core` -- `EffectExecutor` trait and shared effect execution types
+- `skg-effects-local` -- Local effect interpreter (executes effects in-process)
 
 Layer 2 implements `layer0::Orchestrator`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `OperatorId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
 
@@ -70,8 +70,8 @@ Future implementations could include Temporal workflows (durable, replayable) or
 ## Layer 3 -- State
 
 **Crates:**
-- `neuron-state-memory` -- In-memory `HashMap` store (ephemeral, good for tests)
-- `neuron-state-fs` -- Filesystem-backed store (durable across restarts)
+- `skg-state-memory` -- In-memory `HashMap` store (ephemeral, good for tests)
+- `skg-state-fs` -- Filesystem-backed store (durable across restarts)
 
 Layer 3 implements `layer0::StateStore`. Both backends provide scoped key-value storage with `serde_json::Value` values. The memory store is ideal for testing and short-lived processes. The filesystem store persists data as files, suitable for CLI tools and local development.
 
@@ -80,26 +80,26 @@ Future implementations could include SQLite (embedded), PostgreSQL (queryable, t
 ## Layer 4 -- Environment
 
 **Crates:**
-- `neuron-env-local` -- Local passthrough environment (no isolation)
-- `neuron-secret` -- Secret resolution trait
-- `neuron-secret-vault` -- HashiCorp Vault secrets
-- `neuron-auth` -- Authentication and credential framework
-- `neuron-crypto` -- Cryptographic primitives
+- `skg-env-local` -- Local passthrough environment (no isolation)
+- `skg-secret` -- Secret resolution trait
+- `skg-secret-vault` -- HashiCorp Vault secrets
+- `skg-auth` -- Authentication and credential framework
+- `skg-crypto` -- Cryptographic primitives
 
 Layer 4 implements `layer0::Environment` and provides the credential infrastructure that environments use. `LocalEnv` passes through with no isolation -- it holds an `Arc<dyn Operator>` and calls `execute()` directly. The secret, auth, and crypto backends provide credential resolution for the `EnvironmentSpec`'s `CredentialRef` system.
 
 ## Layer 5 -- Cross-Cutting
 
 **Crates:**
-- `neuron-hook-security` -- Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware`)
+- `skg-hook-security` -- Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware`)
 
 Layer 5 provides security middleware that wraps operator dispatch, store access, and execution boundaries. The per-boundary middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`) are defined in Layer 0 and composed into stacks (`DispatchStack`, `StoreStack`, `ExecStack`). Layer 5 crates supply concrete middleware implementations — for example, `RedactionMiddleware` scrubs sensitive data from model outputs, and `ExfilGuardMiddleware` blocks unauthorized data exfiltration through tool calls.
 
 ## The umbrella crate
 
-**Crate:** `neuron`
+**Crate:** `skelegent`
 
-The umbrella crate re-exports all layers behind feature flags. It exists so users can write `neuron = { features = ["context-engine", "provider-anthropic"] }` instead of depending on 5+ individual crates. See [Installation](../getting-started/installation.md) for the full feature flag table.
+The umbrella crate re-exports all layers behind feature flags. It exists so users can write `skelegent = { features = ["context-engine", "provider-anthropic"] }` instead of depending on 5+ individual crates. See [Installation](../getting-started/installation.md) for the full feature flag table.
 
 ## Dependency rules
 

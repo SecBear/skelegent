@@ -1,6 +1,6 @@
 # layer0
 
-> Protocol layer for the Neuron agentic AI architecture
+> Protocol layer for the Skelegent agentic AI architecture
 
 [![crates.io](https://img.shields.io/crates/v/layer0.svg)](https://crates.io/crates/layer0)
 [![docs.rs](https://docs.rs/layer0/badge.svg)](https://docs.rs/layer0)
@@ -82,6 +82,6 @@ impl Operator for MyOperator {
 }
 ```
 
-## Part of the neuron workspace
+## Part of the skelegent workspace
 
-[neuron](https://github.com/secbear/neuron) is a composable async agentic AI framework for Rust.
+[skelegent](https://github.com/secbear/skelegent) is a composable async agentic AI framework for Rust.

@@ -15,13 +15,13 @@ nix develop
 
 This provides the correct Rust toolchain, `cargo`, `clippy`, `rustfmt`, and all system dependencies.
 
-## Adding neuron to your project
+## Adding skelegent to your project
 
-The `neuron` crate is an umbrella that re-exports all layers behind feature flags. Add it to your `Cargo.toml`:
+The `skelegent` crate is an umbrella that re-exports all layers behind feature flags. Add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-neuron = { version = "0.4", features = ["context-engine", "provider-anthropic", "state-memory"] }
+skelegent = { version = "0.4", features = ["context-engine", "provider-anthropic", "state-memory"] }
 ```
 
 ### Feature flags
@@ -30,9 +30,9 @@ The umbrella crate uses feature flags to control which implementations are compi
 
 | Feature | What it enables |
 |---------|----------------|
-| `core` | Layer 0 protocols + `neuron-turn` + `neuron-context` + `neuron-tool` (included in default) |
-| `context-engine` | Context engine (neuron-context-engine) |
-| `op-single-shot` | Single-shot operator (`neuron-op-single-shot`) |
+| `core` | Layer 0 protocols + `skg-turn` + `skg-context` + `skg-tool` (included in default) |
+| `context-engine` | Context engine (skg-context-engine) |
+| `op-single-shot` | Single-shot operator (`skg-op-single-shot`) |
 | `provider-anthropic` | Anthropic Claude provider |
 | `provider-openai` | OpenAI provider |
 | `provider-ollama` | Ollama local model provider |
@@ -51,10 +51,10 @@ You can also depend on individual crates directly if you want finer control over
 ```toml
 [dependencies]
 layer0 = "0.4"
-neuron-turn = "0.4"
-neuron-tool = "0.4"
-neuron-context-engine = "0.4"
-neuron-provider-anthropic = "0.4"
+skg-turn = "0.4"
+skg-tool = "0.4"
+skg-context-engine = "0.4"
+skg-provider-anthropic = "0.4"
 ```
 
 ## Verifying your setup

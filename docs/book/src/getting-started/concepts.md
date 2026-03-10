@@ -1,6 +1,6 @@
 # Core Concepts
 
-neuron's architecture is built on **four protocol traits** and **two cross-cutting interfaces**, organized into **six layers**. This page explains each concept and how they compose.
+skelegent's architecture is built on **four protocol traits** and **two cross-cutting interfaces**, organized into **six layers**. This page explains each concept and how they compose.
 
 ## The four protocols
 
@@ -136,4 +136,4 @@ These terms name configuration patterns built on top of `Operator`, not separate
 
 **Agent:** A configured operator. Concretely: an `Operator` implementation (typically a context engine) wired with a provider, identity, tools, and optionally an `Arc<dyn Orchestrator>` for sub-dispatching to other agents. The term 'agent' has no corresponding trait; it describes how an operator is assembled and what capabilities it receives at construction time.
 
-To create an agent, wrap `react_loop()` (from `neuron-context-engine`) in a struct that implements `Operator`. The struct holds the provider, tools, and config. The `execute()` method creates a fresh `Context`, assembles domain context into it, and calls `react_loop()`. The provider's generic type parameter is erased at the `Operator` boundary — callers interact with `Arc<dyn Operator>` and never see the concrete provider type. See the [operators guide](../guides/operators.md) for a complete example.
+To create an agent, wrap `react_loop()` (from `skg-context-engine`) in a struct that implements `Operator`. The struct holds the provider, tools, and config. The `execute()` method creates a fresh `Context`, assembles domain context into it, and calls `react_loop()`. The provider's generic type parameter is erased at the `Operator` boundary — callers interact with `Arc<dyn Operator>` and never see the concrete provider type. See the [operators guide](../guides/operators.md) for a complete example.

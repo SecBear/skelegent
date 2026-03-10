@@ -116,7 +116,7 @@ fi
 check "key public types referenced correctly"
 
 # ProviderError variants — check the book mentions the actual variants
-PROVIDER_ERROR_FILE="$REPO_ROOT/turn/neuron-turn/src/provider.rs"
+PROVIDER_ERROR_FILE="$REPO_ROOT/turn/skg-turn/src/provider.rs"
 if [ -f "$PROVIDER_ERROR_FILE" ]; then
     # Extract variant names from the enum
     VARIANTS=$(grep -oE '^[[:space:]]+[A-Z][a-zA-Z]+[[:space:]]*[\({]' "$PROVIDER_ERROR_FILE" | awk '{print $1}' | tr -d '({' | sort -u)

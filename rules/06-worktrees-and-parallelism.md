@@ -20,7 +20,7 @@ Use `scripts/new-worktree.sh`:
 This creates:
 
 1. A branch `feat/orch-temporal` off the base branch.
-2. A sibling directory `../neuron-explore-orch-temporal/` checked out to that branch.
+2. A sibling directory `../skg-explore-orch-temporal/` checked out to that branch.
 
 ## Avoiding Context Mixing
 

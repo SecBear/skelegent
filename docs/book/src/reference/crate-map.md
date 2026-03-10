@@ -1,6 +1,6 @@
 # Crate Map
 
-All crates in the neuron workspace, organized by architectural layer.
+All crates in the skelegent workspace, organized by architectural layer.
 
 ## Layer 0 -- Protocol Traits
 
@@ -12,55 +12,55 @@ All crates in the neuron workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-turn` | Shared toolkit: `Provider` trait, `InferRequest`, `InferResponse`, `TokenUsage`, provider request/response types, content conversions. |
-| `neuron-provider-anthropic` | Anthropic Claude API provider. Implements `Provider` for the Messages API. |
-| `neuron-provider-openai` | OpenAI API provider. Implements `Provider` for the Chat Completions API. |
-| `neuron-provider-ollama` | Ollama local model provider. Implements `Provider` for the Ollama API. |
-| `neuron-tool` | `ToolDyn` trait, `ToolRegistry`, `AliasedTool`. Object-safe tool abstraction. |
-| `neuron-context` | Conversation context assembly and compaction strategies. |
-| `neuron-mcp` | MCP (Model Context Protocol) client. Wraps MCP server tools as `ToolDyn` implementations. |
-| `neuron-context-engine` | Composable three-phase context engine (assembly, inference, reaction). Implements `Operator` with tool execution. |
-| `neuron-tool-macro` | Proc macro for `#[neuron_tool]` attribute. Generates `ToolDyn` implementations from async functions. |
-| `neuron-op-single-shot` | Single-shot operator. Implements `Operator` with one model call and no tools. |
-| `neuron-turn-kit` | Turn engine primitives: `DispatchPlanner`, `ConcurrencyDecider`, `BatchExecutor` (execution-only), `SteeringSource`. |
+| `skg-turn` | Shared toolkit: `Provider` trait, `InferRequest`, `InferResponse`, `TokenUsage`, provider request/response types, content conversions. |
+| `skg-provider-anthropic` | Anthropic Claude API provider. Implements `Provider` for the Messages API. |
+| `skg-provider-openai` | OpenAI API provider. Implements `Provider` for the Chat Completions API. |
+| `skg-provider-ollama` | Ollama local model provider. Implements `Provider` for the Ollama API. |
+| `skg-tool` | `ToolDyn` trait, `ToolRegistry`, `AliasedTool`. Object-safe tool abstraction. |
+| `skg-context` | Conversation context assembly and compaction strategies. |
+| `skg-mcp` | MCP (Model Context Protocol) client. Wraps MCP server tools as `ToolDyn` implementations. |
+| `skg-context-engine` | Composable three-phase context engine (assembly, inference, reaction). Implements `Operator` with tool execution. |
+| `skg-tool-macro` | Proc macro for `#[skg_tool]` attribute. Generates `ToolDyn` implementations from async functions. |
+| `skg-op-single-shot` | Single-shot operator. Implements `Operator` with one model call and no tools. |
+| `skg-turn-kit` | Turn engine primitives: `DispatchPlanner`, `ConcurrencyDecider`, `BatchExecutor` (execution-only), `SteeringSource`. |
 
 ## Layer 2 -- Orchestration
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-orch-local` | In-process orchestrator. Implements `Orchestrator` with tokio tasks. |
-| `neuron-orch-kit` | Shared utilities for orchestrator implementations. |
-| `neuron-effects-core` | Effect execution trait (`EffectExecutor`), errors, and policy — no implementations. |
-| `neuron-effects-local` | Local in-process `EffectExecutor` implementation (in-order, best-effort). |
+| `skg-orch-local` | In-process orchestrator. Implements `Orchestrator` with tokio tasks. |
+| `skg-orch-kit` | Shared utilities for orchestrator implementations. |
+| `skg-effects-core` | Effect execution trait (`EffectExecutor`), errors, and policy — no implementations. |
+| `skg-effects-local` | Local in-process `EffectExecutor` implementation (in-order, best-effort). |
 
 ## Layer 3 -- State
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-state-memory` | In-memory state store. Implements `StateStore` with `HashMap`. Ephemeral. |
-| `neuron-state-fs` | Filesystem state store. Implements `StateStore` with file-backed persistence. |
+| `skg-state-memory` | In-memory state store. Implements `StateStore` with `HashMap`. Ephemeral. |
+| `skg-state-fs` | Filesystem state store. Implements `StateStore` with file-backed persistence. |
 
 ## Layer 4 -- Environment and Credentials
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-env-local` | Local environment. Implements `Environment` with no isolation (passthrough). |
-| `neuron-secret` | Secret resolution trait. Defines the interface for secret backends. |
-| `neuron-secret-vault` | HashiCorp Vault secret backend. |
-| `neuron-crypto` | Cryptographic utilities and primitives. |
-| `neuron-auth` | Authentication and authorization abstractions. |
+| `skg-env-local` | Local environment. Implements `Environment` with no isolation (passthrough). |
+| `skg-secret` | Secret resolution trait. Defines the interface for secret backends. |
+| `skg-secret-vault` | HashiCorp Vault secret backend. |
+| `skg-crypto` | Cryptographic utilities and primitives. |
+| `skg-auth` | Authentication and authorization abstractions. |
 
 ## Layer 5 -- Cross-Cutting
 
 | Crate | Description |
 |-------|-------------|
-| `neuron-hook-security` | Security middleware: `RedactionMiddleware` (pattern-based content redaction) and `ExfilGuardMiddleware` (data-loss-prevention guardrails). |
+| `skg-hook-security` | Security middleware: `RedactionMiddleware` (pattern-based content redaction) and `ExfilGuardMiddleware` (data-loss-prevention guardrails). |
 
 ## Umbrella
 
 | Crate | Description |
 |-------|-------------|
-| `neuron` | Umbrella crate. Feature-gated re-exports of all layers. |
+| `skelegent` | Umbrella crate. Feature-gated re-exports of all layers. |
 
 
 ## Examples

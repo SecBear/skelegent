@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Neuron must be teachable.
+Skelegent must be teachable.
 
 Documentation is part of core completeness because the architecture is only valuable if users can reliably compose systems out of it.
 

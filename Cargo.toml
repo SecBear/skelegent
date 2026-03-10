@@ -1,5 +1,5 @@
 [package]
-name = "neuron-workspace"
+name = "skg-workspace"
 version = "0.4.0"
 edition = "2024"
 rust-version = "1.85"
@@ -8,60 +8,60 @@ publish = false
 [workspace]
 resolver = "3"
 members = [
-  "neuron",
+  "skelegent",
   "layer0",
-  "state/neuron-state-memory",
-  "state/neuron-state-fs",
-  "env/neuron-env-local",
-  "orch/neuron-orch-local",
-  "orch/neuron-orch-kit",
-  "turn/neuron-tool",
-  "turn/neuron-tool-macro",
-  "turn/neuron-turn",
-  "op/neuron-context-engine",
-  "op/neuron-op-single-shot",
-  "turn/neuron-context",
-  "provider/neuron-provider-anthropic",
-  "provider/neuron-provider-openai",
-  "provider/neuron-provider-ollama",
-  "provider/neuron-provider-codex",
-  "turn/neuron-mcp",
-  "secret/neuron-secret",
-  "crypto/neuron-crypto",
-  "auth/neuron-auth",
-  "secret/neuron-secret-vault",
-  "hooks/neuron-hook-security",
+  "state/skg-state-memory",
+  "state/skg-state-fs",
+  "env/skg-env-local",
+  "orch/skg-orch-local",
+  "orch/skg-orch-kit",
+  "turn/skg-tool",
+  "turn/skg-tool-macro",
+  "turn/skg-turn",
+  "op/skg-context-engine",
+  "op/skg-op-single-shot",
+  "turn/skg-context",
+  "provider/skg-provider-anthropic",
+  "provider/skg-provider-openai",
+  "provider/skg-provider-ollama",
+  "provider/skg-provider-codex",
+  "turn/skg-mcp",
+  "secret/skg-secret",
+  "crypto/skg-crypto",
+  "auth/skg-auth",
+  "secret/skg-secret-vault",
+  "hooks/skg-hook-security",
   "examples/custom_operator_barrier",
-  "turn/neuron-turn-kit",
-  "effects/neuron-effects-core",
-  "effects/neuron-effects-local",
+  "turn/skg-turn-kit",
+  "effects/skg-effects-core",
+  "effects/skg-effects-local",
 ]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/secbear/neuron"
-homepage = "https://github.com/secbear/neuron"
+repository = "https://github.com/secbear/skelegent"
+homepage = "https://github.com/secbear/skelegent"
 
 # Dependencies for workspace-level integration tests
 [dev-dependencies]
 layer0 = { path = "layer0", features = ["test-utils"], version = "0.4.0" }
-neuron = { path = "neuron", version = "0.4.0" }
-neuron-turn = { path = "turn/neuron-turn", features = [
+skelegent = { path = "skelegent", version = "0.4.0" }
+skg-turn = { path = "turn/skg-turn", features = [
   "test-utils",
 ], version = "0.4.0" }
-neuron-context-engine = { path = "op/neuron-context-engine", version = "0.4.0" }
-neuron-op-single-shot = { path = "op/neuron-op-single-shot", version = "0.4.0" }
-neuron-context = { path = "turn/neuron-context", version = "0.4.0" }
-neuron-tool = { path = "turn/neuron-tool", version = "0.4.0" }
-neuron-state-memory = { path = "state/neuron-state-memory", version = "0.4.0" }
-neuron-state-fs = { path = "state/neuron-state-fs", version = "0.4.0" }
-neuron-provider-anthropic = { path = "provider/neuron-provider-anthropic", version = "0.4.0" }
-neuron-provider-openai = { path = "provider/neuron-provider-openai", version = "0.4.0" }
-neuron-provider-ollama = { path = "provider/neuron-provider-ollama", version = "0.4.0" }
-neuron-provider-codex = { path = "provider/neuron-provider-codex", version = "0.4.0" }
-neuron-orch-local = { path = "orch/neuron-orch-local", version = "0.4.0" }
+skg-context-engine = { path = "op/skg-context-engine", version = "0.4.0" }
+skg-op-single-shot = { path = "op/skg-op-single-shot", version = "0.4.0" }
+skg-context = { path = "turn/skg-context", version = "0.4.0" }
+skg-tool = { path = "turn/skg-tool", version = "0.4.0" }
+skg-state-memory = { path = "state/skg-state-memory", version = "0.4.0" }
+skg-state-fs = { path = "state/skg-state-fs", version = "0.4.0" }
+skg-provider-anthropic = { path = "provider/skg-provider-anthropic", version = "0.4.0" }
+skg-provider-openai = { path = "provider/skg-provider-openai", version = "0.4.0" }
+skg-provider-ollama = { path = "provider/skg-provider-ollama", version = "0.4.0" }
+skg-provider-codex = { path = "provider/skg-provider-codex", version = "0.4.0" }
+skg-orch-local = { path = "orch/skg-orch-local", version = "0.4.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
 serde_json = "1"

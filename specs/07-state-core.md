@@ -214,8 +214,8 @@ metadata flows through context assembly — see
 
 Implemented:
 
-- `neuron-state-memory` — in-memory `StateStore`.
-- `neuron-state-fs` — filesystem `StateStore`.
+- `skg-state-memory` — in-memory `StateStore`.
+- `skg-state-fs` — filesystem `StateStore`.
 - `StoreOptions`, `MemoryTier`, `Lifetime`, `ContentKind` — defined in `layer0/src/state.rs`.
 - `write_hinted` / `read_hinted` on `StateStore` and `StateReader` — defaults delegate to
   unhinted variants; backends override to act on hints.

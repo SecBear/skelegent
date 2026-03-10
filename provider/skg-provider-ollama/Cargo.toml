@@ -1,0 +1,34 @@
+[package]
+name = "skg-provider-ollama"
+version = "0.4.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Ollama local model provider for skg-turn"
+readme = "README.md"
+categories = ["asynchronous", "web-programming::http-client"]
+keywords = ["skelegent", "ai", "agent", "ollama", "local-llm"]
+
+[dependencies]
+skg-turn = { path = "../../turn/skg-turn", version = "0.4.0" }
+layer0 = { path = "../../layer0", version = "0.4.0" }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+  "stream",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust_decimal = { version = "1", features = ["serde-str"] }
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+layer0 = { path = "../../layer0", version = "0.4.0" }
+skg-context-engine = { path = "../../op/skg-context-engine", version = "0.4.0" }
+skg-tool = { path = "../../turn/skg-tool", version = "0.4.0" }
+skg-context = { path = "../../turn/skg-context", version = "0.4.0" }
+skg-state-memory = { path = "../../state/skg-state-memory", version = "0.4.0" }

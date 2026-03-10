@@ -4,13 +4,13 @@
 
 The redesign must be consumable.
 
-Old Neuron shipped an umbrella `neuron` crate with feature flags and a prelude.
+Old skelegent shipped an umbrella `skelegent` crate with feature flags and a prelude.
 
 The redesign needs an equivalent packaging story.
 
 ## Requirements
 
-- Provide an umbrella crate (likely `neuron`) that re-exports protocol + key implementations behind feature flags.
+- Provide an umbrella crate (likely `skelegent`) that re-exports protocol + key implementations behind feature flags.
 - Provide a stable set of feature flags for:
   - providers
   - MCP
@@ -22,4 +22,4 @@ The redesign needs an equivalent packaging story.
 
 ## Current Status
 
-The `neuron` umbrella crate exists with feature-gated re-exports and a `prelude` module.
+The `skelegent` umbrella crate exists with feature-gated re-exports and a `prelude` module.

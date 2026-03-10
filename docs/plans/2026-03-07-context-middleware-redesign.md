@@ -87,11 +87,11 @@ naturally:
 ### 2. Provider Middleware (Layer 1 — NOT in layer0)
 
 Provider is RPITIT, not object-safe, and lives in the turn layer
-(`neuron-turn`). Provider middleware uses generic wrapping, not
+(`skg-turn`). Provider middleware uses generic wrapping, not
 `Box<dyn>`:
 
 ```rust
-// In neuron-turn, NOT layer0
+// In skg-turn, NOT layer0
 struct RetryProvider<P: Provider> {
     inner: P,
     max_retries: u32,
@@ -246,7 +246,7 @@ Tracing handles the first. Middleware handles the second.
 ### 8. Operator-Internal Concerns
 
 The following move OUT of layer0 into operator implementations
-(e.g., `neuron-op-react`):
+(e.g., `skg-op-react`):
 
 - `PreInference` / `PostInference` — ReactOperator's inference loop
 - `ExitCheck` — ReactOperator's exit evaluation
@@ -294,6 +294,6 @@ rather than going all the way to continuation passing.
   `PreDispatch`/`PostDispatch` → `DispatchMiddleware`,
   `PreStateWrite`/`PostStateRead` → `StoreMiddleware`,
   `PreProviderCall`/`PostProviderCall` → `ProviderMiddleware` (L1).
-  ReactOperator-specific points move to `neuron-op-react`.
+  ReactOperator-specific points move to `skg-op-react`.
 - `HookRegistry` → `DispatchStack::builder()` (+ Store, Exec).
   Observer/Transformer/Guardrail ordering preserved by builder API.

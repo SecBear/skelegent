@@ -17,13 +17,13 @@ A task is any unit of work with a coherent success condition.
 
 Examples:
 
-1. "Add `neuron` umbrella crate"
-2. "Implement the `neuron-orch-local` orchestrator"
+1. "Add `skelegent` umbrella crate"
+2. "Implement the `skg-orch-local` orchestrator"
 3. "Harden coverage for hook edge cases"
 
 Not tasks (too large, must be split):
 
-1. "Make Neuron production-ready"
+1. "Make Skelegent production-ready"
 2. "Write all docs"
 
 ## Restart Protocol

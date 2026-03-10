@@ -1361,7 +1361,7 @@ fn secret_source_all_variants_round_trip() {
             secret_name: "api-key".into(),
         },
         SecretSource::OsKeystore {
-            service: "neuron-test".into(),
+            service: "skg-test".into(),
         },
         SecretSource::Kubernetes {
             namespace: "default".into(),

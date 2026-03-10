@@ -29,100 +29,100 @@
       "package-name": "layer0",
       "changelog-path": "CHANGELOG.md"
     },
-    "turn/neuron-tool": {
-      "package-name": "neuron-tool",
+    "turn/skg-tool": {
+      "package-name": "skg-tool",
       "changelog-path": "CHANGELOG.md"
     },
-    "turn/neuron-turn": {
-      "package-name": "neuron-turn",
+    "turn/skg-turn": {
+      "package-name": "skg-turn",
       "changelog-path": "CHANGELOG.md"
     },
-    "hooks/neuron-hooks": {
-      "package-name": "neuron-hooks",
+    "hooks/skg-hooks": {
+      "package-name": "skg-hooks",
       "changelog-path": "CHANGELOG.md"
     },
-    "hooks/neuron-hook-security": {
-      "package-name": "neuron-hook-security",
+    "hooks/skg-hook-security": {
+      "package-name": "skg-hook-security",
       "changelog-path": "CHANGELOG.md"
     },
-    "turn/neuron-context": {
-      "package-name": "neuron-context",
+    "turn/skg-context": {
+      "package-name": "skg-context",
       "changelog-path": "CHANGELOG.md"
     },
-    "op/neuron-op-react": {
-      "package-name": "neuron-op-react",
+    "op/skg-op-react": {
+      "package-name": "skg-op-react",
       "changelog-path": "CHANGELOG.md"
     },
-    "op/neuron-op-single-shot": {
-      "package-name": "neuron-op-single-shot",
+    "op/skg-op-single-shot": {
+      "package-name": "skg-op-single-shot",
       "changelog-path": "CHANGELOG.md"
     },
-    "state/neuron-state-memory": {
-      "package-name": "neuron-state-memory",
+    "state/skg-state-memory": {
+      "package-name": "skg-state-memory",
       "changelog-path": "CHANGELOG.md"
     },
-    "state/neuron-state-fs": {
-      "package-name": "neuron-state-fs",
+    "state/skg-state-fs": {
+      "package-name": "skg-state-fs",
       "changelog-path": "CHANGELOG.md"
     },
-    "orch/neuron-orch-kit": {
-      "package-name": "neuron-orch-kit",
+    "orch/skg-orch-kit": {
+      "package-name": "skg-orch-kit",
       "changelog-path": "CHANGELOG.md"
     },
-    "orch/neuron-orch-local": {
-      "package-name": "neuron-orch-local",
+    "orch/skg-orch-local": {
+      "package-name": "skg-orch-local",
       "changelog-path": "CHANGELOG.md"
     },
-    "env/neuron-env-local": {
-      "package-name": "neuron-env-local",
+    "env/skg-env-local": {
+      "package-name": "skg-env-local",
       "changelog-path": "CHANGELOG.md"
     },
-    "secret/neuron-secret": {
-      "package-name": "neuron-secret",
+    "secret/skg-secret": {
+      "package-name": "skg-secret",
       "changelog-path": "CHANGELOG.md"
     },
-    "secret/neuron-secret-vault": {
-      "package-name": "neuron-secret-vault",
+    "secret/skg-secret-vault": {
+      "package-name": "skg-secret-vault",
       "changelog-path": "CHANGELOG.md"
     },
-    "auth/neuron-auth": {
-      "package-name": "neuron-auth",
+    "auth/skg-auth": {
+      "package-name": "skg-auth",
       "changelog-path": "CHANGELOG.md"
     },
-    "crypto/neuron-crypto": {
-      "package-name": "neuron-crypto",
+    "crypto/skg-crypto": {
+      "package-name": "skg-crypto",
       "changelog-path": "CHANGELOG.md"
     },
-    "provider/neuron-provider-anthropic": {
-      "package-name": "neuron-provider-anthropic",
+    "provider/skg-provider-anthropic": {
+      "package-name": "skg-provider-anthropic",
       "changelog-path": "CHANGELOG.md"
     },
-    "provider/neuron-provider-openai": {
-      "package-name": "neuron-provider-openai",
+    "provider/skg-provider-openai": {
+      "package-name": "skg-provider-openai",
       "changelog-path": "CHANGELOG.md"
     },
-    "provider/neuron-provider-ollama": {
-      "package-name": "neuron-provider-ollama",
+    "provider/skg-provider-ollama": {
+      "package-name": "skg-provider-ollama",
       "changelog-path": "CHANGELOG.md"
     },
-    "turn/neuron-mcp": {
-      "package-name": "neuron-mcp",
+    "turn/skg-mcp": {
+      "package-name": "skg-mcp",
       "changelog-path": "CHANGELOG.md"
     },
-    "neuron": {
-      "package-name": "neuron",
+    "skelegent": {
+      "package-name": "skelegent",
       "changelog-path": "CHANGELOG.md"
     },
-    "effects/neuron-effects-core": {
-      "package-name": "neuron-effects-core",
+    "effects/skg-effects-core": {
+      "package-name": "skg-effects-core",
       "changelog-path": "CHANGELOG.md"
     },
-    "effects/neuron-effects-local": {
-      "package-name": "neuron-effects-local",
+    "effects/skg-effects-local": {
+      "package-name": "skg-effects-local",
       "changelog-path": "CHANGELOG.md"
     },
-    "turn/neuron-turn-kit": {
-      "package-name": "neuron-turn-kit",
+    "turn/skg-turn-kit": {
+      "package-name": "skg-turn-kit",
       "changelog-path": "CHANGELOG.md"
     }
   }

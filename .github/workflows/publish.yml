@@ -39,37 +39,37 @@ jobs:
           CRATES=(
             # Tier 0: no internal deps
             layer0
-            neuron-tool
+            skg-tool
 
             # Tier 1: depend only on tier 0
-            neuron-effects-core
-            neuron-secret
-            neuron-crypto
-            neuron-hooks
-            neuron-hook-security
-            neuron-state-memory
-            neuron-state-fs
-            neuron-turn
-            neuron-mcp
-            neuron-orch-local
+            skg-effects-core
+            skg-secret
+            skg-crypto
+            skg-hooks
+            skg-hook-security
+            skg-state-memory
+            skg-state-fs
+            skg-turn
+            skg-mcp
+            skg-orch-local
 
             # Tier 2: depend on tier 1
-            neuron-effects-local
-            neuron-orch-kit
-            neuron-auth
-            neuron-env-local
-            neuron-turn-kit
-            neuron-context
-            neuron-op-single-shot
+            skg-effects-local
+            skg-orch-kit
+            skg-auth
+            skg-env-local
+            skg-turn-kit
+            skg-context
+            skg-op-single-shot
 
             # Tier 3: depend on tier 2
-            neuron-secret-vault
-            neuron-op-react
+            skg-secret-vault
+            skg-op-react
 
             # Tier 4: depend on many crates
-            neuron-provider-anthropic
-            neuron-provider-openai
-            neuron-provider-ollama
+            skg-provider-anthropic
+            skg-provider-openai
+            skg-provider-ollama
 
             # Umbrella (last)
             neuron

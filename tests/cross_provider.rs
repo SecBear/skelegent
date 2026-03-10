@@ -12,13 +12,13 @@ use layer0::OperatorId;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
-use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
-use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
-use neuron_provider_anthropic::AnthropicProvider;
-use neuron_provider_ollama::OllamaProvider;
-use neuron_provider_openai::OpenAIProvider;
-use neuron_tool::{ToolCallContext, ToolRegistry};
-use neuron_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+use skg_context_engine::{Context, ReactLoopConfig, react_loop};
+use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
+use skg_provider_anthropic::AnthropicProvider;
+use skg_provider_ollama::OllamaProvider;
+use skg_provider_openai::OpenAIProvider;
+use skg_tool::{ToolCallContext, ToolRegistry};
+use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use std::sync::{Arc, Mutex};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -352,7 +352,7 @@ async fn ollama_streaming_text() {
 #[tokio::test]
 #[ignore]
 async fn anthropic_summarize_live() {
-    use neuron_context_engine::rules::compaction::summarize;
+    use skg_context_engine::rules::compaction::summarize;
 
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
     let provider = AnthropicProvider::new(api_key);
@@ -361,7 +361,7 @@ async fn anthropic_summarize_live() {
     let messages = vec![
         Message::new(
             Role::User,
-            Content::text("I'm building an agent framework in Rust called neuron."),
+            Content::text("I'm building an agent framework in Rust called skelegent."),
         ),
         Message::new(
             Role::Assistant,
@@ -370,7 +370,7 @@ async fn anthropic_summarize_live() {
         Message::new(
             Role::User,
             Content::text(
-                "We use a 6-layer architecture: layer0 (types), turn (inference), tool, context-engine, orch, and neuron (top-level). Provider is RPITIT, not object-safe.",
+                "We use a 6-layer architecture: layer0 (types), turn (inference), tool, context-engine, orch, and skelegent (top-level). Provider is RPITIT, not object-safe.",
             ),
         ),
         Message::new(
@@ -412,7 +412,7 @@ async fn anthropic_summarize_live() {
 #[tokio::test]
 #[ignore]
 async fn anthropic_extract_cognitive_state_live() {
-    use neuron_context_engine::rules::compaction::extract_cognitive_state;
+    use skg_context_engine::rules::compaction::extract_cognitive_state;
 
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
     let provider = AnthropicProvider::new(api_key);

@@ -195,8 +195,8 @@ version = "0.4.0"
 dependencies = [
  "async-trait",
  "layer0",
- "neuron-tool",
  "serde_json",
+ "skg-tool",
  "thiserror",
  "tokio",
 ]
@@ -804,372 +804,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "neuron"
-version = "0.4.0"
-dependencies = [
- "layer0",
- "neuron-context",
- "neuron-context-engine",
- "neuron-env-local",
- "neuron-mcp",
- "neuron-op-single-shot",
- "neuron-orch-kit",
- "neuron-orch-local",
- "neuron-provider-anthropic",
- "neuron-provider-ollama",
- "neuron-provider-openai",
- "neuron-state-fs",
- "neuron-state-memory",
- "neuron-tool",
- "neuron-turn",
-]
-
-[[package]]
-name = "neuron-auth"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-secret",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "neuron-context"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-state-memory",
- "neuron-turn",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "neuron-context-engine"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-context",
- "neuron-tool",
- "neuron-turn",
- "rust_decimal",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-crypto"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "neuron-effects-core"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "thiserror",
-]
-
-[[package]]
-name = "neuron-effects-local"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-effects-core",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-env-local"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-secret",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-hook-security"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "regex",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-mcp"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-tool",
- "rmcp",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-op-single-shot"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-turn",
- "rust_decimal",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-orch-kit"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-effects-core",
- "neuron-effects-local",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-orch-local"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-provider-anthropic"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "futures-util",
- "layer0",
- "neuron-auth",
- "neuron-context",
- "neuron-context-engine",
- "neuron-state-memory",
- "neuron-tool",
- "neuron-turn",
- "reqwest 0.12.28",
- "rust_decimal",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-provider-codex"
-version = "0.4.0"
-dependencies = [
- "base64",
- "futures-util",
- "layer0",
- "neuron-turn",
- "reqwest 0.12.28",
- "rust_decimal",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "neuron-provider-ollama"
-version = "0.4.0"
-dependencies = [
- "futures-util",
- "layer0",
- "neuron-context",
- "neuron-context-engine",
- "neuron-state-memory",
- "neuron-tool",
- "neuron-turn",
- "reqwest 0.12.28",
- "rust_decimal",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "neuron-provider-openai"
-version = "0.4.0"
-dependencies = [
- "futures-util",
- "layer0",
- "neuron-context",
- "neuron-context-engine",
- "neuron-state-memory",
- "neuron-tool",
- "neuron-turn",
- "reqwest 0.12.28",
- "rust_decimal",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neuron-secret"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "serde_json",
- "thiserror",
- "tokio",
- "zeroize",
-]
-
-[[package]]
-name = "neuron-secret-vault"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-auth",
- "neuron-secret",
- "tokio",
-]
-
-[[package]]
-name = "neuron-state-fs"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "regex",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "neuron-state-memory"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "neuron-tool"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron-tool-macro",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "neuron-tool-macro"
-version = "0.4.0"
-dependencies = [
- "layer0",
- "neuron-tool",
- "proc-macro2",
- "quote",
- "serde_json",
- "syn 2.0.117",
- "tokio",
-]
-
-[[package]]
-name = "neuron-turn"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "rust_decimal",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "neuron-turn-kit"
-version = "0.4.0"
-dependencies = [
- "layer0",
- "neuron-turn",
- "schemars 0.8.22",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "neuron-workspace"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "layer0",
- "neuron",
- "neuron-context",
- "neuron-context-engine",
- "neuron-op-single-shot",
- "neuron-orch-local",
- "neuron-provider-anthropic",
- "neuron-provider-codex",
- "neuron-provider-ollama",
- "neuron-provider-openai",
- "neuron-state-fs",
- "neuron-state-memory",
- "neuron-tool",
- "neuron-turn",
- "rust_decimal",
- "serde_json",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -1885,6 +1519,372 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "skelegent"
+version = "0.4.0"
+dependencies = [
+ "layer0",
+ "skg-context",
+ "skg-context-engine",
+ "skg-env-local",
+ "skg-mcp",
+ "skg-op-single-shot",
+ "skg-orch-kit",
+ "skg-orch-local",
+ "skg-provider-anthropic",
+ "skg-provider-ollama",
+ "skg-provider-openai",
+ "skg-state-fs",
+ "skg-state-memory",
+ "skg-tool",
+ "skg-turn",
+]
+
+[[package]]
+name = "skg-auth"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "skg-secret",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "skg-context"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde_json",
+ "skg-state-memory",
+ "skg-turn",
+ "tokio",
+]
+
+[[package]]
+name = "skg-context-engine"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "rust_decimal",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "skg-context",
+ "skg-tool",
+ "skg-turn",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-crypto"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "skg-effects-core"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "thiserror",
+]
+
+[[package]]
+name = "skg-effects-local"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde_json",
+ "skg-effects-core",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-env-local"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde_json",
+ "skg-secret",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-hook-security"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "regex",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-mcp"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "skg-tool",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-op-single-shot"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "rust_decimal",
+ "serde_json",
+ "skg-turn",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-orch-kit"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde_json",
+ "skg-effects-core",
+ "skg-effects-local",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-orch-local"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-provider-anthropic"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "layer0",
+ "reqwest 0.12.28",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "skg-auth",
+ "skg-context",
+ "skg-context-engine",
+ "skg-state-memory",
+ "skg-tool",
+ "skg-turn",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-provider-codex"
+version = "0.4.0"
+dependencies = [
+ "base64",
+ "futures-util",
+ "layer0",
+ "reqwest 0.12.28",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "skg-turn",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "skg-provider-ollama"
+version = "0.4.0"
+dependencies = [
+ "futures-util",
+ "layer0",
+ "reqwest 0.12.28",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "skg-context",
+ "skg-context-engine",
+ "skg-state-memory",
+ "skg-tool",
+ "skg-turn",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "skg-provider-openai"
+version = "0.4.0"
+dependencies = [
+ "futures-util",
+ "layer0",
+ "reqwest 0.12.28",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "skg-context",
+ "skg-context-engine",
+ "skg-state-memory",
+ "skg-tool",
+ "skg-turn",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "skg-secret"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "skg-secret-vault"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "skg-auth",
+ "skg-secret",
+ "tokio",
+]
+
+[[package]]
+name = "skg-state-fs"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "skg-state-memory"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "skg-tool"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde_json",
+ "skg-tool-macro",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "skg-tool-macro"
+version = "0.4.0"
+dependencies = [
+ "layer0",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "skg-tool",
+ "syn 2.0.117",
+ "tokio",
+]
+
+[[package]]
+name = "skg-turn"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "skg-turn-kit"
+version = "0.4.0"
+dependencies = [
+ "layer0",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "skg-turn",
+]
+
+[[package]]
+name = "skg-workspace"
+version = "0.4.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "rust_decimal",
+ "serde_json",
+ "skelegent",
+ "skg-context",
+ "skg-context-engine",
+ "skg-op-single-shot",
+ "skg-orch-local",
+ "skg-provider-anthropic",
+ "skg-provider-codex",
+ "skg-provider-ollama",
+ "skg-provider-openai",
+ "skg-state-fs",
+ "skg-state-memory",
+ "skg-tool",
+ "skg-turn",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "slab"

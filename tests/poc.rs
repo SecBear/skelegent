@@ -1,6 +1,6 @@
 //! Proof of Concept: composability patterns without live API keys.
 //!
-//! Demonstrates the four core composability patterns that the neuron
+//! Demonstrates the four core composability patterns that the skelegent
 //! architecture enables:
 //!
 //! 1. **Provider swap** — Same operator, different LLM backend
@@ -17,15 +17,15 @@ use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, Trig
 use layer0::orchestrator::Orchestrator;
 use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
-use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
-use neuron_op_single_shot::{SingleShotConfig, SingleShotOperator};
-use neuron_orch_local::LocalOrch;
-use neuron_state_fs::FsStore;
-use neuron_state_memory::MemoryStore;
-use neuron_tool::ToolRegistry;
-use neuron_turn::infer::InferResponse;
-use neuron_turn::test_utils::{TestProvider, make_text_response};
-use neuron_turn::types::*;
+use skg_context_engine::{Context, ReactLoopConfig, react_loop};
+use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
+use skg_orch_local::LocalOrch;
+use skg_state_fs::FsStore;
+use skg_state_memory::MemoryStore;
+use skg_tool::ToolRegistry;
+use skg_turn::infer::InferResponse;
+use skg_turn::test_utils::{TestProvider, make_text_response};
+use skg_turn::types::*;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 
@@ -62,26 +62,26 @@ fn make_response(
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Wraps react_loop in an Operator implementation for test composability.
-struct ContextEngineOperator<P: neuron_turn::provider::Provider> {
+struct ContextEngineOperator<P: skg_turn::provider::Provider> {
     provider: P,
     config: ReactLoopConfig,
     tools: ToolRegistry,
-    tool_ctx: neuron_tool::ToolCallContext,
+    tool_ctx: skg_tool::ToolCallContext,
 }
 
-impl<P: neuron_turn::provider::Provider> ContextEngineOperator<P> {
+impl<P: skg_turn::provider::Provider> ContextEngineOperator<P> {
     fn new(provider: P, tools: ToolRegistry, config: ReactLoopConfig) -> Self {
         Self {
             provider,
             config,
             tools,
-            tool_ctx: neuron_tool::ToolCallContext::new(layer0::id::OperatorId::from("test")),
+            tool_ctx: skg_tool::ToolCallContext::new(layer0::id::OperatorId::from("test")),
         }
     }
 }
 
 #[async_trait::async_trait]
-impl<P: neuron_turn::provider::Provider> Operator for ContextEngineOperator<P> {
+impl<P: skg_turn::provider::Provider> Operator for ContextEngineOperator<P> {
     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, layer0::OperatorError> {
         let mut ctx = Context::new();
         // Inject the user input as the first message

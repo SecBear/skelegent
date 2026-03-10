@@ -49,7 +49,7 @@ configuration and infrastructure choice, not an operator-level change.
 
 ## Required “Core Complete” Features
 
-Even if technology-specific orchestrators are stubs, Neuron core needs a reference orchestration story that is testable.
+Even if technology-specific orchestrators are stubs, Skelegent core needs a reference orchestration story that is testable.
 
 Minimum requirements:
 
@@ -59,9 +59,9 @@ Minimum requirements:
 
 ## Current Implementation Status
 
-- `neuron-orch-local` exists as an in-process dispatcher.
+- `skg-orch-local` exists as an in-process dispatcher.
 - Signals are tracked in-memory per workflow via a per-workflow signal journal; `query` returns the signal count.
-- `neuron-orch-kit` provides composition wiring.
+- `skg-orch-kit` provides composition wiring.
 
 Still required:
 

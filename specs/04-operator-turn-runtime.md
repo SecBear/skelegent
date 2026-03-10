@@ -4,7 +4,7 @@
 
 The operator runtime is where the agent "thinks and acts." It is the inner loop.
 
-In Neuron, this is implemented by crates like `neuron-context-engine` and `neuron-op-single-shot` using provider implementations and tool/context infrastructure.
+In Skelegent, this is implemented by crates like `skg-context-engine` and `skg-op-single-shot` using provider implementations and tool/context infrastructure.
 
 ## Required Capabilities
 
@@ -63,7 +63,7 @@ Provider safety stops are semantically distinct from all `ExitReason` variants a
 | Retriable? | No without context modification | Depends | N/A |
 | Cause | Provider safety system | Execution/API failure | Natural completion |
 
-Provider mapping: Anthropic `refusal`, OpenAI `content_filter`, Google `SAFETY` all map to `StopReason::ContentFilter` in Neuron's provider layer.
+Provider mapping: Anthropic `refusal`, OpenAI `content_filter`, Google `SAFETY` all map to `StopReason::ContentFilter` in Skelegent's provider layer.
 
 ### Exit Priority Ordering
 
@@ -79,7 +79,7 @@ Orchestrators that need to distinguish cost exhaustion from tool-call exhaustion
 
 ## Steering Observability
 
-Steering (`SteeringSource` in `neuron-turn-kit`) is an optional source of mid-loop control messages. The `SteeringSource` trait provides a `drain()` method called between turns to inject new instructions or skip tool execution.
+Steering (`SteeringSource` in `skg-turn-kit`) is an optional source of mid-loop control messages. The `SteeringSource` trait provides a `drain()` method called between turns to inject new instructions or skip tool execution.
 
 ## Model Selection
 
@@ -87,7 +87,7 @@ Steering (`SteeringSource` in `neuron-turn-kit`) is an optional source of mid-lo
 
 ## Context Budget
 
-Context budget management is handled by the `BudgetGuard` rule in `neuron-context-engine`. The guard checks four limits before each inference call:
+Context budget management is handled by the `BudgetGuard` rule in `skg-context-engine`. The guard checks four limits before each inference call:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -128,7 +128,7 @@ An unannotated `ProviderMessage` wrapped via `Message::from(msg)` behaves as if 
 
 ## Compaction Strategy
 
-Compaction in `neuron-context-engine` is handled via two mechanisms:
+Compaction in `skg-context-engine` is handled via two mechanisms:
 
 ### Rule-based compaction
 
@@ -151,7 +151,7 @@ These compose freely with `FlushToStore` (persist extracted state) and `InjectFr
 - **`FlushToStore`** — runs an extractor closure over context, writes results to a `StateStore`
 - **`InjectFromStore`** — searches a `StateStore`, injects results as system/user messages at configurable positions
 
-See `op/neuron-context-engine/DESIGN.md` for the full composition pattern.
+See `op/skg-context-engine/DESIGN.md` for the full composition pattern.
 
 ### Pre-Compaction Flush
 
@@ -172,13 +172,13 @@ If the flush fails, `CompactionEvent::FlushFailed` is emitted with the scope and
 
 Operators emit `BudgetEvent` and `CompactionEvent` lifecycle events. See `specs/09-hooks-lifecycle-and-governance.md` for the full vocabulary and semantics.
 
-Budget and compaction events are handled via the Rule system in `neuron-context-engine`. Attach a `BudgetGuard` rule to the `Context` before calling `react_loop()`.
+Budget and compaction events are handled via the Rule system in `skg-context-engine`. Attach a `BudgetGuard` rule to the `Context` before calling `react_loop()`.
 
 ## Current Implementation Status
 
 Implemented:
-- `neuron-op-single-shot` — functional.
-- `neuron-context-engine` — full ReAct loop with streaming; emits effects.
+- `skg-op-single-shot` — functional.
+- `skg-context-engine` — full ReAct loop with streaming; emits effects.
 - `react_loop()` and `react_loop_structured()` for regular and structured output.
 - `stream_react_loop()` for streaming responses.
 - Steering integrated via `SteeringSource` trait.

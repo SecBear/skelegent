@@ -1,16 +1,16 @@
 ---
 name: Bug Report
-about: Report a bug in neuron
+about: Report a bug in skelegent
 labels: bug
 ---
 
 ## Crate
 
-Which crate is affected? (e.g., layer0, neuron-tool, neuron-orch-local, neuron-provider-anthropic)
+Which crate is affected? (e.g., layer0, skg-tool, skg-orch-local, skg-provider-anthropic)
 
 ## Version
 
-What version are you using? (`cargo tree -p neuron` to check)
+What version are you using? (`cargo tree -p skelegent` to check)
 
 ## Description
 

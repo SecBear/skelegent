@@ -2,7 +2,7 @@
 
 Tools give operators the ability to take actions: read files, make HTTP requests, query databases, or perform any side-effecting operation. The tool system is built around the `ToolDyn` trait and the `ToolRegistry`.
 
-> **Unified model:** In the neuron architecture, tools are operators registered with `ToolMetadata`. `ToolDyn` and `ToolRegistry` are the Layer 1 convenience API; at the protocol level, tools are dispatched as operators. The `ToolOperator` adapter (from `neuron_tool::adapter`) bridges `ToolDyn` to the `Operator` trait, so any `ToolDyn` implementation can be used anywhere an `Operator` is expected.
+> **Unified model:** In the skelegent architecture, tools are operators registered with `ToolMetadata`. `ToolDyn` and `ToolRegistry` are the Layer 1 convenience API; at the protocol level, tools are dispatched as operators. The `ToolOperator` adapter (from `skg_tool::adapter`) bridges `ToolDyn` to the `Operator` trait, so any `ToolDyn` implementation can be used anywhere an `Operator` is expected.
 
 ## The ToolDyn trait
 
@@ -30,7 +30,7 @@ pub trait ToolDyn: Send + Sync {
 Implement `ToolDyn` for any struct:
 
 ```rust
-use neuron_tool::{ToolDyn, ToolError};
+use skg_tool::{ToolDyn, ToolError};
 use serde_json::{json, Value};
 use std::future::Future;
 use std::pin::Pin;
@@ -84,7 +84,7 @@ impl ToolDyn for ReadFileTool {
 `ToolRegistry` is a named collection of tools:
 
 ```rust
-use neuron_tool::ToolRegistry;
+use skg_tool::ToolRegistry;
 use std::sync::Arc;
 
 let mut registry = ToolRegistry::new();
@@ -110,7 +110,7 @@ Tools are keyed by name. Registering a tool with the same name as an existing to
 `AliasedTool` wraps an existing tool under a different name. This is useful when importing tools from external systems (e.g., MCP servers) where upstream names do not match your desired naming scheme:
 
 ```rust
-use neuron_tool::AliasedTool;
+use skg_tool::AliasedTool;
 use std::sync::Arc;
 
 let original: Arc<dyn ToolDyn> = Arc::new(ReadFileTool);

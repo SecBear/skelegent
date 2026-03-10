@@ -1,6 +1,6 @@
-# Neuron — composable agentic runtime
+# Skelegent — composable agentic runtime
 
-Neuron is an experiment in building an agentic system that is **composable by construction**:
+Skelegent is an experiment in building an agentic system that is **composable by construction**:
 layered protocol contracts, swappable providers/tools/state, and deterministic backpressure via
 tests and specs.
 
@@ -18,56 +18,56 @@ This repo assumes Rust tooling is provided by the Nix flake.
 Core:
 
 - `layer0/` — protocol traits + wire contract
-- `neuron/` — umbrella crate
+- `skelegent/` — umbrella crate
 
 Turn (`turn/`):
 
-- `neuron-turn` — turn types + provider abstraction
-- `neuron-turn-kit` — turn decomposition primitives
-- `neuron-context` — prompt/context assembly
-- `neuron-tool` — tool traits + `ToolRegistry`
-- `neuron-mcp` — MCP client/server
+- `skg-turn` — turn types + provider abstraction
+- `skg-turn-kit` — turn decomposition primitives
+- `skg-context` — prompt/context assembly
+- `skg-tool` — tool traits + `ToolRegistry`
+- `skg-mcp` — MCP client/server
 
 Operators (`op/`):
 
-- `neuron-context-engine` — ReAct-style operator loop
-- `neuron-op-single-shot` — single-shot operator
+- `skg-context-engine` — ReAct-style operator loop
+- `skg-op-single-shot` — single-shot operator
 
 Orchestration (`orch/`):
 
-- `neuron-orch-kit` — composition building blocks
-- `neuron-orch-local` — local orchestrator
+- `skg-orch-kit` — composition building blocks
+- `skg-orch-local` — local orchestrator
 
 Effects (`effects/`):
 
-- `neuron-effects-core` — effect executor trait
-- `neuron-effects-local` — local effect interpreter
+- `skg-effects-core` — effect executor trait
+- `skg-effects-local` — local effect interpreter
 
 Middleware (`hooks/`):
 
-- `neuron-hook-security` — security middleware (RedactionMiddleware, ExfilGuardMiddleware)
+- `skg-hook-security` — security middleware (RedactionMiddleware, ExfilGuardMiddleware)
 
 State (`state/`):
 
-- `neuron-state-memory` — in-memory state store
-- `neuron-state-fs` — filesystem-backed state store
+- `skg-state-memory` — in-memory state store
+- `skg-state-fs` — filesystem-backed state store
 
 Environment (`env/`):
 
-- `neuron-env-local` — local environment (process/tool execution glue)
+- `skg-env-local` — local environment (process/tool execution glue)
 
 Providers (`provider/`):
 
-- `neuron-provider-anthropic`
-- `neuron-provider-openai`
-- `neuron-provider-ollama`
+- `skg-provider-anthropic`
+- `skg-provider-openai`
+- `skg-provider-ollama`
 
 Security (`secret/`, `auth/`, `crypto/`):
 
-- `neuron-secret` — secret resolution
-- `neuron-secret-vault` — HashiCorp Vault backend
-- `neuron-auth` — auth/credential framework
-- `neuron-crypto` — cryptographic primitives
+- `skg-secret` — secret resolution
+- `skg-secret-vault` — HashiCorp Vault backend
+- `skg-auth` — auth/credential framework
+- `skg-crypto` — cryptographic primitives
 
 ## Implementations
 
@@ -75,4 +75,4 @@ Heavy-dependency implementations — SQLite, CozoDB, Temporal, Git effects, swee
 operators, and auth providers — live in a separate repository to keep this core
 dependency-free:
 
-[**neuron-extras**](https://github.com/SecBear/neuron-extras) — provider ecosystem
+[**skelegent-extras**](https://github.com/SecBear/skelegent-extras) — provider ecosystem

@@ -8,9 +8,9 @@ This example creates an Anthropic provider, registers a tool, builds a `Context`
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::id::OperatorId;
-use neuron_context_engine::{Context, ReactLoopConfig, react_loop};
-use neuron_provider_anthropic::AnthropicProvider;
-use neuron_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
+use skg_context_engine::{Context, ReactLoopConfig, react_loop};
+use skg_provider_anthropic::AnthropicProvider;
+use skg_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;

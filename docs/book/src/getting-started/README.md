@@ -1,8 +1,8 @@
 # Getting Started
 
-This section covers everything you need to start building with neuron:
+This section covers everything you need to start building with skelegent:
 
-- **[Installation](installation.md)** -- Setting up your environment and adding neuron to your project.
+- **[Installation](installation.md)** -- Setting up your environment and adding skelegent to your project.
 - **[Quickstart](quickstart.md)** -- A minimal working example: create a provider, register tools, and run a ReAct loop.
 - **[Core Concepts](concepts.md)** -- The four protocols, two interfaces, and six layers that make up the architecture.
 

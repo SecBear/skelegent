@@ -297,7 +297,7 @@ impl ToolMetadata {
 /// whatever you call it, this trait is its boundary.
 ///
 /// Implementations:
-/// - neuron's AgentLoop (full-featured operator with tools + context mgmt)
+/// - skelegent's AgentLoop (full-featured operator with tools + context mgmt)
 /// - A raw API call wrapper (minimal, no tools)
 /// - A human-in-the-loop adapter (waits for human input)
 /// - A mock (for testing)

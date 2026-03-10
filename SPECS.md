@@ -1,6 +1,6 @@
-# Neuron Specifications
+# Skelegent Specifications
 
-This directory contains the functional and technical specifications for Neuron.
+This directory contains the functional and technical specifications for Skelegent.
 
 These specs are written to ensure the project is *composable by construction*: once the core is complete, the only remaining work to build a fully fledged local or distributed agentic system should be (1) technology-specific implementations (Temporal, Docker/K8s, Postgres, Vault, etc.) and (2) thin glue/configuration.
 
@@ -14,7 +14,7 @@ These specs are written to ensure the project is *composable by construction*: o
 
 | Spec | Domain | Summary |
 |------|--------|---------|
-| `specs/00-vision-and-non-goals.md` | Product/Philosophy | What Neuron is for, and what it is not |
+| `specs/00-vision-and-non-goals.md` | Product/Philosophy | What Skelegent is for, and what it is not |
 | `specs/01-architecture-and-layering.md` | Architecture | Layering model and responsibility boundaries |
 | `specs/02-layer0-protocol-contract.md` | Layer0 | Protocol traits, wire types, compatibility rules |
 | `specs/03-effects-and-execution-semantics.md` | Runtime | Effect vocabulary and required execution semantics |

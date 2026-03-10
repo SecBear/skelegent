@@ -1,12 +1,12 @@
 # MCP
 
-> **Note:** The MCP integration API may shift as the Model Context Protocol specification evolves. This page provides a summary of the current design. See the `neuron-mcp` crate for the latest API.
+> **Note:** The MCP integration API may shift as the Model Context Protocol specification evolves. This page provides a summary of the current design. See the `skg-mcp` crate for the latest API.
 
 ## Overview
 
-`neuron-mcp` provides a client for the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP is an open protocol for connecting AI models to external data sources and tools. The neuron MCP client connects to MCP servers and exposes their tools as `ToolDyn` implementations that can be registered in a `ToolRegistry`.
+`skg-mcp` provides a client for the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP). MCP is an open protocol for connecting AI models to external data sources and tools. The skelegent MCP client connects to MCP servers and exposes their tools as `ToolDyn` implementations that can be registered in a `ToolRegistry`.
 
-This means tools hosted on MCP servers can be used by neuron operators alongside locally defined tools, with no difference in how the operator interacts with them.
+This means tools hosted on MCP servers can be used by skelegent operators alongside locally defined tools, with no difference in how the operator interacts with them.
 
 ## Integration pattern
 
@@ -30,9 +30,9 @@ For tools that are specific to your application and do not need to be shared, im
 
 ## Crate
 
-The `neuron-mcp` crate depends on `layer0` and `neuron-tool`. Enable it via the `mcp` feature flag on the `neuron` umbrella crate:
+The `skg-mcp` crate depends on `layer0` and `skg-tool`. Enable it via the `mcp` feature flag on the `skelegent` umbrella crate:
 
 ```toml
 [dependencies]
-neuron = { version = "0.4", features = ["mcp"] }
+skelegent = { version = "0.4", features = ["mcp"] }
 ```

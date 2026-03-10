@@ -1,8 +1,8 @@
-# Neuron
+# Skelegent
 
 > 6-layer composable agentic AI runtime in Rust.
 
-Neuron is a Rust framework for building agentic AI systems. It decomposes
+Skelegent is a Rust framework for building agentic AI systems. It decomposes
 the problem into six architectural layers (Layer 0 through Layer 5), each with clear trait
 boundaries, so every concern — from protocol serialization to secret
 management — lives in exactly one place.
@@ -16,7 +16,7 @@ management — lives in exactly one place.
 
 ### Build
 
-Neuron builds inside a Nix devshell:
+Skelegent builds inside a Nix devshell:
 
 ```sh
 nix develop --command cargo test --workspace --all-targets
@@ -80,71 +80,71 @@ nix develop --command cargo doc --workspace --no-deps
 
 | Crate | Path |
 |-------|------|
-| neuron-turn | [turn/neuron-turn](turn/neuron-turn/) |
-| neuron-context | [turn/neuron-context](turn/neuron-context/) |
-| neuron-tool | [turn/neuron-tool](turn/neuron-tool/) |
-| neuron-tool-macro | [turn/neuron-tool-macro](turn/neuron-tool-macro/) |
-| neuron-mcp | [turn/neuron-mcp](turn/neuron-mcp/) |
-| neuron-turn-kit | [turn/neuron-turn-kit](turn/neuron-turn-kit/) |
+| skg-turn | [turn/skg-turn](turn/skg-turn/) |
+| skg-context | [turn/skg-context](turn/skg-context/) |
+| skg-tool | [turn/skg-tool](turn/skg-tool/) |
+| skg-tool-macro | [turn/skg-tool-macro](turn/skg-tool-macro/) |
+| skg-mcp | [turn/skg-mcp](turn/skg-mcp/) |
+| skg-turn-kit | [turn/skg-turn-kit](turn/skg-turn-kit/) |
 
 ### Layer 1 — Operators
 
 | Crate | Path |
 |-------|------|
-| neuron-context-engine | [op/neuron-context-engine](op/neuron-context-engine/) |
-| neuron-op-single-shot | [op/neuron-op-single-shot](op/neuron-op-single-shot/) |
+| skg-context-engine | [op/skg-context-engine](op/skg-context-engine/) |
+| skg-op-single-shot | [op/skg-op-single-shot](op/skg-op-single-shot/) |
 
 ### Layer 1 — Providers
 
 | Crate | Path |
 |-------|------|
-| neuron-provider-anthropic | [provider/neuron-provider-anthropic](provider/neuron-provider-anthropic/) |
-| neuron-provider-openai | [provider/neuron-provider-openai](provider/neuron-provider-openai/) |
-| neuron-provider-ollama | [provider/neuron-provider-ollama](provider/neuron-provider-ollama/) |
-| neuron-provider-codex | [provider/neuron-provider-codex](provider/neuron-provider-codex/) |
+| skg-provider-anthropic | [provider/skg-provider-anthropic](provider/skg-provider-anthropic/) |
+| skg-provider-openai | [provider/skg-provider-openai](provider/skg-provider-openai/) |
+| skg-provider-ollama | [provider/skg-provider-ollama](provider/skg-provider-ollama/) |
+| skg-provider-codex | [provider/skg-provider-codex](provider/skg-provider-codex/) |
 
 ### Layer 2 — Orchestration
 
 | Crate | Path |
 |-------|------|
-| neuron-orch-local | [orch/neuron-orch-local](orch/neuron-orch-local/) |
-| neuron-orch-kit | [orch/neuron-orch-kit](orch/neuron-orch-kit/) |
+| skg-orch-local | [orch/skg-orch-local](orch/skg-orch-local/) |
+| skg-orch-kit | [orch/skg-orch-kit](orch/skg-orch-kit/) |
 
 ### Layer 2 — Effects
 
 | Crate | Path |
 |-------|------|
-| neuron-effects-core | [effects/neuron-effects-core](effects/neuron-effects-core/) |
-| neuron-effects-local | [effects/neuron-effects-local](effects/neuron-effects-local/) |
+| skg-effects-core | [effects/skg-effects-core](effects/skg-effects-core/) |
+| skg-effects-local | [effects/skg-effects-local](effects/skg-effects-local/) |
 
 ### Layer 3 — State
 
 | Crate | Path |
 |-------|------|
-| neuron-state-memory | [state/neuron-state-memory](state/neuron-state-memory/) |
-| neuron-state-fs | [state/neuron-state-fs](state/neuron-state-fs/) |
+| skg-state-memory | [state/skg-state-memory](state/skg-state-memory/) |
+| skg-state-fs | [state/skg-state-fs](state/skg-state-fs/) |
 
 ### Layer 4 — Environment
 
 | Crate | Path |
 |-------|------|
-| neuron-env-local | [env/neuron-env-local](env/neuron-env-local/) |
-| neuron-secret | [secret/neuron-secret](secret/neuron-secret/) |
-| neuron-secret-vault | [secret/neuron-secret-vault](secret/neuron-secret-vault/) |
-| neuron-auth | [auth/neuron-auth](auth/neuron-auth/) |
-| neuron-crypto | [crypto/neuron-crypto](crypto/neuron-crypto/) |
+| skg-env-local | [env/skg-env-local](env/skg-env-local/) |
+| skg-secret | [secret/skg-secret](secret/skg-secret/) |
+| skg-secret-vault | [secret/skg-secret-vault](secret/skg-secret-vault/) |
+| skg-auth | [auth/skg-auth](auth/skg-auth/) |
+| skg-crypto | [crypto/skg-crypto](crypto/skg-crypto/) |
 
 ### Layer 5 — Cross-cutting (Hooks)
 
 | Crate | Path |
 |-------|------|
-| neuron-hook-security | [hooks/neuron-hook-security](hooks/neuron-hook-security/) |
+| skg-hook-security | [hooks/skg-hook-security](hooks/skg-hook-security/) |
 
 ### Umbrella
 
 | Crate | Path |
 |-------|------|
-| neuron | [neuron/](neuron/) |
+| skelegent | [skelegent/](skelegent/) |
 
 ### Testing
 

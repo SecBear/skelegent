@@ -4,7 +4,7 @@
 
 ## Design pattern
 
-neuron uses `thiserror` for all error types. Each protocol has its own error enum in `layer0::error`. Error types are `#[non_exhaustive]` so new variants can be added without breaking downstream code.
+skelegent uses `thiserror` for all error types. Each protocol has its own error enum in `layer0::error`. Error types are `#[non_exhaustive]` so new variants can be added without breaking downstream code.
 
 Every error enum includes an `Other` variant with `#[from] Box<dyn std::error::Error + Send + Sync>` for wrapping arbitrary errors. This provides an escape hatch for implementation-specific errors that do not fit the named variants.
 
@@ -78,7 +78,7 @@ Like `OrchError`, `OperatorError` propagates into `EnvError` via `From`.
 
 ### ProviderError
 
-Errors from LLM providers (Layer 1, `neuron_turn::provider::ProviderError`):
+Errors from LLM providers (Layer 1, `skg_turn::provider::ProviderError`):
 
 ```rust
 pub enum ProviderError {
@@ -95,7 +95,7 @@ pub enum ProviderError {
 
 ### ToolError
 
-Errors from tool operations (Layer 1, `neuron_tool::ToolError`):
+Errors from tool operations (Layer 1, `skg_tool::ToolError`):
 
 ```rust
 pub enum ToolError {

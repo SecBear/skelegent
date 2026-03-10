@@ -1,6 +1,6 @@
 # Guides
 
-Practical guides for working with each subsystem in neuron:
+Practical guides for working with each subsystem in skelegent:
 
 - **[Providers](providers.md)** -- How to configure and use LLM providers (Anthropic, OpenAI, Ollama).
 - **[Tools](tools.md)** -- How to create tools, register them, and use them with operators.

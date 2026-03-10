@@ -14,7 +14,7 @@
 //! use std::sync::Arc;
 //! use layer0::content::{Content, ContentBlock};
 //! use layer0::operator::{Operator, OperatorInput, TriggerType, ExitReason};
-//! use neuron_tool::{ToolRegistry, ToolDyn, ToolError};
+//! use skg_tool::{ToolRegistry, ToolDyn, ToolError};
 //! use serde_json::{json, Value};
 //! use std::pin::Pin;
 //! use std::future::Future;
@@ -24,7 +24,7 @@
 //!     fn name(&self) -> &str { "echo" }
 //!     fn description(&self) -> &str { "echoes input" }
 //!     fn input_schema(&self) -> Value { json!({"type": "object"}) }
-//!     fn call(&self, input: Value, _ctx: &neuron_tool::ToolCallContext) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
+//!     fn call(&self, input: Value, _ctx: &skg_tool::ToolCallContext) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
 //!         Box::pin(async move { Ok(json!({"echo": input})) })
 //!     }
 //! }
@@ -58,7 +58,7 @@ use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::error::OperatorError;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, SubDispatchRecord};
-use neuron_tool::ToolRegistry;
+use skg_tool::ToolRegistry;
 
 /// A minimal operator that batches tool calls between barriers.
 pub struct BarrierOperator {
@@ -94,7 +94,7 @@ impl Operator for BarrierOperator {
                 let start = std::time::Instant::now();
                 if let Some(tool) = tools.get(&name) {
                     let ctx =
-                        neuron_tool::ToolCallContext::new(layer0::id::OperatorId::new("barrier"));
+                        skg_tool::ToolCallContext::new(layer0::id::OperatorId::new("barrier"));
                     match tool.call(params, &ctx).await {
                         Ok(val) => {
                             let content = val.to_string();
@@ -183,7 +183,7 @@ impl Operator for BarrierOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neuron_tool::{ToolDyn, ToolError};
+    use skg_tool::{ToolDyn, ToolError};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -201,7 +201,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
-            _ctx: &neuron_tool::ToolCallContext,
+            _ctx: &skg_tool::ToolCallContext,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {

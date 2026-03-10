@@ -2,7 +2,7 @@
 
 ## The confusion this doc prevents
 
-People building on neuron hit the same confusion: "I need to chain multiple LLM
+People building on skelegent hit the same confusion: "I need to chain multiple LLM
 calls. Where does that code go? Is it an operator? A new trait? Something
 between operator and orchestrator?"
 
@@ -40,7 +40,7 @@ What operators do NOT do:
 
 The orchestrator composes operators into workflows, handles durability, injects
 credentials, coordinates communication, and executes effects. It is
-intentionally the vaguest protocol in neuron because composition semantics vary
+intentionally the vaguest protocol in skelegent because composition semantics vary
 wildly by deployment.
 
 ```rust
@@ -167,7 +167,7 @@ abstraction needed.
 
 ### Separate "client" crates for HTTP APIs
 
-**Wrong**: Creating `neuron-client-parallel-ai` or `neuron-client-github`.
+**Wrong**: Creating `skg-client-parallel-ai` or `skg-client-github`.
 
 Per the architecture: HTTP clients are implementation details inside
 provider/effect crates. They embed inside the operator or effect executor that

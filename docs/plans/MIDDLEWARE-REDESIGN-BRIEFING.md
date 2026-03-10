@@ -40,7 +40,7 @@ pub trait ExecMiddleware: Send + Sync {
 }
 ```
 
-Provider middleware is **NOT in layer0** — it stays in neuron-turn (Layer 1),
+Provider middleware is **NOT in layer0** — it stays in skg-turn (Layer 1),
 uses generic wrapping (`RetryProvider<P: Provider>`), not `Box<dyn>`.
 
 ### 2. Middleware stack builder with semantic ordering
@@ -74,24 +74,24 @@ impl Context {
 }
 ```
 
-Replaces: `AgentContext<M>` (layer0), `AnnotatedMessage` (neuron-turn),
-`ContextStrategy` trait (neuron-turn).
+Replaces: `AgentContext<M>` (layer0), `AnnotatedMessage` (skg-turn),
+`ContextStrategy` trait (skg-turn).
 
 ### 4. ReactOperator-internal hook points move out of layer0
 
 `PreInference`, `PostInference`, `ExitCheck`, `SubDispatchUpdate`,
 `PreSteeringInject`, `PostSteeringSkip` become a local `ReactInterceptor`
-trait in `neuron-op-react`. These are operator implementation details,
+trait in `skg-op-react`. These are operator implementation details,
 not protocol boundaries.
 
 ## What Gets Deleted
 
 - `Hook` trait, `HookPoint` enum (19 variants), `HookContext` (18 optional fields)
 - `HookAction` enum, `HookPayload` enum
-- `HookRegistry` (neuron-hooks crate)
+- `HookRegistry` (skg-hooks crate)
 - `ObservableEvent`, `EventSource` (lifecycle.rs)
 - `AgentContext<M>`, `ContextMessage<M>` (layer0)
-- `AnnotatedMessage`, `ContextStrategy` trait (neuron-turn)
+- `AnnotatedMessage`, `ContextStrategy` trait (skg-turn)
 
 ## What Stays Unchanged
 
@@ -108,50 +108,50 @@ not protocol boundaries.
 | File | What it does with hooks |
 |------|------------------------|
 | `layer0/src/hook.rs` | Definition: HookPoint, HookAction, HookContext, Hook trait |
-| `hooks/neuron-hooks/src/lib.rs` | HookRegistry: 3-phase dispatch (Observer/Transformer/Guardrail) |
-| `hooks/neuron-hook-security/src/lib.rs` | RedactionHook (PostSubDispatch), ExfilGuardHook (PreSubDispatch) |
-| `op/neuron-op-react/src/lib.rs` | Heaviest consumer: 9 hook points (PreInference:646, PostInference:702, PreSubDispatch:936, PostSubDispatch:1019, ExitCheck:1374, PreSteeringInject:542, PostSteeringSkip:835/888/1110/1171, PreCompaction:1554, PostCompaction:1598) |
-| `orch/neuron-orch-local/src/lib.rs` | PreDispatch:83, PostDispatch:100, HookPayload::Dispatch |
-| `orch/neuron-orch-kit/src/runner.rs` | PreMemoryWrite:154, HookAction matching:165 |
-| `effects/neuron-effects-local/src/lib.rs` | PreMemoryWrite:87-89, dispatch:97 |
+| `hooks/skg-hooks/src/lib.rs` | HookRegistry: 3-phase dispatch (Observer/Transformer/Guardrail) |
+| `hooks/skg-hook-security/src/lib.rs` | RedactionHook (PostSubDispatch), ExfilGuardHook (PreSubDispatch) |
+| `op/skg-op-react/src/lib.rs` | Heaviest consumer: 9 hook points (PreInference:646, PostInference:702, PreSubDispatch:936, PostSubDispatch:1019, ExitCheck:1374, PreSteeringInject:542, PostSteeringSkip:835/888/1110/1171, PreCompaction:1554, PostCompaction:1598) |
+| `orch/skg-orch-local/src/lib.rs` | PreDispatch:83, PostDispatch:100, HookPayload::Dispatch |
+| `orch/skg-orch-kit/src/runner.rs` | PreMemoryWrite:154, HookAction matching:165 |
+| `effects/skg-effects-local/src/lib.rs` | PreMemoryWrite:87-89, dispatch:97 |
 | `layer0/src/test_utils/logging_hook.rs` | LoggingHook test util |
-| `effects/neuron-effects-local/tests/hooks.rs` | HaltHook, RecordingObserver, ModifyTransformer, LifetimeGuardrail |
-| `hooks/neuron-hooks/tests/registry.rs` | NamedHook, HaltingHook, SkipDispatchHook, ModifyInputHook |
-| `orch/neuron-orch-local/tests/orch.rs` | CountHook test |
-| `orch/neuron-orch-kit/tests/hooks.rs` | HaltHook test |
+| `effects/skg-effects-local/tests/hooks.rs` | HaltHook, RecordingObserver, ModifyTransformer, LifetimeGuardrail |
+| `hooks/skg-hooks/tests/registry.rs` | NamedHook, HaltingHook, SkipDispatchHook, ModifyInputHook |
+| `orch/skg-orch-local/tests/orch.rs` | CountHook test |
+| `orch/skg-orch-kit/tests/hooks.rs` | HaltHook test |
 
 ### Context/AnnotatedMessage consumers
 
 | File | What it uses |
 |------|-------------|
 | `layer0/src/context.rs` | AgentContext<M> definition (UNUSED — no consumers) |
-| `turn/neuron-turn/src/context.rs` | AnnotatedMessage struct, ContextStrategy trait, NoCompaction |
-| `turn/neuron-context/src/lib.rs` | SlidingWindow + TieredStrategy implementing ContextStrategy |
-| `turn/neuron-context/src/context_assembly.rs` | ContextAssembler producing Vec<AnnotatedMessage> |
-| `op/neuron-op-react/src/lib.rs` | context_strategy field:185, current_context as Vec<AnnotatedMessage>:198, AnnotatedMessage::from at 779/817/866/1087/1138/1158/1353/1363, compact:1572 |
+| `turn/skg-turn/src/context.rs` | AnnotatedMessage struct, ContextStrategy trait, NoCompaction |
+| `turn/skg-context/src/lib.rs` | SlidingWindow + TieredStrategy implementing ContextStrategy |
+| `turn/skg-context/src/context_assembly.rs` | ContextAssembler producing Vec<AnnotatedMessage> |
+| `op/skg-op-react/src/lib.rs` | context_strategy field:185, current_context as Vec<AnnotatedMessage>:198, AnnotatedMessage::from at 779/817/866/1087/1138/1158/1353/1363, compact:1572 |
 
 ### Protocol trait implementations (middleware targets)
 
 | Trait | Implementations |
 |-------|----------------|
-| Orchestrator | LocalOrch (`orch/neuron-orch-local`), ToolRegistryOrch (`turn/neuron-tool`), TemporalOrch (`orch/neuron-orch-temporal`), test LocalOrch (`layer0/test_utils`) |
-| StateStore | FsStore (`state/neuron-state-fs`), MemoryStore (`state/neuron-state-memory`), InMemoryStore (`layer0/test_utils`) |
-| Environment | LocalEnv (`env/neuron-env-local`) |
+| Orchestrator | LocalOrch (`orch/skg-orch-local`), ToolRegistryOrch (`turn/skg-tool`), TemporalOrch (`orch/skg-orch-temporal`), test LocalOrch (`layer0/test_utils`) |
+| StateStore | FsStore (`state/skg-state-fs`), MemoryStore (`state/skg-state-memory`), InMemoryStore (`layer0/test_utils`) |
+| Environment | LocalEnv (`env/skg-env-local`) |
 
 ### extras/ consumers (will need recompile but minimal changes)
 
 | File | Concern |
 |------|---------|
-| `extras/orch/neuron-orch-kit/src/middleware.rs` | MiddlewareOrchestrator — already does middleware pattern! |
-| `extras/orch/neuron-orch-kit/src/runner.rs` | LocalEffectInterpreter — fires PreMemoryWrite hook |
-| `extras/orch/neuron-orch-kit/src/routing.rs` | RoutingOrchestrator — pure delegation |
-| `extras/orch/neuron-orch-temporal/src/lib.rs` | TemporalOrch — pure delegation |
+| `extras/orch/skg-orch-kit/src/middleware.rs` | MiddlewareOrchestrator — already does middleware pattern! |
+| `extras/orch/skg-orch-kit/src/runner.rs` | LocalEffectInterpreter — fires PreMemoryWrite hook |
+| `extras/orch/skg-orch-kit/src/routing.rs` | RoutingOrchestrator — pure delegation |
+| `extras/orch/skg-orch-temporal/src/lib.rs` | TemporalOrch — pure delegation |
 
 ## Key Constraints
 
 - **Provider is RPITIT, NOT object-safe** — generic `<P: Provider>` is the boundary
 - **`OperatorInput`/`OperatorOutput` are `#[non_exhaustive]`** — use `::new()` constructors
-- **No external decision vocabulary** (framework-specific IDs) in neuron/ code or docs
+- **No external decision vocabulary** (framework-specific IDs) in skelegent/ code or docs
 - **Authority**: ARCHITECTURE.md > specs/ > rules/ > judgment
 - **Verification**: `cd neuron/ && nix develop --command cargo test --workspace --all-targets`
 

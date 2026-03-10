@@ -4,7 +4,7 @@ Entrypoint for any coding agent working in this repo.
 
 ## What This Project Is
 
-Neuron is a Rust workspace implementing a 6-layer composable agentic AI architecture.
+Skelegent is a Rust workspace implementing a 6-layer composable agentic AI architecture.
 Layer 0 defines the stability contract. Layers 1-5 build implementations on top.
 
 `CLAUDE.md` is a symlink to this file. Both point to the same content.

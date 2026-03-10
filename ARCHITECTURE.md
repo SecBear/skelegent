@@ -1,6 +1,6 @@
 # Architecture
 
-Neuron is a composable agentic AI runtime. This document explains what we chose
+Skelegent is a composable agentic AI runtime. This document explains what we chose
 and why. It governs all architectural decisions in this codebase.
 
 This is a living document. When the problem space evolves, update positions here
@@ -120,7 +120,7 @@ but always explicitly configured, never implicitly assumed.
 **History**: The turn reads from state; it writes only through effects. The
 state backend is swappable without turn changes. Conversation persistence
 (save/load context) is implemented via `SaveConversation` / `LoadConversation`
-ops from `neuron-context-engine` — a user-triggered portable checkpoint pattern for long sessions.
+ops from `skg-context-engine` — a user-triggered portable checkpoint pattern for long sessions.
 
 **Memory**: Three tiers — hot (always loaded, taxes every turn), warm
 (on-demand within session), cold (cross-session search). Tier assignment is
@@ -270,7 +270,7 @@ and must not be unified:
 - Planner is declarative, returns batch plans, composes by delegation.
 
 Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware` from
-`neuron-hook-security`) provides visibility into steering and dispatch
+`skg-hook-security`) provides visibility into steering and dispatch
 without conflating architecturally distinct primitives.
 
 Middleware composition varies by boundary: dispatch middleware wraps sub-operator
@@ -290,7 +290,7 @@ A recurring question in agent frameworks: how does a parent inject behavior
 into a child agent at dispatch time? Rule injection, middleware descriptors,
 policy schemas — every framework eventually faces this.
 
-Neuron's answer: **don't serialize behavior. Share it through construction.**
+Skelegent's answer: **don't serialize behavior. Share it through construction.**
 
 This is not novel. It is the pattern behind every composition model that
 scaled:
@@ -305,7 +305,7 @@ scaled:
 
 The principle: **the composition point is the constructor, not the message.**
 
-### What this means for neuron
+### What this means for skelegent
 
 Rules, middleware, and operators are live objects — closures, trait objects,
 function pointers. They compose at construction time via `Context::add_rule()`,
