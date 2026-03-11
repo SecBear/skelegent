@@ -1,3 +1,4 @@
+use layer0::dispatch::Dispatcher;
 use layer0::content::Content;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::id::{OperatorId, WorkflowId};
@@ -33,7 +34,7 @@ impl MockOrch {
 }
 
 #[async_trait::async_trait]
-impl Orchestrator for MockOrch {
+impl Dispatcher for MockOrch {
     async fn dispatch(
         &self,
         operator: &OperatorId,
@@ -48,6 +49,10 @@ impl Orchestrator for MockOrch {
             ExitReason::Complete,
         ))
     }
+}
+
+#[async_trait::async_trait]
+impl Orchestrator for MockOrch {
 
     async fn dispatch_many(
         &self,

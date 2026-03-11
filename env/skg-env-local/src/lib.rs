@@ -11,7 +11,6 @@
 //! no remote execution boundaries, no network policy enforcement.
 
 use async_trait::async_trait;
-use layer0::dispatch::Capabilities;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
@@ -215,7 +214,7 @@ impl Environment for LocalEnv {
 
         let result = self
             .op
-            .execute(input, &Capabilities::none())
+            .execute(input)
             .await
             .map_err(EnvError::OperatorError);
         drop(cleanup);
@@ -400,7 +399,7 @@ mod tests {
 
     #[async_trait]
     impl Operator for EchoOperator {
-        async fn execute(&self, input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
+        async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
             Ok(OperatorOutput::new(input.message, ExitReason::Complete))
         }
     }
@@ -409,7 +408,7 @@ mod tests {
 
     #[async_trait]
     impl Operator for FailOperator {
-        async fn execute(&self, _input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
+        async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
             Err(OperatorError::Model("deliberate failure".into()))
         }
     }

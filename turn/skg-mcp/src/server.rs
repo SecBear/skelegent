@@ -10,7 +10,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use layer0::dispatch::Capabilities;
 use layer0::operator::{Operator, TriggerType};
 use layer0::{StateReader, ToolMetadata};
 use rmcp::model::{
@@ -62,7 +61,7 @@ impl ToolDyn for OperatorToolAdapter {
             let op_input =
                 layer0::OperatorInput::new(layer0::Content::text(json_str), TriggerType::Task);
             let output = operator
-                .execute(op_input, &Capabilities::none())
+                .execute(op_input)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
             let text = output.message.as_text().unwrap_or("null").to_owned();
@@ -698,7 +697,7 @@ mod tests {
 
         #[async_trait]
         impl layer0::operator::Operator for EchoOperator {
-            async fn execute(&self, input: OperatorInput, _caps: &layer0::dispatch::Capabilities) -> Result<OperatorOutput, OperatorError> {
+            async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
                 Ok(OperatorOutput::new(input.message, ExitReason::Complete))
             }
         }
@@ -733,7 +732,6 @@ mod tests {
             async fn execute(
                 &self,
                 _input: OperatorInput,
-                _caps: &layer0::dispatch::Capabilities,
             ) -> Result<OperatorOutput, OperatorError> {
                 let text = self.response.to_string();
                 Ok(OperatorOutput::new(

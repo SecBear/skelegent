@@ -1,4 +1,5 @@
 use layer0::content::Content;
+use layer0::dispatch::Dispatcher;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
@@ -49,7 +50,6 @@ impl layer0::operator::Operator for FailingOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
-        _caps: &layer0::dispatch::Capabilities,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         Err(layer0::error::OperatorError::NonRetryable(
             "always fails".into(),

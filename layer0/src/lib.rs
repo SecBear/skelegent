@@ -74,7 +74,7 @@ pub use context::{
     OperatorContext, Position, Role, WatcherVerdict,
 };
 pub use duration::DurationMs;
-pub use dispatch::{Capabilities, Dispatcher};
+pub use dispatch::Dispatcher;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};

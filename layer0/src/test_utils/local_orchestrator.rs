@@ -36,7 +36,7 @@ impl Default for LocalOrchestrator {
 }
 
 #[async_trait]
-impl Orchestrator for LocalOrchestrator {
+impl crate::dispatch::Dispatcher for LocalOrchestrator {
     async fn dispatch(
         &self,
         operator: &OperatorId,
@@ -46,9 +46,12 @@ impl Orchestrator for LocalOrchestrator {
             .operators
             .get(operator.as_str())
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input, &crate::dispatch::Capabilities::none()).await.map_err(OrchError::OperatorError)
+        op.execute(input).await.map_err(OrchError::OperatorError)
     }
+}
 
+#[async_trait]
+impl Orchestrator for LocalOrchestrator {
     async fn dispatch_many(
         &self,
         tasks: Vec<(OperatorId, OperatorInput)>,
@@ -61,7 +64,7 @@ impl Orchestrator for LocalOrchestrator {
                     let operator = Arc::clone(operator);
                     handles.push(tokio::spawn(async move {
                         operator
-                            .execute(input, &crate::dispatch::Capabilities::none())
+                            .execute(input)
                             .await
                             .map_err(OrchError::OperatorError)
                     }));
@@ -87,7 +90,6 @@ impl Orchestrator for LocalOrchestrator {
     }
 
     async fn signal(&self, _target: &WorkflowId, _signal: SignalPayload) -> Result<(), OrchError> {
-        // LocalOrchestrator doesn't track running workflows
         Ok(())
     }
 
@@ -96,7 +98,6 @@ impl Orchestrator for LocalOrchestrator {
         _target: &WorkflowId,
         _query: QueryPayload,
     ) -> Result<serde_json::Value, OrchError> {
-        // LocalOrchestrator doesn't track running workflows
         Ok(serde_json::Value::Null)
     }
 }

@@ -7,11 +7,11 @@
 //! minimal `query` are implemented via an in-memory, per-workflow signal journal.
 
 use async_trait::async_trait;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::SignalPayload;
 use layer0::error::OrchError;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{DispatchNext, DispatchStack};
-use layer0::dispatch::Capabilities;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
 use serde_json::json;
@@ -82,12 +82,12 @@ impl DispatchNext for OperatorDispatch<'_> {
             .agents
             .get(operator.as_str())
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input, &Capabilities::none()).await.map_err(OrchError::OperatorError)
+        op.execute(input).await.map_err(OrchError::OperatorError)
     }
 }
 
 #[async_trait]
-impl Orchestrator for LocalOrch {
+impl Dispatcher for LocalOrch {
     #[tracing::instrument(skip_all, fields(operator_id = %operator))]
     async fn dispatch(
         &self,
@@ -104,7 +104,10 @@ impl Orchestrator for LocalOrch {
             terminal.dispatch(operator, input).await
         }
     }
+}
 
+#[async_trait]
+impl Orchestrator for LocalOrch {
     #[tracing::instrument(skip_all, fields(count = tasks.len()))]
     async fn dispatch_many(
         &self,
@@ -117,7 +120,7 @@ impl Orchestrator for LocalOrch {
                 Some(op) => {
                     let op = Arc::clone(op);
                     handles.push(tokio::spawn(async move {
-                        op.execute(input, &Capabilities::none()).await.map_err(OrchError::OperatorError)
+                        op.execute(input).await.map_err(OrchError::OperatorError)
                     }));
                 }
                 None => {

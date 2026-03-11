@@ -46,7 +46,6 @@ impl layer0::operator::Operator for FailingOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
-        _caps: &layer0::dispatch::Capabilities,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         Err(layer0::error::OperatorError::NonRetryable(
             "always fails".into(),
@@ -114,7 +113,6 @@ impl layer0::operator::Operator for ReadEnvVarOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
-        _caps: &layer0::dispatch::Capabilities,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         let value = std::env::var(&self.var_name)
             .map_err(|e| layer0::error::OperatorError::NonRetryable(e.to_string()))?;

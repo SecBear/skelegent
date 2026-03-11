@@ -9,6 +9,7 @@
 //! and "execution happens in containers" (skg-env-docker).
 
 use async_trait::async_trait;
+use layer0::dispatch::Dispatcher;
 use layer0::environment::{Environment, EnvironmentSpec};
 use layer0::error::{EnvError, OrchError};
 use layer0::id::{OperatorId, WorkflowId};
@@ -93,7 +94,7 @@ fn env_err_to_orch(e: EnvError) -> OrchError {
 }
 
 #[async_trait]
-impl Orchestrator for EnvOrch {
+impl Dispatcher for EnvOrch {
     #[tracing::instrument(skip_all, fields(operator_id = %operator))]
     async fn dispatch(
         &self,
@@ -115,6 +116,10 @@ impl Orchestrator for EnvOrch {
             Err(OrchError::OperatorNotFound(operator.to_string()))
         }
     }
+}
+
+#[async_trait]
+impl Orchestrator for EnvOrch {
 
     #[tracing::instrument(skip_all, fields(count = tasks.len()))]
     async fn dispatch_many(

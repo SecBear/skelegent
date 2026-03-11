@@ -1,6 +1,6 @@
 //! The Operator protocol — what one operator does per cycle.
 
-use crate::{content::Content, dispatch::Capabilities, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
+use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -319,10 +319,10 @@ pub trait Operator: Send + Sync {
     /// The operator MUST NOT write to external state directly — it
     /// declares writes as Effects in the output.
     ///
-    /// `caps` provides optional runtime capabilities: a [`Dispatcher`](crate::dispatch::Dispatcher)
-    /// for invoking sibling operators inline, and depth tracking for
-    /// composition trees. Operators that don't compose simply ignore it.
-    async fn execute(&self, input: OperatorInput, caps: &Capabilities) -> Result<OperatorOutput, OperatorError>;
+    /// Operators that compose (invoke siblings) hold `Arc<dyn Dispatcher>`
+    /// as a field via constructor injection. The execute signature stays
+    /// clean — non-composing operators never see dispatch infrastructure.
+    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError>;
 }
 
 #[cfg(test)]

@@ -1,15 +1,20 @@
 //! The Orchestrator protocol — how operators from different agents compose.
 
+use crate::dispatch::Dispatcher;
 use crate::{error::OrchError, id::*, operator::OperatorInput, operator::OperatorOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Protocol ② — Orchestration
 ///
-/// How operators compose, and how execution
-/// survives failures. Durability and composition are inseparable —
-/// Temporal replay IS orchestration IS crash recovery. They're the
-/// same system.
+/// How operators compose, and how execution survives failures.
+/// Durability and composition are inseparable — Temporal replay IS
+/// orchestration IS crash recovery. They're the same system.
+///
+/// Extends [`Dispatcher`] — every orchestrator IS-A dispatcher.
+/// One invocation primitive, used everywhere: by the top-level
+/// caller, by composing operators (via `Arc<dyn Dispatcher>`),
+/// and by the framework itself.
 ///
 /// Implementations:
 /// - LocalOrchestrator: in-process, tokio tasks, no durability
@@ -21,19 +26,11 @@ use serde::{Deserialize, Serialize};
 /// is behind the trait. `dispatch()` might be a function call or a
 /// network hop to another continent. The trait is transport-agnostic.
 #[async_trait]
-pub trait Orchestrator: Send + Sync {
-    /// Dispatch a single operator invocation. May execute locally or
-    /// remotely. May be durable or fire-and-forget. The trait doesn't
-    /// specify — the implementation decides.
-    async fn dispatch(
-        &self,
-        operator: &OperatorId,
-        input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError>;
-
-    /// Dispatch multiple operator invocations in parallel. The implementation decides
-    /// whether this is tokio::join!, Temporal child workflows, parallel
-    /// HTTP requests, or something else.
+pub trait Orchestrator: Dispatcher {
+    /// Dispatch multiple operator invocations in parallel.
+    ///
+    /// The implementation decides whether this is tokio::join!,
+    /// Temporal child workflows, parallel HTTP requests, or something else.
     ///
     /// Returns results in the same order as the input tasks.
     /// Individual tasks may fail independently.
@@ -43,14 +40,12 @@ pub trait Orchestrator: Send + Sync {
     ) -> Vec<Result<OperatorOutput, OrchError>>;
 
     /// Fire-and-forget signal to a running workflow.
+    ///
     /// Used for: inter-agent messaging, user feedback injection,
     /// budget adjustments, cancellation.
     ///
     /// Returns Ok(()) when the signal is accepted (not when it's
     /// processed — that's async by nature).
-    ///
-    /// Uses [`crate::effect::SignalPayload`] — the same type operators use to
-    /// declare signals as effects. One type, two sides of the boundary.
     async fn signal(
         &self,
         target: &WorkflowId,
@@ -58,6 +53,7 @@ pub trait Orchestrator: Send + Sync {
     ) -> Result<(), OrchError>;
 
     /// Read-only query of a running workflow's state.
+    ///
     /// Used for: dashboards, status checks, budget queries.
     ///
     /// Returns a JSON value — the schema depends on the workflow.

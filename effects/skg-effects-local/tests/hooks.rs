@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 struct NoOpOrch;
 
 #[async_trait]
-impl Orchestrator for NoOpOrch {
+impl layer0::dispatch::Dispatcher for NoOpOrch {
     async fn dispatch(
         &self,
         _operator: &OperatorId,
@@ -29,6 +29,10 @@ impl Orchestrator for NoOpOrch {
             ExitReason::Complete,
         ))
     }
+}
+
+#[async_trait]
+impl Orchestrator for NoOpOrch {
 
     async fn dispatch_many(
         &self,

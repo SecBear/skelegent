@@ -5,7 +5,6 @@
 //! and prints the response.
 
 use layer0::content::Content;
-use layer0::dispatch::Capabilities;
 use layer0::operator::{Operator, OperatorInput, TriggerType};
 use skg_auth_omp::OmpAuthProvider;
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
@@ -33,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // 4. Execute and print.
-    let output = op.execute(input, &Capabilities::none()).await?;
+    let output = op.execute(input).await?;
     println!("Response: {}", output.message.as_text().unwrap_or("(no text)"));
     println!(
         "Tokens: in={}, out={}",

@@ -12,7 +12,6 @@ use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
 use layer0::error::OperatorError;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorMetadata, OperatorOutput};
-use layer0::dispatch::Capabilities;
 use rust_decimal::Decimal;
 use skg_turn::infer::InferRequest;
 use skg_turn::provider::Provider;
@@ -85,7 +84,7 @@ impl<P: Provider> SingleShotOperator<P> {
 #[async_trait]
 impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
     #[tracing::instrument(skip_all, fields(trigger = ?input.trigger))]
-    async fn execute(&self, input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
         let start = Instant::now();
         tracing::info!("single-shot executing");
 
@@ -165,7 +164,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op = make_op(provider);
 
-        let output = op.execute(simple_input("Hi"), &Capabilities::none()).await.unwrap();
+        let output = op.execute(simple_input("Hi")).await.unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
@@ -176,7 +175,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Response")]);
         let op = make_op(provider);
 
-        let output = op.execute(simple_input("Query"), &Capabilities::none()).await.unwrap();
+        let output = op.execute(simple_input("Query")).await.unwrap();
 
         assert_eq!(output.metadata.turns_used, 1);
     }
@@ -186,7 +185,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
         let op = make_op(provider);
 
-        op.execute(simple_input("Test"), &Capabilities::none()).await.unwrap();
+        op.execute(simple_input("Test")).await.unwrap();
 
         let requests = op.provider.requests();
         assert_eq!(requests.len(), 1);
@@ -201,7 +200,7 @@ mod tests {
         let provider = error_provider_rate_limited();
         let op = SingleShotOperator::new(provider, SingleShotConfig::default());
 
-        let result = op.execute(simple_input("test"), &Capabilities::none()).await;
+        let result = op.execute(simple_input("test")).await;
         assert!(matches!(result, Err(OperatorError::Retryable(_))));
     }
 
@@ -224,7 +223,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![response]);
         let op = make_op(provider);
 
-        let output = op.execute(simple_input("test"), &Capabilities::none()).await.unwrap();
+        let output = op.execute(simple_input("test")).await.unwrap();
 
         assert_eq!(output.metadata.cost, cost);
         assert_eq!(output.metadata.tokens_in, 100);
@@ -239,7 +238,7 @@ mod tests {
             SingleShotConfig::default(),
         ));
 
-        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &Capabilities::none())
+        let output = Operator::execute(op.as_ref(), simple_input("Hi"))
             .await
             .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
