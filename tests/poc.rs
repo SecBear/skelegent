@@ -11,6 +11,7 @@
 //! All tests run without API keys by using mock/test implementations.
 
 use layer0::content::Content;
+use layer0::dispatch::Capabilities;
 use layer0::effect::Scope;
 use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -82,7 +83,7 @@ impl<P: skg_turn::provider::Provider> ContextEngineOperator<P> {
 
 #[async_trait::async_trait]
 impl<P: skg_turn::provider::Provider> Operator for ContextEngineOperator<P> {
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, layer0::OperatorError> {
+    async fn execute(&self, input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, layer0::OperatorError> {
         let mut ctx = Context::new();
         // Inject the user input as the first message
         ctx.inject_message(layer0::context::Message::new(
@@ -166,8 +167,8 @@ async fn provider_swap_same_config_different_backend() {
     let input_a = simple_input("Greet me");
     let input_b = simple_input("Greet me");
 
-    let output_a = op_a.execute(input_a).await.unwrap();
-    let output_b = op_b.execute(input_b).await.unwrap();
+    let output_a = op_a.execute(input_a, &Capabilities::none()).await.unwrap();
+    let output_b = op_b.execute(input_b, &Capabilities::none()).await.unwrap();
 
     // Both produce OperatorOutput with the same structure
     assert_eq!(output_a.exit_reason, ExitReason::Complete);
@@ -192,8 +193,8 @@ async fn provider_swap_same_config_different_backend() {
         react_config(),
     ));
 
-    let out_a = dyn_a.execute(simple_input("test")).await.unwrap();
-    let out_b = dyn_b.execute(simple_input("test")).await.unwrap();
+    let out_a = dyn_a.execute(simple_input("test"), &Capabilities::none()).await.unwrap();
+    let out_b = dyn_b.execute(simple_input("test"), &Capabilities::none()).await.unwrap();
     assert_eq!(out_a.exit_reason, ExitReason::Complete);
     assert_eq!(out_b.exit_reason, ExitReason::Complete);
 }
@@ -333,8 +334,8 @@ async fn operator_swap_react_vs_single_shot() {
     // Same input through both operators
     let input = simple_input("Say hello");
 
-    let react_output = react_op.execute(input.clone()).await.unwrap();
-    let ss_output = single_shot_op.execute(input).await.unwrap();
+    let react_output = react_op.execute(input.clone(), &Capabilities::none()).await.unwrap();
+    let ss_output = single_shot_op.execute(input, &Capabilities::none()).await.unwrap();
 
     // Both produce OperatorOutput with identical structure
     assert_eq!(react_output.exit_reason, ExitReason::Complete);
@@ -365,7 +366,7 @@ async fn operator_swap_react_vs_single_shot() {
     ];
 
     for (i, op) in operators.iter().enumerate() {
-        let output = op.execute(simple_input("test")).await.unwrap();
+        let output = op.execute(simple_input("test"), &Capabilities::none()).await.unwrap();
         assert_eq!(
             output.exit_reason,
             ExitReason::Complete,
@@ -385,7 +386,7 @@ async fn operator_swap_echo_operator() {
     let echo: Arc<dyn Operator> = Arc::new(EchoOperator);
 
     let input = simple_input("This exact text should come back");
-    let output = echo.execute(input).await.unwrap();
+    let output = echo.execute(input, &Capabilities::none()).await.unwrap();
 
     assert_eq!(output.exit_reason, ExitReason::Complete);
     assert_eq!(

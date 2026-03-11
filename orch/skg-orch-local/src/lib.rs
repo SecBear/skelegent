@@ -11,6 +11,7 @@ use layer0::effect::SignalPayload;
 use layer0::error::OrchError;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{DispatchNext, DispatchStack};
+use layer0::dispatch::Capabilities;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
 use layer0::orchestrator::{Orchestrator, QueryPayload};
 use serde_json::json;
@@ -81,7 +82,7 @@ impl DispatchNext for OperatorDispatch<'_> {
             .agents
             .get(operator.as_str())
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input).await.map_err(OrchError::OperatorError)
+        op.execute(input, &Capabilities::none()).await.map_err(OrchError::OperatorError)
     }
 }
 
@@ -116,7 +117,7 @@ impl Orchestrator for LocalOrch {
                 Some(op) => {
                     let op = Arc::clone(op);
                     handles.push(tokio::spawn(async move {
-                        op.execute(input).await.map_err(OrchError::OperatorError)
+                        op.execute(input, &Capabilities::none()).await.map_err(OrchError::OperatorError)
                     }));
                 }
                 None => {

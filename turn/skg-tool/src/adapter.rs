@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use layer0::dispatch::Capabilities;
 use layer0::effect::SignalPayload;
 use layer0::operator::Operator;
 use layer0::orchestrator::QueryPayload;
@@ -52,7 +53,7 @@ impl Operator for ToolOperator {
     ///
     /// `input.message` must be valid JSON text representing the tool's input.
     /// Any parse failure is surfaced as `OperatorError::NonRetryable`.
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(&self, input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("null");
         let tool_input: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| OperatorError::NonRetryable(format!("invalid tool input JSON: {e}")))?;
@@ -113,7 +114,7 @@ impl Orchestrator for ToolRegistryOrchestrator {
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
 
         let operator = ToolOperator::new(Arc::clone(tool));
-        operator.execute(input).await.map_err(OrchError::from)
+        operator.execute(input, &Capabilities::none()).await.map_err(OrchError::from)
     }
 
     /// Sequential dispatch. Tools may not be `Send`-safe across parallel
@@ -229,7 +230,7 @@ mod tests {
         let op = ToolOperator::new(tool);
 
         let input = make_input(r#"{"msg": "hello"}"#);
-        let output = op.execute(input).await.expect("should succeed");
+        let output = op.execute(input, &Capabilities::none()).await.expect("should succeed");
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
 
@@ -251,7 +252,7 @@ mod tests {
         let op = ToolOperator::new(tool);
 
         let input = make_input("{}");
-        let err = op.execute(input).await.expect_err("should fail");
+        let err = op.execute(input, &Capabilities::none()).await.expect_err("should fail");
 
         match err {
             OperatorError::SubDispatch { operator, message } => {

@@ -4,6 +4,7 @@ use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::dispatch::Capabilities;
 use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::state::{SearchResult, StateStore};
 use serde_json::json;
@@ -45,7 +46,7 @@ impl Orchestrator for SimpleOrch {
             .agents
             .get(operator.as_str())
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input).await.map_err(OrchError::OperatorError)
+        op.execute(input, &Capabilities::none()).await.map_err(OrchError::OperatorError)
     }
 
     async fn dispatch_many(
@@ -140,7 +141,7 @@ struct WriterOperator;
 
 #[async_trait]
 impl Operator for WriterOperator {
-    async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(&self, _input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
         output.effects.push(Effect::WriteMemory {
             scope: Scope::Global,
@@ -164,7 +165,7 @@ struct DelegateOperator;
 
 #[async_trait]
 impl Operator for DelegateOperator {
-    async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(&self, _input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("delegating"), ExitReason::Complete);
         output.effects.push(Effect::Delegate {
             operator: OperatorId::new("child"),
@@ -181,7 +182,7 @@ struct ChildOperator;
 
 #[async_trait]
 impl Operator for ChildOperator {
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(&self, input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
         assert_eq!(input.message.as_text().unwrap_or_default(), "child task");
         Ok(OperatorOutput::new(
             Content::text("child done"),
@@ -194,7 +195,7 @@ struct HandoffOperator;
 
 #[async_trait]
 impl Operator for HandoffOperator {
-    async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(&self, _input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
         output.effects.push(Effect::Handoff {
             operator: OperatorId::new("handoff_target"),
@@ -208,7 +209,7 @@ struct HandoffTargetOperator;
 
 #[async_trait]
 impl Operator for HandoffTargetOperator {
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(&self, input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
         // LocalEffectInterpreter serializes the JSON state to a string and puts it in message text.
         let text = input.message.as_text().unwrap_or_default();
         assert!(text.contains("\"ticket\":123") || text.contains("\"ticket\": 123"));
@@ -223,7 +224,7 @@ struct FullPipelineRootOperator;
 
 #[async_trait]
 impl Operator for FullPipelineRootOperator {
-    async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(&self, _input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
         output.effects.push(Effect::WriteMemory {
             scope: Scope::Global,
@@ -371,7 +372,7 @@ async fn runner_has_safety_bound_for_infinite_followups() {
     struct SelfDelegate;
     #[async_trait]
     impl Operator for SelfDelegate {
-        async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+        async fn execute(&self, _input: OperatorInput, _caps: &Capabilities) -> Result<OperatorOutput, OperatorError> {
             let mut output = OperatorOutput::new(Content::text("loop"), ExitReason::Complete);
             output.effects.push(Effect::Delegate {
                 operator: OperatorId::new("root"),

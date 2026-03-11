@@ -49,6 +49,7 @@ impl layer0::operator::Operator for FailingOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
+        _caps: &layer0::dispatch::Capabilities,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         Err(layer0::error::OperatorError::NonRetryable(
             "always fails".into(),

@@ -9,6 +9,7 @@
 //! They verify that OperatorOutput structure is consistent across providers.
 
 use layer0::OperatorId;
+use layer0::dispatch::Capabilities;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
@@ -84,7 +85,7 @@ async fn anthropic_single_shot() {
     let op = SingleShotOperator::new(provider, config);
 
     let output = op
-        .execute(simple_input("Say hello in exactly 3 words."))
+        .execute(simple_input("Say hello in exactly 3 words."), &Capabilities::none())
         .await
         .expect("Anthropic SingleShotOperator should succeed");
 
@@ -204,7 +205,7 @@ async fn openai_single_shot() {
     let op = SingleShotOperator::new(provider, config);
 
     let output = op
-        .execute(simple_input("Say hello in exactly 3 words."))
+        .execute(simple_input("Say hello in exactly 3 words."), &Capabilities::none())
         .await
         .expect("OpenAI SingleShotOperator should succeed");
 
