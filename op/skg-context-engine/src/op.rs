@@ -27,12 +27,16 @@ pub trait ContextOp: Send + Sync {
     async fn execute(&self, ctx: &mut Context) -> Result<Self::Output, EngineError>;
 }
 
-/// Type-erased version of [`ContextOp`] for storage in rules.
+/// Type-erased version of [`ContextOp`] for storage in rules and the
+/// intervention channel.
 ///
-/// Rules need to store heterogeneous ops. This trait erases the `Output`
-/// type (rules always produce `()`).
+/// Rules need to store heterogeneous ops. The intervention channel
+/// (`mpsc::Sender<Box<dyn ErasedOp>>`) carries arbitrary ops from external
+/// code into a running context. This trait erases the `Output` type
+/// (erased ops always produce `()`).
 #[async_trait]
-pub(crate) trait ErasedOp: Send + Sync {
+pub trait ErasedOp: Send + Sync {
+    /// Execute this operation against the given context, discarding the output.
     async fn execute_erased(&self, ctx: &mut Context) -> Result<(), EngineError>;
 }
 

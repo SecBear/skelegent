@@ -87,13 +87,14 @@ pub mod output;
 pub mod react;
 pub mod rule;
 pub mod rules;
+pub mod stream;
 pub mod stream_react;
 
 // Re-exports
 pub use compile::{CompileConfig, CompiledContext, InferResult};
 pub use context::{Context, Extensions, TurnMetrics};
 pub use error::EngineError;
-pub use op::ContextOp;
+pub use op::{ContextOp, ErasedOp};
 pub use ops::*;
 pub use output::{OutputError, OutputMode, OutputSchema, extract_json_block};
 pub use react::{
@@ -103,3 +104,4 @@ pub use react::{
 pub use rule::{Rule, Trigger};
 pub use rules::*;
 pub use stream_react::stream_react_loop;
+pub use stream::{ContextEvent, ContextMutation};

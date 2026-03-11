@@ -4,15 +4,18 @@
 //! Every mutation goes through [`Context::run()`], which fires applicable rules.
 
 use crate::error::EngineError;
-use crate::op::ContextOp;
+use crate::op::{ContextOp, ErasedOp};
 use crate::rule::Rule;
+use crate::stream::{ContextEvent, ContextMutation};
 
 use layer0::context::Message;
 use layer0::effect::Effect;
 use rust_decimal::Decimal;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::{broadcast, mpsc};
 
 /// Typed arbitrary state carried alongside messages.
 ///
@@ -125,10 +128,17 @@ impl TurnMetrics {
 /// pipeline operations.
 pub struct Context {
     /// The message buffer. This is what gets compiled and sent to the model.
+    ///
+    /// Prefer mutation methods ([`push_message`](Self::push_message),
+    /// [`insert_message`](Self::insert_message), [`set_messages`](Self::set_messages))
+    /// which emit to the observation stream. Direct field access is available
+    /// for reads but mutations bypass stream emission.
     pub messages: Vec<Message>,
     /// Typed arbitrary state for cross-component communication.
     pub extensions: Extensions,
     /// Declared effects (write_memory, delegate, signal, etc.).
+    ///
+    /// Prefer [`push_effect`](Self::push_effect) which emits to the observation stream.
     pub effects: Vec<Effect>,
     /// Accumulated metrics for this operator invocation.
     pub metrics: TurnMetrics,
@@ -136,6 +146,12 @@ pub struct Context {
     rules: Vec<Rule>,
     /// True when executing a rule — prevents recursive rule firing.
     in_rule: bool,
+    /// Observation stream sender. When present, every mutation emits a
+    /// [`ContextEvent`] through this broadcast channel.
+    stream_tx: Option<broadcast::Sender<ContextEvent>>,
+    /// Intervention receiver. When present, pending interventions are
+    /// drained and executed at the top of every [`Context::run()`] call.
+    intervention_rx: Option<mpsc::Receiver<Box<dyn ErasedOp>>>,
 }
 
 impl Context {
@@ -148,6 +164,8 @@ impl Context {
             metrics: TurnMetrics::new(),
             rules: Vec::new(),
             in_rule: false,
+            stream_tx: None,
+            intervention_rx: None,
         }
     }
 
@@ -158,6 +176,117 @@ impl Context {
         ctx.rules.sort_by(|a, b| b.priority.cmp(&a.priority));
         ctx
     }
+
+    /// Attach an observation stream to this context.
+    ///
+    /// Every mutation through the mutation methods will emit a
+    /// [`ContextEvent`] on this channel. Subscribers receive real-time
+    /// visibility into operator execution.
+    ///
+    /// Returns `&mut Self` for chaining.
+    pub fn with_stream(&mut self, tx: broadcast::Sender<ContextEvent>) -> &mut Self {
+        self.stream_tx = Some(tx);
+        self
+    }
+
+    /// Attach an intervention channel to this context.
+    ///
+    /// Pending interventions are drained and executed at the top of every
+    /// [`Context::run()`] call. The sending side is held by supervisors,
+    /// middleware, or external interfaces.
+    ///
+    /// Returns `&mut Self` for chaining.
+    pub fn with_intervention(&mut self, rx: mpsc::Receiver<Box<dyn ErasedOp>>) -> &mut Self {
+        self.intervention_rx = Some(rx);
+        self
+    }
+
+    /// Get a clone of the stream sender, if one is attached.
+    ///
+    /// Useful for ops that need to emit custom events (e.g. inference
+    /// streaming emits [`ContextMutation::InferenceDelta`] directly).
+    pub fn stream_sender(&self) -> Option<&broadcast::Sender<ContextEvent>> {
+        self.stream_tx.as_ref()
+    }
+
+    // ── Mutation methods (emit to observation stream) ──────────────
+
+    /// Append a message to the context.
+    ///
+    /// Emits [`ContextMutation::MessagePushed`] to the observation stream.
+    pub fn push_message(&mut self, msg: Message) {
+        let arc = Arc::new(msg);
+        self.messages.push((*arc).clone());
+        self.emit(ContextMutation::MessagePushed(arc));
+    }
+
+    /// Insert a message at a specific index.
+    ///
+    /// Emits [`ContextMutation::MessageInserted`] to the observation stream.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index > self.messages.len()`.
+    pub fn insert_message(&mut self, index: usize, msg: Message) {
+        let arc = Arc::new(msg);
+        self.messages.insert(index, (*arc).clone());
+        self.emit(ContextMutation::MessageInserted {
+            index,
+            message: arc,
+        });
+    }
+
+    /// Replace a message at a specific index.
+    ///
+    /// Emits [`ContextMutation::MessageReplaced`] to the observation stream.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.messages.len()`.
+    pub fn replace_message(&mut self, index: usize, msg: Message) {
+        let arc = Arc::new(msg);
+        self.messages[index] = (*arc).clone();
+        self.emit(ContextMutation::MessageReplaced {
+            index,
+            message: arc,
+        });
+    }
+
+    /// Replace the entire message buffer.
+    ///
+    /// Emits [`ContextMutation::MessagesSet`] to the observation stream.
+    /// Used by compaction, which replaces all messages with a compacted set.
+    pub fn set_messages(&mut self, messages: Vec<Message>) {
+        let previous_len = self.messages.len();
+        self.messages = messages;
+        self.emit(ContextMutation::MessagesSet {
+            previous_len,
+            new_len: self.messages.len(),
+        });
+    }
+
+    /// Declare an effect.
+    ///
+    /// Emits [`ContextMutation::EffectDeclared`] to the observation stream.
+    pub fn push_effect(&mut self, effect: Effect) {
+        self.effects.push(effect.clone());
+        self.emit(ContextMutation::EffectDeclared(effect));
+    }
+
+    /// Emit a context event to the observation stream.
+    ///
+    /// No-op if no stream sender is attached. If all receivers have been
+    /// dropped, the send silently fails (fire-and-forget).
+    fn emit(&self, mutation: ContextMutation) {
+        if let Some(tx) = &self.stream_tx {
+            let _ = tx.send(ContextEvent {
+                timestamp: Instant::now(),
+                mutation,
+            });
+        }
+    }
+
+    // ── Rules and structure ──────────────────────────────────────────
 
     /// Add a rule to this context. Rules are re-sorted by priority.
     pub fn add_rule(&mut self, rule: Rule) {
@@ -179,17 +308,26 @@ impl Context {
     ///
     /// This is the central dispatch point. The sequence is:
     ///
+    /// 0. Drain pending interventions (if intervention channel is attached)
     /// 1. Fire `Before` rules matching this op type (highest priority first)
     /// 2. Fire `When` rules whose predicates are true
     /// 3. Execute the operation
     /// 4. Fire `After` rules matching this op type
     ///
+    /// Interventions are processed at every `run()` boundary — which happens
+    /// constantly during operator execution (every inject, every inference,
+    /// every tool call, every compaction). Intervention latency is bounded by
+    /// the duration of one ContextOp execution, not one full turn.
+    ///
     /// Rules cannot trigger other rules — when executing inside a rule,
-    /// the rule dispatch is skipped.
+    /// the rule dispatch is skipped (and interventions are not drained).
     pub async fn run<O: ContextOp + 'static>(&mut self, op: O) -> Result<O::Output, EngineError> {
         let op_type = TypeId::of::<O>();
 
         if !self.in_rule {
+            // Drain pending interventions
+            self.drain_interventions().await?;
+
             // Fire "before" rules
             self.fire_before_rules(op_type).await?;
 
@@ -206,6 +344,28 @@ impl Context {
         }
 
         Ok(output)
+    }
+
+    /// Drain and execute all pending interventions.
+    ///
+    /// Each intervention is a `Box<dyn ErasedOp>` — any ContextOp sent
+    /// through the intervention channel. They are executed in FIFO order
+    /// as normal context ops (with full `&mut Context` power).
+    async fn drain_interventions(&mut self) -> Result<(), EngineError> {
+        // Take the receiver out to avoid borrow conflict —
+        // execute_erased needs &mut self, but rx is inside self.
+        let mut rx = match self.intervention_rx.take() {
+            Some(rx) => rx,
+            None => return Ok(()),
+        };
+
+        while let Ok(intervention) = rx.try_recv() {
+            intervention.execute_erased(self).await?;
+        }
+
+        // Put it back.
+        self.intervention_rx = Some(rx);
+        Ok(())
     }
 
     /// Fire rules that match `Before` for the given op type.
@@ -442,5 +602,277 @@ mod tests {
         assert_eq!(m.cost, Decimal::ZERO);
         assert_eq!(m.turns_completed, 0);
         assert_eq!(m.total_tokens(), 0);
+    }
+
+    // ── Streaming observation tests ──────────────────────────
+
+    #[tokio::test]
+    async fn push_message_emits_event() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let mut ctx = Context::new();
+        ctx.with_stream(tx);
+
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
+
+        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages[0].text_content(), "hello");
+
+        let event = rx.try_recv().unwrap();
+        match event.mutation {
+            ContextMutation::MessagePushed(msg) => {
+                assert_eq!(msg.text_content(), "hello");
+            }
+            other => panic!("expected MessagePushed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_message_emits_event() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let mut ctx = Context::new();
+        ctx.push_message(Message::new(Role::System, Content::text("sys")));
+        ctx.with_stream(tx);
+
+        ctx.insert_message(1, Message::new(Role::User, Content::text("injected")));
+
+        assert_eq!(ctx.messages.len(), 2);
+        assert_eq!(ctx.messages[1].text_content(), "injected");
+
+        let event = rx.try_recv().unwrap();
+        match event.mutation {
+            ContextMutation::MessageInserted { index, message } => {
+                assert_eq!(index, 1);
+                assert_eq!(message.text_content(), "injected");
+            }
+            other => panic!("expected MessageInserted, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn replace_message_emits_event() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let mut ctx = Context::new();
+        ctx.push_message(Message::new(Role::User, Content::text("old")));
+        ctx.with_stream(tx);
+
+        ctx.replace_message(0, Message::new(Role::User, Content::text("new")));
+
+        assert_eq!(ctx.messages[0].text_content(), "new");
+
+        let event = rx.try_recv().unwrap();
+        match event.mutation {
+            ContextMutation::MessageReplaced { index, message } => {
+                assert_eq!(index, 0);
+                assert_eq!(message.text_content(), "new");
+            }
+            other => panic!("expected MessageReplaced, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_messages_emits_event() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let mut ctx = Context::new();
+        ctx.push_message(Message::new(Role::User, Content::text("a")));
+        ctx.push_message(Message::new(Role::User, Content::text("b")));
+        ctx.push_message(Message::new(Role::User, Content::text("c")));
+        ctx.with_stream(tx);
+
+        ctx.set_messages(vec![Message::new(Role::System, Content::text("compacted"))]);
+
+        assert_eq!(ctx.messages.len(), 1);
+
+        let event = rx.try_recv().unwrap();
+        match event.mutation {
+            ContextMutation::MessagesSet {
+                previous_len,
+                new_len,
+            } => {
+                assert_eq!(previous_len, 3);
+                assert_eq!(new_len, 1);
+            }
+            other => panic!("expected MessagesSet, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn push_effect_emits_event() {
+        use layer0::effect::{Effect, Scope};
+
+        let (tx, mut rx) = broadcast::channel(16);
+        let mut ctx = Context::new();
+        ctx.with_stream(tx);
+
+        let effect = Effect::WriteMemory {
+            scope: Scope::Global,
+            key: "k".into(),
+            value: serde_json::json!("v"),
+            tier: None,
+            lifetime: None,
+            content_kind: None,
+            salience: None,
+            ttl: None,
+        };
+        ctx.push_effect(effect);
+
+        assert_eq!(ctx.effects.len(), 1);
+
+        let event = rx.try_recv().unwrap();
+        match event.mutation {
+            ContextMutation::EffectDeclared(Effect::WriteMemory { key, .. }) => {
+                assert_eq!(key, "k");
+            }
+            other => panic!("expected EffectDeclared(WriteMemory), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn no_stream_sender_means_no_cost() {
+        // Without a stream sender, mutation methods still work.
+        let mut ctx = Context::new();
+        ctx.push_message(Message::new(Role::User, Content::text("a")));
+        ctx.insert_message(0, Message::new(Role::System, Content::text("sys")));
+        ctx.replace_message(1, Message::new(Role::User, Content::text("b")));
+        ctx.set_messages(vec![Message::new(Role::User, Content::text("c"))]);
+        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages[0].text_content(), "c");
+    }
+
+    #[tokio::test]
+    async fn dropped_receivers_do_not_panic() {
+        let (tx, rx) = broadcast::channel(16);
+        let mut ctx = Context::new();
+        ctx.with_stream(tx);
+        drop(rx); // All receivers gone.
+
+        // Should not panic — fire-and-forget.
+        ctx.push_message(Message::new(Role::User, Content::text("orphan")));
+        assert_eq!(ctx.messages.len(), 1);
+    }
+
+    // ── Intervention tests ────────────────────────────────────
+
+    #[tokio::test]
+    async fn intervention_drains_before_op() {
+        let (itx, irx) = mpsc::channel::<Box<dyn crate::op::ErasedOp>>(16);
+        let mut ctx = Context::new();
+        ctx.with_intervention(irx);
+
+        // Send an intervention that injects a system message.
+        struct InjectSys;
+        #[async_trait]
+        impl ContextOp for InjectSys {
+            type Output = ();
+            async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+                ctx.push_message(Message::new(Role::System, Content::text("injected by supervisor")));
+                Ok(())
+            }
+        }
+        itx.send(Box::new(InjectSys)).await.unwrap();
+
+        // Now run a normal op.
+        let msg = Message::new(Role::User, Content::text("user msg"));
+        ctx.run(AddMessage { msg }).await.unwrap();
+
+        // The intervention should have fired first.
+        assert_eq!(ctx.messages.len(), 2);
+        assert_eq!(ctx.messages[0].text_content(), "injected by supervisor");
+        assert_eq!(ctx.messages[1].text_content(), "user msg");
+    }
+
+    #[tokio::test]
+    async fn intervention_error_propagates() {
+        let (itx, irx) = mpsc::channel::<Box<dyn crate::op::ErasedOp>>(16);
+        let mut ctx = Context::new();
+        ctx.with_intervention(irx);
+
+        struct HaltIntervention;
+        #[async_trait]
+        impl ContextOp for HaltIntervention {
+            type Output = ();
+            async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+                Err(EngineError::Halted {
+                    reason: "supervisor halted".into(),
+                })
+            }
+        }
+        itx.send(Box::new(HaltIntervention)).await.unwrap();
+
+        let msg = Message::new(Role::User, Content::text("should not appear"));
+        let result = ctx.run(AddMessage { msg }).await;
+
+        assert!(result.is_err());
+        assert!(ctx.messages.is_empty()); // Neither intervention nor op added anything useful.
+    }
+
+    #[tokio::test]
+    async fn multiple_interventions_drain_in_order() {
+        let (itx, irx) = mpsc::channel::<Box<dyn crate::op::ErasedOp>>(16);
+        let mut ctx = Context::new();
+        ctx.with_intervention(irx);
+
+        struct InjectMsg(String);
+        #[async_trait]
+        impl ContextOp for InjectMsg {
+            type Output = ();
+            async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+                ctx.push_message(Message::new(Role::System, Content::text(&self.0)));
+                Ok(())
+            }
+        }
+        itx.send(Box::new(InjectMsg("first".into()))).await.unwrap();
+        itx.send(Box::new(InjectMsg("second".into()))).await.unwrap();
+
+        let msg = Message::new(Role::User, Content::text("user"));
+        ctx.run(AddMessage { msg }).await.unwrap();
+
+        assert_eq!(ctx.messages.len(), 3);
+        assert_eq!(ctx.messages[0].text_content(), "first");
+        assert_eq!(ctx.messages[1].text_content(), "second");
+        assert_eq!(ctx.messages[2].text_content(), "user");
+    }
+
+    #[tokio::test]
+    async fn no_intervention_channel_is_noop() {
+        let mut ctx = Context::new();
+        // No intervention channel attached — should work fine.
+        let msg = Message::new(Role::User, Content::text("hello"));
+        ctx.run(AddMessage { msg }).await.unwrap();
+        assert_eq!(ctx.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stream_and_intervention_together() {
+        let (stx, mut srx) = broadcast::channel(16);
+        let (itx, irx) = mpsc::channel::<Box<dyn crate::op::ErasedOp>>(16);
+        let mut ctx = Context::new();
+        ctx.with_stream(stx);
+        ctx.with_intervention(irx);
+
+        struct InjectViaIntervention;
+        #[async_trait]
+        impl ContextOp for InjectViaIntervention {
+            type Output = ();
+            async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+                ctx.push_message(Message::new(Role::System, Content::text("from supervisor")));
+                Ok(())
+            }
+        }
+        itx.send(Box::new(InjectViaIntervention)).await.unwrap();
+
+        let msg = Message::new(Role::User, Content::text("from user"));
+        ctx.run(AddMessage { msg }).await.unwrap();
+
+        // Both messages present.
+        assert_eq!(ctx.messages.len(), 2);
+
+        // Stream should have captured the intervention's push_message event.
+        let event = srx.try_recv().unwrap();
+        match event.mutation {
+            ContextMutation::MessagePushed(msg) => {
+                assert_eq!(msg.text_content(), "from supervisor");
+            }
+            other => panic!("expected MessagePushed from intervention, got {other:?}"),
+        }
     }
 }
