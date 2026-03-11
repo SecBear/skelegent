@@ -60,10 +60,7 @@ impl CachedToken {
     }
 
     fn to_auth_token(&self) -> AuthToken {
-        AuthToken::new(
-            self.access.as_bytes().to_vec(),
-            Some(self.expires_at),
-        )
+        AuthToken::new(self.access.as_bytes().to_vec(), Some(self.expires_at))
     }
 }
 
@@ -79,8 +76,8 @@ impl OmpAuthProvider {
     /// Create a provider using the default OMP database path
     /// (`~/.omp/agent/agent.db`).
     pub fn new() -> Result<Self, AuthError> {
-        let home = std::env::var("HOME")
-            .map_err(|_| AuthError::BackendError("HOME not set".into()))?;
+        let home =
+            std::env::var("HOME").map_err(|_| AuthError::BackendError("HOME not set".into()))?;
         let db_path = PathBuf::from(home).join(".omp/agent/agent.db");
         Ok(Self::with_db_path(db_path))
     }
@@ -108,10 +105,7 @@ impl OmpAuthProvider {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .map_err(|e| {
-            AuthError::BackendError(format!(
-                "failed to open {}: {e}",
-                self.db_path.display()
-            ))
+            AuthError::BackendError(format!("failed to open {}: {e}", self.db_path.display()))
         })?;
 
         let data: String = conn
@@ -124,35 +118,24 @@ impl OmpAuthProvider {
                 |row| row.get(0),
             )
             .map_err(|e| {
-                AuthError::AuthFailed(format!(
-                    "no anthropic oauth credential in agent.db: {e}"
-                ))
+                AuthError::AuthFailed(format!("no anthropic oauth credential in agent.db: {e}"))
             })?;
 
-        serde_json::from_str::<OmpCredential>(&data).map_err(|e| {
-            AuthError::BackendError(format!("malformed credential JSON: {e}"))
-        })
+        serde_json::from_str::<OmpCredential>(&data)
+            .map_err(|e| AuthError::BackendError(format!("malformed credential JSON: {e}")))
     }
 
     /// Refresh the OAuth token via Anthropic's token endpoint.
-    async fn refresh_token(
-        &self,
-        refresh: &str,
-    ) -> Result<OmpCredential, AuthError> {
+    async fn refresh_token(&self, refresh: &str) -> Result<OmpCredential, AuthError> {
         debug!("refreshing Anthropic OAuth token");
 
         let resp = self
             .http
             .post(REFRESH_URL)
-            .form(&[
-                ("grant_type", "refresh_token"),
-                ("refresh_token", refresh),
-            ])
+            .form(&[("grant_type", "refresh_token"), ("refresh_token", refresh)])
             .send()
             .await
-            .map_err(|e| {
-                AuthError::BackendError(format!("token refresh request failed: {e}"))
-            })?;
+            .map_err(|e| AuthError::BackendError(format!("token refresh request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -195,9 +178,8 @@ impl OmpAuthProvider {
             ))
         })?;
 
-        let json = serde_json::to_string(cred).map_err(|e| {
-            AuthError::BackendError(format!("failed to serialize credential: {e}"))
-        })?;
+        let json = serde_json::to_string(cred)
+            .map_err(|e| AuthError::BackendError(format!("failed to serialize credential: {e}")))?;
 
         conn.execute(
             "UPDATE auth_credentials SET data = ?1, updated_at = unixepoch() \
@@ -208,9 +190,7 @@ impl OmpAuthProvider {
              )",
             [&json],
         )
-        .map_err(|e| {
-            AuthError::BackendError(format!("failed to update credential: {e}"))
-        })?;
+        .map_err(|e| AuthError::BackendError(format!("failed to update credential: {e}")))?;
 
         debug!("updated anthropic oauth credential in agent.db");
         Ok(())
@@ -357,9 +337,8 @@ mod tests {
 
     #[test]
     fn missing_db_returns_backend_error() {
-        let provider = OmpAuthProvider::with_db_path(
-            PathBuf::from("/tmp/nonexistent-omp-test/agent.db"),
-        );
+        let provider =
+            OmpAuthProvider::with_db_path(PathBuf::from("/tmp/nonexistent-omp-test/agent.db"));
         let err = provider.read_from_db().unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not found"), "unexpected error: {msg}");
@@ -367,9 +346,8 @@ mod tests {
 
     #[tokio::test]
     async fn provide_with_missing_db() {
-        let provider = OmpAuthProvider::with_db_path(
-            PathBuf::from("/tmp/nonexistent-omp-test/agent.db"),
-        );
+        let provider =
+            OmpAuthProvider::with_db_path(PathBuf::from("/tmp/nonexistent-omp-test/agent.db"));
         let result = provider.provide(&AuthRequest::new()).await;
         assert!(result.is_err());
     }

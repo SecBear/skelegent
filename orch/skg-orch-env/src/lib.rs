@@ -1,5 +1,5 @@
 #![deny(missing_docs)]
-//! Environment-aware Orchestrator.
+//! Environment-aware Dispatcher.
 //!
 //! Routes operator dispatch through [`Environment::run`] based on registered
 //! [`EnvironmentBinding`]s. Each operator is bound to an Environment + baseline
@@ -12,10 +12,8 @@ use async_trait::async_trait;
 use layer0::dispatch::Dispatcher;
 use layer0::environment::{Environment, EnvironmentSpec};
 use layer0::error::{EnvError, OrchError};
-use layer0::id::{OperatorId, WorkflowId};
+use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput};
-use layer0::orchestrator::{Orchestrator, QueryPayload};
-use layer0::effect::SignalPayload;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -32,7 +30,7 @@ pub struct EnvironmentBinding {
 /// Environment-aware orchestrator.
 ///
 /// Constructed once, populated with [`bind`](Self::bind) calls, then shared
-/// via `Arc<dyn Orchestrator>`. Registration is not thread-safe — complete
+/// via `Arc<dyn Dispatcher>`. Registration is not thread-safe — complete
 /// all bindings before sharing.
 pub struct EnvOrch {
     bindings: HashMap<String, EnvironmentBinding>,
@@ -67,12 +65,7 @@ impl EnvOrch {
 
     /// Convenience: bind an operator to an environment + spec without constructing
     /// an [`EnvironmentBinding`] manually.
-    pub fn bind_with(
-        &mut self,
-        id: OperatorId,
-        env: Arc<dyn Environment>,
-        spec: EnvironmentSpec,
-    ) {
+    pub fn bind_with(&mut self, id: OperatorId, env: Arc<dyn Environment>, spec: EnvironmentSpec) {
         self.bindings
             .insert(id.to_string(), EnvironmentBinding { env, spec });
     }
@@ -118,74 +111,11 @@ impl Dispatcher for EnvOrch {
     }
 }
 
-#[async_trait]
-impl Orchestrator for EnvOrch {
-
-    #[tracing::instrument(skip_all, fields(count = tasks.len()))]
-    async fn dispatch_many(
-        &self,
-        tasks: Vec<(OperatorId, OperatorInput)>,
-    ) -> Vec<Result<OperatorOutput, OrchError>> {
-        let mut handles = Vec::with_capacity(tasks.len());
-
-        for (operator_id, input) in tasks {
-            if let Some(binding) = self.bindings.get(operator_id.as_str()) {
-                let env = Arc::clone(&binding.env);
-                let spec = binding.spec.clone();
-                handles.push(tokio::spawn(async move {
-                    env.run(input, &spec).await.map_err(env_err_to_orch)
-                }));
-            } else if let Some(ref default) = self.default_env {
-                let env = Arc::clone(default);
-                let spec = self.default_spec.clone();
-                handles.push(tokio::spawn(async move {
-                    env.run(input, &spec).await.map_err(env_err_to_orch)
-                }));
-            } else {
-                let name = operator_id.to_string();
-                handles.push(tokio::spawn(
-                    async move { Err(OrchError::OperatorNotFound(name)) },
-                ));
-            }
-        }
-
-        let mut results = Vec::with_capacity(handles.len());
-        for handle in handles {
-            match handle.await {
-                Ok(result) => results.push(result),
-                Err(e) => results.push(Err(OrchError::DispatchFailed(e.to_string()))),
-            }
-        }
-
-        results
-    }
-
-    async fn signal(
-        &self,
-        _target: &WorkflowId,
-        _signal: SignalPayload,
-    ) -> Result<(), OrchError> {
-        Err(OrchError::DispatchFailed(
-            "signals not supported in EnvOrch".into(),
-        ))
-    }
-
-    async fn query(
-        &self,
-        _target: &WorkflowId,
-        _query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError> {
-        Err(OrchError::DispatchFailed(
-            "query not supported in EnvOrch".into(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer0::id::OperatorId;
     use layer0::content::Content;
+    use layer0::id::OperatorId;
     use layer0::operator::{ExitReason, OperatorInput, TriggerType};
     use layer0::test_utils::{EchoOperator, LocalEnvironment};
 
@@ -240,82 +170,5 @@ mod tests {
             matches!(err, OrchError::OperatorNotFound(ref name) if name == "missing"),
             "expected OperatorNotFound, got: {err:?}"
         );
-    }
-
-    #[tokio::test]
-    async fn dispatch_many_runs_in_parallel() {
-        let mut orch = EnvOrch::new();
-        orch.bind_with(
-            OperatorId::new("echo"),
-            echo_env(),
-            EnvironmentSpec::default(),
-        );
-
-        let tasks = vec![
-            (OperatorId::new("echo"), input("a")),
-            (OperatorId::new("echo"), input("b")),
-            (OperatorId::new("echo"), input("c")),
-        ];
-
-        let results = orch.dispatch_many(tasks).await;
-        assert_eq!(results.len(), 3);
-
-        let messages: Vec<&Content> = results
-            .iter()
-            .map(|r| &r.as_ref().expect("each dispatch should succeed").message)
-            .collect();
-
-        assert_eq!(messages, vec![
-            &Content::Text("a".into()),
-            &Content::Text("b".into()),
-            &Content::Text("c".into()),
-        ]);
-    }
-
-    #[tokio::test]
-    async fn dispatch_many_mixed_bound_and_unbound() {
-        let mut orch = EnvOrch::new();
-        orch.bind_with(
-            OperatorId::new("echo"),
-            echo_env(),
-            EnvironmentSpec::default(),
-        );
-
-        let tasks = vec![
-            (OperatorId::new("echo"), input("ok")),
-            (OperatorId::new("missing"), input("fail")),
-        ];
-
-        let results = orch.dispatch_many(tasks).await;
-        assert!(results[0].is_ok());
-        assert!(matches!(
-            results[1],
-            Err(OrchError::OperatorNotFound(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn signal_returns_unsupported() {
-        let orch = EnvOrch::new();
-        let err = orch
-            .signal(
-                &WorkflowId::new("wf1"),
-                SignalPayload::new("test", serde_json::Value::Null),
-            )
-            .await
-            .unwrap_err();
-
-        assert!(matches!(err, OrchError::DispatchFailed(_)));
-    }
-
-    #[tokio::test]
-    async fn query_returns_unsupported() {
-        let orch = EnvOrch::new();
-        let err = orch
-            .query(&WorkflowId::new("wf1"), QueryPayload::new("test", serde_json::Value::Null))
-            .await
-            .unwrap_err();
-
-        assert!(matches!(err, OrchError::DispatchFailed(_)));
     }
 }

@@ -1,13 +1,13 @@
 use async_trait::async_trait;
-use layer0::dispatch::Dispatcher;
 use layer0::content::Content;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
-use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::state::{SearchResult, StateStore};
 use serde_json::json;
+use skg_effects_core::Signalable;
 use skg_orch_kit::{Kit, KitError, LocalEffectInterpreter, OrchestratedRunner};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,29 +51,10 @@ impl Dispatcher for SimpleOrch {
 }
 
 #[async_trait]
-impl Orchestrator for SimpleOrch {
-    async fn dispatch_many(
-        &self,
-        tasks: Vec<(OperatorId, OperatorInput)>,
-    ) -> Vec<Result<OperatorOutput, OrchError>> {
-        let mut results = Vec::with_capacity(tasks.len());
-        for (operator, input) in tasks {
-            results.push(self.dispatch(&operator, input).await);
-        }
-        results
-    }
-
+impl Signalable for SimpleOrch {
     async fn signal(&self, target: &WorkflowId, signal: SignalPayload) -> Result<(), OrchError> {
         self.signals.lock().await.push((target.clone(), signal));
         Ok(())
-    }
-
-    async fn query(
-        &self,
-        _target: &WorkflowId,
-        _query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError> {
-        Ok(serde_json::Value::Null)
     }
 }
 
@@ -267,11 +248,11 @@ async fn runner_executes_memory_and_signal_effects() {
     let mut orch = SimpleOrch::new();
     orch.register("root", Arc::new(WriterOperator));
     let orch = Arc::new(orch);
-    let orch_for_runner: Arc<dyn Orchestrator> = orch.clone();
 
     let state = Arc::new(TestStore::new());
     let runner = OrchestratedRunner::new(
-        orch_for_runner,
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch.clone() as Arc<dyn Signalable>),
         Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
     );
 
@@ -286,7 +267,7 @@ async fn runner_executes_memory_and_signal_effects() {
     assert_eq!(trace.outputs.len(), 1);
     assert_eq!(state.read_raw("k1").await, Some(json!({"v": 1})));
 
-    // Signal is sent by the runner via Orchestrator::signal and recorded by our orch.
+    // Signal is sent by the runner via Signalable::signal and recorded by our orch.
     let signals = orch.recorded_signals().await;
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].0, WorkflowId::new("wf1"));
@@ -301,8 +282,10 @@ async fn runner_enqueues_and_executes_delegate() {
     orch.register("child", Arc::new(ChildOperator));
 
     let state = Arc::new(TestStore::new());
+    let orch = Arc::new(orch);
     let runner = OrchestratedRunner::new(
-        Arc::new(orch),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch.clone() as Arc<dyn Signalable>),
         Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
     );
 
@@ -325,8 +308,10 @@ async fn runner_enqueues_and_executes_handoff() {
     orch.register("root", Arc::new(HandoffOperator));
     orch.register("handoff_target", Arc::new(HandoffTargetOperator));
 
+    let orch = Arc::new(orch);
     let runner = OrchestratedRunner::new(
-        Arc::new(orch),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch.clone() as Arc<dyn Signalable>),
         Arc::new(LocalEffectInterpreter::new(Arc::new(TestStore::new()))),
     );
 
@@ -345,7 +330,9 @@ async fn runner_enqueues_and_executes_handoff() {
 
 #[tokio::test]
 async fn kit_local_runner_requires_state_backend() {
-    let kit = Kit::new(Arc::new(SimpleOrch::new()));
+    let orch: Arc<SimpleOrch> = Arc::new(SimpleOrch::new());
+    let kit = Kit::new(orch.clone() as Arc<dyn Dispatcher>)
+        .with_signaler(orch.clone() as Arc<dyn Signalable>);
     let err = match kit.local_runner() {
         Ok(_) => panic!("expected error, got Ok"),
         Err(e) => e,
@@ -355,7 +342,10 @@ async fn kit_local_runner_requires_state_backend() {
 
 #[tokio::test]
 async fn unknown_agent_returns_agent_not_found() {
-    let kit = Kit::new(Arc::new(SimpleOrch::new())).with_state(Arc::new(TestStore::new()));
+    let orch: Arc<SimpleOrch> = Arc::new(SimpleOrch::new());
+    let kit = Kit::new(orch.clone() as Arc<dyn Dispatcher>)
+        .with_signaler(orch.clone() as Arc<dyn Signalable>)
+        .with_state(Arc::new(TestStore::new()));
     let runner = kit.local_runner().unwrap();
     let err = runner
         .run(
@@ -365,7 +355,7 @@ async fn unknown_agent_returns_agent_not_found() {
         .await
         .unwrap_err();
     match err {
-        KitError::Orchestrator(OrchError::OperatorNotFound(name)) => assert_eq!(name, "missing"),
+        KitError::Dispatch(OrchError::OperatorNotFound(name)) => assert_eq!(name, "missing"),
         other => panic!("expected OperatorNotFound, got {other:?}"),
     }
 }
@@ -388,8 +378,10 @@ async fn runner_has_safety_bound_for_infinite_followups() {
     let mut orch = SimpleOrch::new();
     orch.register("root", Arc::new(SelfDelegate));
 
+    let orch = Arc::new(orch);
     let runner = OrchestratedRunner::new(
-        Arc::new(orch),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch.clone() as Arc<dyn Signalable>),
         Arc::new(LocalEffectInterpreter::new(Arc::new(TestStore::new()))),
     )
     .with_max_followups(8);
@@ -411,11 +403,10 @@ async fn runner_effect_pipeline_end_to_end() {
     orch.register("child", Arc::new(ChildOperator));
     orch.register("handoff_target", Arc::new(HandoffTargetOperator));
     let orch = Arc::new(orch);
-    let orch_for_runner: Arc<dyn Orchestrator> = orch.clone();
-
     let state = Arc::new(TestStore::new());
     let runner = OrchestratedRunner::new(
-        orch_for_runner,
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch.clone() as Arc<dyn Signalable>),
         Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
     );
 
@@ -447,7 +438,7 @@ async fn runner_effect_pipeline_end_to_end() {
         ]
     );
 
-    // Signal is sent by runner via Orchestrator::signal and is observable.
+    // Signal is sent by runner via Signalable::signal and is observable.
     let signals = orch.recorded_signals().await;
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].0, WorkflowId::new("wf-pipeline"));

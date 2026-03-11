@@ -1,10 +1,10 @@
 # Core Concepts
 
-skelegent's architecture is built on **four protocol traits** and **two cross-cutting interfaces**, organized into **six layers**. This page explains each concept and how they compose.
+skelegent's architecture is built on **six protocol traits** and **two cross-cutting interfaces**, organized into **six layers**. This page explains each concept and how they compose.
 
-## The four protocols
+## The six protocols
 
-Every agentic system must answer four questions. Each question maps to a protocol trait in Layer 0.
+Every agentic system must answer these questions. Each question maps to protocol traits in Layer 0.
 
 ### Protocol 1: Operator -- "What does one agent do per cycle?"
 
@@ -23,25 +23,80 @@ Implementations include a context engine (composable three-phase engine with ass
 
 The context engine's `Context` type is the conversation store. It holds the messages array sent to the model. Your application's domain data — shell history, file state, user preferences — feeds into `Context` via assembly operations (`inject_system`, `inject_message`) or the `system_addendum` field in `OperatorConfig`. Domain data and conversation state are separate concerns: your app owns the domain data, `Context` owns the conversation.
 
-### Protocol 2: Orchestrator -- "How do agents compose?"
+### Protocol 2: Dispatcher, Signalable, Queryable -- "How do agents compose?"
 
-The `Orchestrator` trait defines how multiple agents work together and how execution survives failures.
+
+
+These three traits decompose the orchestration boundary:
+
+
+
+**Dispatcher** defines how one agent invokes another:
+
+
 
 ```rust
+
 #[async_trait]
-pub trait Orchestrator: Send + Sync {
+
+pub trait Dispatcher: Send + Sync {
+
     async fn dispatch(&self, operator: &OperatorId, input: OperatorInput)
+
         -> Result<OperatorOutput, OrchError>;
-    async fn dispatch_many(&self, tasks: Vec<(OperatorId, OperatorInput)>)
-        -> Vec<Result<OperatorOutput, OrchError>>;
-    async fn signal(&self, target: &WorkflowId, signal: SignalPayload)
-        -> Result<(), OrchError>;
-    async fn query(&self, target: &WorkflowId, query: QueryPayload)
-        -> Result<serde_json::Value, OrchError>;
+
 }
+
 ```
 
-`dispatch` might be a function call (in-process) or a network hop to another continent. The caller does not know and does not care. `signal` provides fire-and-forget messaging to running workflows. `query` enables read-only inspection of workflow state.
+
+
+`dispatch` might be a function call (in-process) or a network hop to another continent. The caller does not know and does not care.
+
+
+
+**Signalable** provides fire-and-forget inter-workflow messaging:
+
+
+
+```rust
+
+#[async_trait]
+
+pub trait Signalable: Send + Sync {
+
+    async fn signal(&self, target: &WorkflowId, signal: SignalPayload)
+
+        -> Result<(), OrchError>;
+
+}
+
+```
+
+
+
+**Queryable** enables read-only inspection of workflow state:
+
+
+
+```rust
+
+#[async_trait]
+
+pub trait Queryable: Send + Sync {
+
+    async fn query(&self, target: &WorkflowId, query: QueryPayload)
+
+        -> Result<serde_json::Value, OrchError>;
+
+}
+
+```
+
+
+
+Related: `dispatch_many()` is a free function in `skg-orch-kit` that dispatches multiple tasks in parallel using `Dispatcher`.
+
 
 ### Protocol 3: StateStore -- "How does data persist?"
 
@@ -85,7 +140,7 @@ The `EnvironmentSpec` declares isolation boundaries (process, container, VM, Was
 
 Per-boundary middleware traits wrap each protocol's operations using the continuation pattern. Three traits — one per protocol boundary — live in `layer0::middleware`:
 
-- **`DispatchMiddleware`** wraps `Orchestrator::dispatch`. Code before `next.dispatch()` = pre-processing; code after = post-processing; not calling `next` = short-circuit.
+- **`DispatchMiddleware`** wraps `Dispatcher::dispatch`. Code before `next.dispatch()` = pre-processing; code after = post-processing; not calling `next` = short-circuit.
 - **`StoreMiddleware`** wraps `StateStore` read/write. Use for encryption-at-rest, audit trails, caching, access control.
 - **`ExecMiddleware`** wraps `Environment::run`. Use for resource metering, credential injection, sandboxing.
 
@@ -134,6 +189,6 @@ These terms name configuration patterns built on top of `Operator`, not separate
 
 **Tool:** An operator registered with `ToolMetadata` (name, description, JSON input schema, concurrency hint). The metadata makes the operator callable from an LLM reasoning loop. The distinction between a tool and any other operator is configuration, not type — the `Operator` trait is the same.
 
-**Agent:** A configured operator. Concretely: an `Operator` implementation (typically a context engine) wired with a provider, identity, tools, and optionally an `Arc<dyn Orchestrator>` for sub-dispatching to other agents. The term 'agent' has no corresponding trait; it describes how an operator is assembled and what capabilities it receives at construction time.
+**Agent:** A configured operator. Concretely: an `Operator` implementation (typically a context engine) wired with a provider, identity, tools, and optionally an `Arc<dyn Dispatcher>` for sub-dispatching to other agents. The term 'agent' has no corresponding trait; it describes how an operator is assembled and what capabilities it receives at construction time.
 
 To create an agent, wrap `react_loop()` (from `skg-context-engine`) in a struct that implements `Operator`. The struct holds the provider, tools, and config. The `execute()` method creates a fresh `Context`, assembles domain context into it, and calls `react_loop()`. The provider's generic type parameter is erased at the `Operator` boundary — callers interact with `Arc<dyn Operator>` and never see the concrete provider type. See the [operators guide](../guides/operators.md) for a complete example.

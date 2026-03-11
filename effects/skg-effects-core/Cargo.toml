@@ -11,3 +11,5 @@ description = "Core effect execution traits and errors"
 async-trait = "0.1"
 layer0 = { path = "../../layer0", version = "0.4.1" }
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

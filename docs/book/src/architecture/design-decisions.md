@@ -30,12 +30,12 @@ Internal traits like `Provider` are never used behind `dyn` -- they appear as ge
 
 ## Why four protocols plus two interfaces
 
-**Decision:** The architecture has four protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`) and two cross-cutting interfaces (per-boundary middleware, lifecycle events).
+**Decision:** The architecture has six protocol traits (`Operator`, `Dispatcher`, `Signalable`, `Queryable`, `StateStore`, `Environment`) and two cross-cutting interfaces (per-boundary middleware, lifecycle events).
 
 **Reasoning:** The four protocols are orthogonal concerns that compose independently:
 
 1. **Operator** -- What happens in a single agent cycle (reasoning + acting).
-2. **Orchestrator** -- How multiple agents compose (topology + durability).
+2. **Dispatch/Signal/Query** -- How multiple agents compose (topology + durability). Dispatcher invokes, Signalable delivers signals, Queryable reads workflow state.
 3. **State** -- How data persists (storage backend).
 4. **Environment** -- Where code runs (isolation + credentials).
 

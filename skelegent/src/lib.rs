@@ -4,7 +4,7 @@
 //! Composable, async-first agentic AI framework for Rust.
 //!
 //! Skelegent provides a layered architecture: a minimal set of protocol traits in
-//! [`layer0`] (Operator, Orchestrator, StateStore, Environment), operator
+//! [`layer0`] (Operator, Dispatcher, StateStore, Environment), operator
 //! implementations (ReAct loop, single-shot), provider adapters (Anthropic, OpenAI,
 //! Ollama), state backends, orchestration primitives, and a high-level
 //! [`agent()`](crate::agent) builder for quick-start use. All pieces are opt-in via

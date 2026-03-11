@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// - WasmEnvironment: sandboxed Wasm runtime
 ///
 /// The critical insight: the Environment owns or has access to whatever
-/// it needs to execute an operator — the same pattern as Orchestrator.
+/// it needs to execute an operator — the same pattern as Dispatcher.
 /// `run()` takes only data (`OperatorInput` + `EnvironmentSpec`), not a
 /// function reference. How the Environment resolves and invokes an Operator
 /// is an internal concern.

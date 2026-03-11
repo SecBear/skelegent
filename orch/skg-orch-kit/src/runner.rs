@@ -1,12 +1,13 @@
 use layer0::middleware::{StoreStack, StoreWriteNext};
 
 use async_trait::async_trait;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::{Effect, Scope};
 use layer0::error::{OrchError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
-use layer0::orchestrator::Orchestrator;
 use layer0::state::{StateStore, StoreOptions};
+use skg_effects_core::Signalable;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use thiserror::Error;
@@ -14,9 +15,9 @@ use thiserror::Error;
 /// Errors returned by `skg-orch-kit`.
 #[derive(Debug, Error)]
 pub enum KitError {
-    /// Orchestrator error.
+    /// Dispatch error.
     #[error("orchestrator error: {0}")]
-    Orchestrator(#[from] OrchError),
+    Dispatch(#[from] OrchError),
     /// State backend error.
     #[error("state error: {0}")]
     State(#[from] StateError),
@@ -218,7 +219,7 @@ impl<S: StateStore + ?Sized + 'static> EffectInterpreter for LocalEffectInterpre
                     target: target.clone(),
                     signal_type: payload.signal_type.clone(),
                 });
-                // The runner sends signals via the Orchestrator; this executor only records.
+                // The runner sends signals via the Dispatcher; this executor only records.
             }
             Effect::Delegate { operator, input } => {
                 followups.push((operator.clone(), input.as_ref().clone()));
@@ -255,16 +256,22 @@ impl<S: StateStore + ?Sized + 'static> EffectInterpreter for LocalEffectInterpre
 /// This is the core “glue” promised by `skg-orch-kit`: it proves that the
 /// effect vocabulary is executable without forcing a DSL.
 pub struct OrchestratedRunner<E: EffectInterpreter> {
-    orch: Arc<dyn Orchestrator>,
+    dispatcher: Arc<dyn Dispatcher>,
+    signaler: Option<Arc<dyn Signalable>>,
     effects: Arc<E>,
     max_followups: usize,
 }
 
 impl<E: EffectInterpreter> OrchestratedRunner<E> {
     /// Create a new orchestrated runner.
-    pub fn new(orch: Arc<dyn Orchestrator>, effects: Arc<E>) -> Self {
+    pub fn new(
+        dispatcher: Arc<dyn Dispatcher>,
+        signaler: Option<Arc<dyn Signalable>>,
+        effects: Arc<E>,
+    ) -> Self {
         Self {
-            orch,
+            dispatcher,
+            signaler,
             effects,
             max_followups: 128,
         }
@@ -290,7 +297,7 @@ impl<E: EffectInterpreter> OrchestratedRunner<E> {
             trace.events.push(ExecutionEvent::Dispatched {
                 operator: op_id.clone(),
             });
-            let output = self.orch.dispatch(&op_id, op_input).await?;
+            let output = self.dispatcher.dispatch(&op_id, op_input).await?;
 
             // Interpret effects into state updates + followups.
             let mut followups: Vec<(OperatorId, OperatorInput)> = vec![];
@@ -298,7 +305,14 @@ impl<E: EffectInterpreter> OrchestratedRunner<E> {
                 // For signals, we want the orchestrator call to be owned here so
                 // products can override executor behavior without losing transport.
                 if let Effect::Signal { target, payload } = effect {
-                    self.orch.signal(target, payload.clone()).await?;
+                    match &self.signaler {
+                        Some(s) => s.signal(target, payload.clone()).await?,
+                        None => {
+                            return Err(KitError::Effect(
+                                "signal requires a Signalable implementation".into(),
+                            ));
+                        }
+                    }
                 }
                 self.effects
                     .execute_effect(effect, &mut followups, &mut trace)

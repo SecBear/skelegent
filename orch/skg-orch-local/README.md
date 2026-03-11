@@ -8,7 +8,7 @@
 
 ## Overview
 
-`skg-orch-local` is a fully in-process implementation of `layer0`'s `Orchestrator` trait.
+`skg-orch-local` is a fully in-process implementation of `layer0`'s `Dispatcher`, `Signalable`, and `Queryable` traits.
 Operators are registered by `OperatorId` and dispatched directly via `tokio::spawn`. No durability —
 failed operators are not retried. Signals are tracked in an in-memory per-workflow journal.
 
@@ -21,7 +21,7 @@ Use it for:
 
 - **`LocalOrch`** — `new()`, `register(OperatorId, Arc<dyn Operator>)`, `signal_count(&WorkflowId)`
 
-Implements `Orchestrator` (from `layer0`): `dispatch`, `dispatch_many`, `signal`, `query`.
+Implements `Dispatcher`, `Signalable`, and `Queryable` (from `layer0`): `dispatch`, `signal`, and `query`.
 
 ## Usage
 
@@ -34,7 +34,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```rust,no_run
 use skg_orch_local::LocalOrch;
-use layer0::{OperatorId, Content, Operator, OperatorInput, OperatorOutput, Orchestrator};
+use layer0::{OperatorId, Content, Operator, OperatorInput, OperatorOutput, Dispatcher};
 use layer0::operator::TriggerType;
 use std::sync::Arc;
 

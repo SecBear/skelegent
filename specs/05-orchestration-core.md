@@ -13,12 +13,29 @@ It owns:
 
 ## Protocol
 
-`layer0::Orchestrator` is intentionally small:
+`layer0::Dispatcher`, `layer0::Signalable`, and `layer0::Queryable` together form the orchestration boundary:
 
-- `dispatch`
-- `dispatch_many`
-- `signal`
-- `query`
+
+
+**Dispatcher:**
+
+- `dispatch` — invoke an operator by ID
+
+
+
+**Signalable:**
+
+- `signal` — fire-and-forget inter-workflow messaging
+
+
+
+**Queryable:**
+
+- `query` — read-only workflow state inspection
+
+
+
+Related: `dispatch_many()` is a free function in `skg-orch-kit` for concurrent dispatch.
 
 The protocol does not prescribe whether execution is local, remote, durable, or ephemeral.
 

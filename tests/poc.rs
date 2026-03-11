@@ -6,16 +6,15 @@
 //! 1. **Provider swap** — Same operator, different LLM backend
 //! 2. **State swap** — Same workflow logic, different state backend
 //! 3. **Operator swap** — Same input, different operator implementation
-//! 4. **Multi-agent orchestration** — Orchestrator dispatches to multiple agents
+//! 4. **Multi-agent orchestration** — Dispatcher dispatches to multiple agents
 //!
 //! All tests run without API keys by using mock/test implementations.
 
-use layer0::dispatch::Dispatcher;
 use layer0::content::Content;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::Scope;
 use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
-use layer0::orchestrator::Orchestrator;
 use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
 use rust_decimal::Decimal;
@@ -475,7 +474,10 @@ async fn multi_agent_parallel_dispatch() {
         (OperatorId::new("agent_c"), simple_input("Task for C")),
     ];
 
-    let results = orch.dispatch_many(tasks).await;
+    let mut results = Vec::new();
+    for (op, input) in tasks {
+        results.push(orch.dispatch(&op, input).await);
+    }
 
     // All three should succeed
     assert_eq!(results.len(), 3);
@@ -588,7 +590,10 @@ async fn multi_agent_missing_agent_handled_gracefully() {
         (OperatorId::new("nonexistent"), simple_input("missing")),
     ];
 
-    let results = orch.dispatch_many(tasks).await;
+    let mut results = Vec::new();
+    for (op, input) in tasks {
+        results.push(orch.dispatch(&op, input).await);
+    }
     assert_eq!(results.len(), 2);
     assert!(results[0].is_ok());
     assert!(results[1].is_err());
@@ -640,7 +645,10 @@ async fn combined_all_patterns() {
         (OperatorId::new("analyst"), simple_input("Evaluate Rust")),
         (OperatorId::new("rater"), simple_input("Evaluate Rust")),
     ];
-    let results = orch.dispatch_many(tasks).await;
+    let mut results = Vec::new();
+    for (op, input) in tasks {
+        results.push(orch.dispatch(&op, input).await);
+    }
 
     let analysis = results[0].as_ref().unwrap();
     let rating = results[1].as_ref().unwrap();

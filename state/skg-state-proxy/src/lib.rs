@@ -43,8 +43,7 @@ fn scope_to_string(scope: &Scope) -> String {
 /// Deserialize a scope string from the proto back into a [`Scope`].
 #[allow(clippy::result_large_err)]
 fn scope_from_string(s: &str) -> Result<Scope, Status> {
-    serde_json::from_str(s)
-        .map_err(|e| Status::invalid_argument(format!("invalid scope: {e}")))
+    serde_json::from_str(s).map_err(|e| Status::invalid_argument(format!("invalid scope: {e}")))
 }
 
 /// Map a [`StateError`] to a [`tonic::Status`].
@@ -67,9 +66,7 @@ fn status_to_state_err(s: Status) -> StateError {
             key: s.message().to_string(),
         },
         tonic::Code::InvalidArgument => StateError::Serialization(s.message().to_string()),
-        _ => StateError::Other(Box::new(std::io::Error::other(
-            s.message().to_string(),
-        ))),
+        _ => StateError::Other(Box::new(std::io::Error::other(s.message().to_string()))),
     }
 }
 
@@ -118,7 +115,11 @@ impl StateStoreProxy for StateStoreProxyServer {
         self.check_auth(&request)?;
         let req = request.into_inner();
         let scope = scope_from_string(&req.scope)?;
-        let val = self.store.read(&scope, &req.key).await.map_err(state_err_to_status)?;
+        let val = self
+            .store
+            .read(&scope, &req.key)
+            .await
+            .map_err(state_err_to_status)?;
         let value = val.map(|v| serde_json::to_vec(&v).unwrap_or_default());
         Ok(Response::new(proto::ReadResponse { value }))
     }
@@ -192,10 +193,9 @@ impl StateStoreProxy for StateStoreProxyServer {
         let hits = results
             .into_iter()
             .map(|r| {
-                let value = serde_json::to_vec(
-                    &serde_json::Value::String(r.snippet.unwrap_or_default()),
-                )
-                .unwrap_or_default();
+                let value =
+                    serde_json::to_vec(&serde_json::Value::String(r.snippet.unwrap_or_default()))
+                        .unwrap_or_default();
                 proto::SearchHit {
                     key: r.key,
                     value,

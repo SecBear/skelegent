@@ -1,5 +1,5 @@
 #![deny(missing_docs)]
-//! In-process implementation of layer0's Orchestrator trait.
+//! In-process implementation of layer0's Dispatcher trait.
 //!
 //! Dispatches to registered operators via `HashMap<OperatorId, Arc<dyn Operator>>`.
 //! Concurrent dispatch uses `tokio::spawn`. No durability — operators that fail
@@ -13,8 +13,6 @@ use layer0::error::OrchError;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{DispatchNext, DispatchStack};
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
-use layer0::orchestrator::{Orchestrator, QueryPayload};
-use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -103,62 +101,5 @@ impl Dispatcher for LocalOrch {
         } else {
             terminal.dispatch(operator, input).await
         }
-    }
-}
-
-#[async_trait]
-impl Orchestrator for LocalOrch {
-    #[tracing::instrument(skip_all, fields(count = tasks.len()))]
-    async fn dispatch_many(
-        &self,
-        tasks: Vec<(OperatorId, OperatorInput)>,
-    ) -> Vec<Result<OperatorOutput, OrchError>> {
-        let mut handles = Vec::with_capacity(tasks.len());
-
-        for (operator_id, input) in tasks {
-            match self.agents.get(operator_id.as_str()) {
-                Some(op) => {
-                    let op = Arc::clone(op);
-                    handles.push(tokio::spawn(async move {
-                        op.execute(input).await.map_err(OrchError::OperatorError)
-                    }));
-                }
-                None => {
-                    let name = operator_id.to_string();
-                    handles.push(tokio::spawn(async move {
-                        Err(OrchError::OperatorNotFound(name))
-                    }));
-                }
-            }
-        }
-
-        let mut results = Vec::with_capacity(handles.len());
-        for handle in handles {
-            match handle.await {
-                Ok(result) => results.push(result),
-                Err(e) => results.push(Err(OrchError::DispatchFailed(e.to_string()))),
-            }
-        }
-
-        results
-    }
-
-    async fn signal(&self, target: &WorkflowId, signal: SignalPayload) -> Result<(), OrchError> {
-        let mut workflows = self.workflow_signals.write().await;
-        workflows
-            .entry(target.to_string())
-            .or_default()
-            .push(signal);
-        Ok(())
-    }
-
-    async fn query(
-        &self,
-        target: &WorkflowId,
-        _query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError> {
-        let workflows = self.workflow_signals.read().await;
-        let count = workflows.get(target.as_str()).map(|v| v.len()).unwrap_or(0);
-        Ok(json!({ "signals": count }))
     }
 }

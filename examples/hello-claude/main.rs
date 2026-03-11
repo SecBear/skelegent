@@ -27,13 +27,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Build input.
     let input = OperatorInput::new(
-        Content::text("What is the meaning of the word 'skelegent'? Make one up if you don't know."),
+        Content::text(
+            "What is the meaning of the word 'skelegent'? Make one up if you don't know.",
+        ),
         TriggerType::User,
     );
 
     // 4. Execute and print.
     let output = op.execute(input).await?;
-    println!("Response: {}", output.message.as_text().unwrap_or("(no text)"));
+    println!(
+        "Response: {}",
+        output.message.as_text().unwrap_or("(no text)")
+    );
     println!(
         "Tokens: in={}, out={}",
         output.metadata.tokens_in, output.metadata.tokens_out

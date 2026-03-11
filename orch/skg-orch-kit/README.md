@@ -14,7 +14,7 @@ effect routing, state fan-out, delegation resolution, and handoff handling. It i
 execution model.
 
 Pair it with [`skg-orch-local`](../skg-orch-local) for a turnkey in-process implementation,
-or implement your own `Orchestrator` using this kit as the foundation.
+or implement your own `Dispatcher`, `Signalable`, and `Queryable` traits using this kit as the foundation.
 
 Key components:
 

@@ -24,7 +24,7 @@ skelegent organizes its crates into six layers plus an umbrella crate. Each laye
  │  Providers, tools, operators, context, MCP        │
  ├──────────────────────────────────────────────────┤
  │  LAYER 0 — Protocol Traits (layer0)              │
- │  4 protocols + 2 interfaces + message types       │
+│  6 protocols + 2 interfaces + message types       │
  │  The stability contract. Changes: almost never.   │
  └──────────────────────────────────────────────────┘
 ```
@@ -33,7 +33,7 @@ skelegent organizes its crates into six layers plus an umbrella crate. Each laye
 
 **Crate:** `layer0`
 
-Layer 0 is the stability contract. It defines the four protocol traits (`Operator`, `Orchestrator`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (per-boundary middleware traits, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs).
+Layer 0 is the stability contract. It defines the six protocol traits (`Operator`, `Dispatcher`, `Signalable`, `Queryable`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (per-boundary middleware traits, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs).
 
 **Dependencies:** `serde`, `async-trait`, `thiserror`, `rust_decimal`, `serde_json`. Nothing else. No runtime, no HTTP, no provider-specific types.
 
@@ -63,7 +63,7 @@ Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `
 - `skg-effects-core` -- `EffectExecutor` trait and shared effect execution types
 - `skg-effects-local` -- Local effect interpreter (executes effects in-process)
 
-Layer 2 implements `layer0::Orchestrator`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `OperatorId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
+Layer 2 implements `layer0::Dispatcher` (and `Signalable`, `Queryable`). The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `OperatorId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
 
 Future implementations could include Temporal workflows (durable, replayable) or Restate (durable execution with virtual objects).
 

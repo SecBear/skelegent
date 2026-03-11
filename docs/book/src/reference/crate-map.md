@@ -6,7 +6,7 @@ All crates in the skelegent workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `layer0` | Protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`), middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`), message types, and error types. The stability contract. |
+| `layer0` | Protocol traits (`Operator`, `Dispatcher`, `Signalable`, `Queryable`, `StateStore`, `Environment`), middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`), message types, and error types. The stability contract. |
 
 ## Layer 1 -- Operator Implementations
 
@@ -29,7 +29,7 @@ All crates in the skelegent workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `skg-orch-local` | In-process orchestrator. Implements `Orchestrator` with tokio tasks. |
+| `skg-orch-local` | In-process orchestrator. Implements `Dispatcher`, `Signalable`, and `Queryable` with tokio tasks. |
 | `skg-orch-kit` | Shared utilities for orchestrator implementations. |
 | `skg-effects-core` | Effect execution trait (`EffectExecutor`), errors, and policy — no implementations. |
 | `skg-effects-local` | Local in-process `EffectExecutor` implementation (in-order, best-effort). |

@@ -16,7 +16,7 @@ Four protocol traits + two cross-cutting interfaces:
 | Protocol | Trait | Responsibility |
 |----------|-------|----------------|
 | ① Operator | `Operator` | One agent's work per cycle |
-| ② Orchestration | `Orchestrator` | Multi-agent composition + workflow routing |
+| ② Dispatch | `Dispatcher` | Multi-agent invocation primitive |
 | ③ State | `StateStore` / `StateReader` | Persistent key-value memory |
 | ④ Environment | `Environment` | Isolation, credentials, resource limits |
 | ⑤ Middleware | `DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware` | Interception + policy at each boundary |
@@ -27,7 +27,11 @@ Four protocol traits + two cross-cutting interfaces:
 **Operator:** `Operator`, `OperatorInput`, `OperatorOutput`, `OperatorConfig`, `OperatorMetadata`,
 `SubDispatchRecord`, `ToolMetadata`, `ExitReason`
 
-**Orchestrator:** `Orchestrator`, `QueryPayload`
+**Dispatcher:** `Dispatcher`, `Dispatcher::dispatch`
+
+**Signalable:** `Signalable`, `Signalable::signal`
+
+**Queryable:** `Queryable`, `Queryable::query`
 
 **State:** `StateStore`, `StateReader`, `SearchResult`
 

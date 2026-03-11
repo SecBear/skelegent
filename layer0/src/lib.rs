@@ -8,7 +8,7 @@
 //! | Protocol | Trait | What it does |
 //! |----------|-------|-------------|
 //! | ① Operator | [`Operator`] | What one operator does per cycle |
-//! | ② Orchestration | [`Orchestrator`] | How operators compose + durability |
+//! | ② Dispatch | [`Dispatcher`] | The single invocation primitive |
 //! | ③ State | [`StateStore`] | How data persists across turns |
 //! | ④ Environment | [`Environment`] | Isolation, credentials, resources |
 //!
@@ -49,9 +49,9 @@
 
 #![deny(missing_docs)]
 
-pub mod dispatch;
 pub mod content;
 pub mod context;
+pub mod dispatch;
 pub mod duration;
 pub mod effect;
 pub mod environment;
@@ -60,7 +60,6 @@ pub mod id;
 pub mod lifecycle;
 pub mod middleware;
 pub mod operator;
-pub mod orchestrator;
 pub mod secret;
 pub mod state;
 
@@ -73,8 +72,8 @@ pub use context::{
     Context, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message, MessageMeta,
     OperatorContext, Position, Role, WatcherVerdict,
 };
-pub use duration::DurationMs;
 pub use dispatch::Dispatcher;
+pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
@@ -88,7 +87,6 @@ pub use operator::{
     ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMetadata, OperatorOutput,
     SubDispatchRecord, ToolMetadata,
 };
-pub use orchestrator::{Orchestrator, QueryPayload};
 pub use secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 pub use state::{
     ContentKind, Lifetime, MemoryLink, MemoryTier, SearchOptions, SearchResult, StateReader,

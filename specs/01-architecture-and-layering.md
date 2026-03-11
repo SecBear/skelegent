@@ -23,7 +23,7 @@ At runtime, it’s often clearer to think in this order:
 
 This teaching order must not contradict canonical layer numbering.
 
-`Environment::run()` is called by **orchestrator implementations** (Layer 2), not by operators or composition code directly. Operators receive dispatch capability via `Arc<dyn Orchestrator>` injected at construction time; the orchestrator mediates the environment boundary transparently.
+`Environment::run()` is called by **orchestrator implementations** (Layer 2), not by operators or composition code directly. Operators receive dispatch capability via `Arc<dyn Dispatcher>` injected at construction time; the orchestrator mediates the environment boundary transparently.
 
 ## Dependency Rules
 

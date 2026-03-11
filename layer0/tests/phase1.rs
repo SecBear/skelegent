@@ -29,11 +29,6 @@ fn arc_operator_is_send_sync() {
 }
 
 #[test]
-fn arc_orchestrator_is_send_sync() {
-    _assert_send_sync::<std::sync::Arc<dyn Orchestrator>>();
-}
-
-#[test]
 fn arc_state_store_is_send_sync() {
     _assert_send_sync::<std::sync::Arc<dyn StateStore>>();
 }
@@ -46,11 +41,6 @@ fn arc_state_reader_is_send_sync() {
 #[test]
 fn arc_environment_is_send_sync() {
     _assert_send_sync::<std::sync::Arc<dyn Environment>>();
-}
-
-#[test]
-fn orchestrator_is_object_safe_send_sync() {
-    _assert_send_sync::<Box<dyn Orchestrator>>();
 }
 
 #[test]
@@ -514,19 +504,6 @@ fn compaction_event_round_trip() {
     };
     let json = serde_json::to_string(&e).unwrap();
     let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Orchestrator QueryPayload round-trip
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn query_payload_round_trip() {
-    let q = QueryPayload::new("status", json!({"verbose": true}));
-    let json = serde_json::to_string(&q).unwrap();
-    let back: QueryPayload = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
     assert_eq!(json, json2);
 }

@@ -24,7 +24,7 @@ mod proto {
 
 use proto::runner_server::{Runner, RunnerServer};
 use proto::{
-    execute_event, ExecuteEvent, ExecuteRequest, ExecuteResponse, HealthRequest, HealthResponse,
+    ExecuteEvent, ExecuteRequest, ExecuteResponse, HealthRequest, HealthResponse, execute_event,
 };
 
 use registry::OperatorRegistry;
@@ -106,10 +106,7 @@ impl RunnerServiceImpl {
     }
 
     /// Look up an operator by id.
-    fn resolve_operator(
-        &self,
-        operator_id: &str,
-    ) -> Result<Arc<dyn layer0::Operator>, CoreError> {
+    fn resolve_operator(&self, operator_id: &str) -> Result<Arc<dyn layer0::Operator>, CoreError> {
         self.registry
             .get(operator_id)
             .cloned()
@@ -168,8 +165,7 @@ impl Runner for RunnerServiceImpl {
         }))
     }
 
-    type ExecuteStreamStream =
-        tokio_stream::wrappers::ReceiverStream<Result<ExecuteEvent, Status>>;
+    type ExecuteStreamStream = tokio_stream::wrappers::ReceiverStream<Result<ExecuteEvent, Status>>;
 
     async fn execute_stream(
         &self,
@@ -186,9 +182,7 @@ impl Runner for RunnerServiceImpl {
         tokio::task::spawn(async move {
             // Log that execution has started.
             let started_event = ExecuteEvent {
-                event: Some(execute_event::Event::LogLine(
-                    b"operator started".to_vec(),
-                )),
+                event: Some(execute_event::Event::LogLine(b"operator started".to_vec())),
             };
             if tx.send(Ok(started_event)).await.is_err() {
                 return; // receiver dropped

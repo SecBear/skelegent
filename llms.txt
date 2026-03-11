@@ -60,7 +60,7 @@ nix develop --command cargo doc --workspace --no-deps
 
 - **OperatorId** — typed identity for operators (protocol-level concept)
 - **Operator** — object-safe trait: `async fn execute(input, orch) -> Result<Output, Error>`
-- **Orchestrator** — dispatches to operators by ID; `dispatch()` and `dispatch_many()`
+- **Dispatcher** — invokes operators by ID via `dispatch()`; `dispatch_many()` as a free function in skg-orch-kit
 - **StateStore** — object-safe key-value state with scopes, hints, and text search
 - **Context** — mutable conversation context with ops, rules, and metrics
 - **Rule** — reactive `ContextOp` with triggers (before/after/when) for automated behavior

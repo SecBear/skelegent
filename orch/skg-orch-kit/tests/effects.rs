@@ -1,12 +1,12 @@
-use layer0::dispatch::Dispatcher;
 use layer0::content::Content;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, OperatorInput, OperatorOutput, TriggerType};
-use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::state::StateStore;
 use layer0::test_utils::InMemoryStore;
 use serde_json::json;
+use skg_effects_core::Signalable;
 use skg_orch_kit::effects::{EffectExecutor as EffectsTrait, LocalEffectExecutor};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -52,19 +52,7 @@ impl Dispatcher for MockOrch {
 }
 
 #[async_trait::async_trait]
-impl Orchestrator for MockOrch {
-
-    async fn dispatch_many(
-        &self,
-        tasks: Vec<(OperatorId, OperatorInput)>,
-    ) -> Vec<Result<OperatorOutput, layer0::error::OrchError>> {
-        let mut out = Vec::with_capacity(tasks.len());
-        for (a, i) in tasks {
-            out.push(self.dispatch(&a, i).await);
-        }
-        out
-    }
-
+impl Signalable for MockOrch {
     async fn signal(
         &self,
         target: &WorkflowId,
@@ -73,21 +61,17 @@ impl Orchestrator for MockOrch {
         self.signals.lock().await.push((target.clone(), signal));
         Ok(())
     }
-
-    async fn query(
-        &self,
-        _target: &WorkflowId,
-        _query: QueryPayload,
-    ) -> Result<serde_json::Value, layer0::error::OrchError> {
-        Ok(serde_json::Value::Null)
-    }
 }
 
 #[tokio::test]
 async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(MockOrch::new());
-    let exec = LocalEffectExecutor::new(state.clone(), orch);
+    let exec = LocalEffectExecutor::new(
+        state.clone(),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch as Arc<dyn Signalable>),
+    );
 
     // Write then read outside executor.
     exec.execute(&[Effect::WriteMemory {
@@ -128,7 +112,11 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
 async fn delegate_handoff_and_signal_call_orchestrator_in_order() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(MockOrch::new());
-    let exec = LocalEffectExecutor::new(state, orch.clone());
+    let exec = LocalEffectExecutor::new(
+        state,
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch.clone() as Arc<dyn Signalable>),
+    );
 
     let effects = vec![
         Effect::Delegate {
@@ -181,7 +169,11 @@ async fn delegate_handoff_and_signal_call_orchestrator_in_order() {
 async fn preserves_effect_order_across_memory_and_orch_calls() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(MockOrch::new());
-    let exec = LocalEffectExecutor::new(state.clone(), orch.clone());
+    let exec = LocalEffectExecutor::new(
+        state.clone(),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch.clone() as Arc<dyn Signalable>),
+    );
 
     // Delete then Write ensures final value exists only if order preserved.
     let effects = vec![
@@ -215,7 +207,7 @@ async fn preserves_effect_order_across_memory_and_orch_calls() {
     let got: Option<serde_json::Value> = state.read(&Scope::Global, "k_order").await.unwrap();
     assert_eq!(got, Some(json!(42)));
 
-    // Orchestrator call order preserved relative to other orch calls
+    // Dispatch/signal call order preserved relative to other orch calls
     let dispatches = orch.recorded_dispatches().await;
     assert_eq!(dispatches.len(), 1);
     assert_eq!(dispatches[0].0, OperatorId::new("a"));

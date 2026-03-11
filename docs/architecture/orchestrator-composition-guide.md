@@ -65,7 +65,7 @@ Pipeline composition doesn't need a framework — it's just code:
 // A sweep workflow: three operators, sequenced, with data flow.
 // This is application code, not a framework feature.
 async fn run_sweep(
-    orch: &dyn Orchestrator,
+    dispatcher: &dyn Dispatcher,
     decision_id: &str,
 ) -> Result<SweepVerdict, OrchError> {
     // Step 1: Research
@@ -73,7 +73,7 @@ async fn run_sweep(
         Content::text(format!("Research current state of: {}", decision_id)),
         TriggerType::Schedule,
     );
-    let research_output = orch.dispatch(&"research".into(), research_input).await?;
+    let research_output = dispatcher.dispatch(&"research".into(), research_input).await?;
 
     // Step 2: Compare (receives research findings via input)
     let mut compare_input = OperatorInput::new(
@@ -81,14 +81,14 @@ async fn run_sweep(
         TriggerType::Task,
     );
     compare_input.metadata = json!({ "decision_id": decision_id });
-    let compare_output = orch.dispatch(&"compare".into(), compare_input).await?;
+    let compare_output = dispatcher.dispatch(&"compare".into(), compare_input).await?;
 
     // Step 3: Plan (receives comparison verdict via input)
     let plan_input = OperatorInput::new(
         compare_output.message.clone(),
         TriggerType::Task,
     );
-    let plan_output = orch.dispatch(&"plan".into(), plan_input).await?;
+    let plan_output = dispatcher.dispatch(&"plan".into(), plan_input).await?;
 
     // Collect effects from all steps for execution
     let all_effects: Vec<Effect> = [research_output, compare_output, plan_output]
@@ -155,13 +155,14 @@ Problems:
 - Not composable (can't swap in durable execution)
 - Not observable (no ExecutionTrace, no events)
 
-**Right**: Three operators + workflow code using Orchestrator::dispatch().
+**Right**: Three operators + workflow code using `Dispatcher::dispatch()`.
+
 
 ### A "workflow trait" or "pipeline trait"
 
 **Wrong**: Adding a new protocol trait for multi-step workflows.
 
-The Orchestrator trait already handles this. `dispatch()` returns results.
+The dispatch/signal/query traits already handle this. `dispatch()` returns results.
 Sequential calls with data transformation between them IS a pipeline. No new
 abstraction needed.
 

@@ -14,11 +14,17 @@ It must be easy for any implementation to adopt and must avoid coupling to any s
 
 ## Protocol Traits
 
-Layer 0 defines four primary protocol traits:
+Layer 0 defines six primary protocol traits:
 
 - `Operator`: one unit of agent work
-- `Orchestrator`: dispatch/compose operators and manage workflow control surfaces
+- `Dispatcher`: dispatch/invoke operators
+
+- `Signalable`: fire-and-forget inter-workflow messaging
+
+- `Queryable`: read-only workflow state queries
+
 - `StateStore` + `StateReader`: persistence and retrieval
+
 - `Environment`: isolated execution boundary
 
 Layer 0 also defines cross-cutting governance interfaces:

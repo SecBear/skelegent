@@ -35,11 +35,16 @@ For each protocol trait, the philosophy is captured in this checklist. Implement
 - [ ] Operators MUST receive external services via dependency-injected traits (`Box<dyn Trait>`), never via concrete imports.
 - [ ] Operator output MUST be deterministic given the same input and provider responses.
 
-#### Orchestrator
+#### Dispatcher, Signalable, Queryable
 
-- [ ] Dispatch MUST be transport-agnostic. Local function call, HTTP, Temporal — the Orchestrator trait MUST NOT assume mechanism.
-- [ ] `signal()` MUST be fire-and-forget. The caller MUST NOT assume the signal was processed.
-- [ ] `query()` MUST be read-only and MUST NOT mutate state.
+
+
+- [ ] `Dispatcher::dispatch()` MUST be transport-agnostic. Local function call, HTTP, Temporal — the Dispatcher trait MUST NOT assume mechanism.
+
+- [ ] `Signalable::signal()` MUST be fire-and-forget. The caller MUST NOT assume the signal was processed.
+
+- [ ] `Queryable::query()` MUST be read-only and MUST NOT mutate state.
+
 
 #### Environment
 
