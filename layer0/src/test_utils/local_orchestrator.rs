@@ -46,7 +46,7 @@ impl Orchestrator for LocalOrchestrator {
             .operators
             .get(operator.as_str())
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input).await.map_err(OrchError::OperatorError)
+        op.execute(input, &crate::dispatch::Capabilities::none()).await.map_err(OrchError::OperatorError)
     }
 
     async fn dispatch_many(
@@ -61,7 +61,7 @@ impl Orchestrator for LocalOrchestrator {
                     let operator = Arc::clone(operator);
                     handles.push(tokio::spawn(async move {
                         operator
-                            .execute(input)
+                            .execute(input, &crate::dispatch::Capabilities::none())
                             .await
                             .map_err(OrchError::OperatorError)
                     }));

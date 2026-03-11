@@ -21,7 +21,7 @@ fn simple_input(msg: &str) -> OperatorInput {
 async fn echo_operator_returns_input_as_output() {
     let turn = EchoOperator;
     let input = simple_input("hello echo");
-    let output = turn.execute(input).await.unwrap();
+    let output = turn.execute(input, &layer0::Capabilities::none()).await.unwrap();
     assert_eq!(output.message, Content::text("hello echo"));
     assert_eq!(output.exit_reason, ExitReason::Complete);
 }
@@ -30,7 +30,7 @@ async fn echo_operator_returns_input_as_output() {
 async fn echo_operator_metadata_is_default() {
     let turn = EchoOperator;
     let input = simple_input("test");
-    let output = turn.execute(input).await.unwrap();
+    let output = turn.execute(input, &layer0::Capabilities::none()).await.unwrap();
     assert_eq!(output.metadata.tokens_in, 0);
     assert_eq!(output.metadata.cost, Decimal::ZERO);
     assert!(output.effects.is_empty());
@@ -40,7 +40,7 @@ async fn echo_operator_metadata_is_default() {
 async fn echo_operator_is_usable_as_dyn_operator() {
     let turn: Box<dyn Operator> = Box::new(EchoOperator);
     let input = simple_input("dynamic dispatch");
-    let output = turn.execute(input).await.unwrap();
+    let output = turn.execute(input, &layer0::Capabilities::none()).await.unwrap();
     assert_eq!(output.message, Content::text("dynamic dispatch"));
 }
 
