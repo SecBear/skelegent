@@ -163,15 +163,16 @@ See `op/skg-context-engine/DESIGN.md` for the full composition pattern.
 
 Pre-compaction flush is mandatory. Before compaction destroys in-memory context, important state MUST be written to persistent storage.
 
-Current implementation model: this coordination lives above Layer 0. `skg-context-engine` owns the local compaction rules, and orchestrators may add their own coordination around them. Layer 0 contributes the message-level hints that travel with the data (`Message` + `CompactionPolicy`), not a compaction event vocabulary.
+Current implementation model: this coordination lives above Layer 0. `skg-context-engine` owns the local compaction rules and summarization flow, and `skg-orch-kit::CompactionCoordinator` provides a small orchestration-local helper that decides whether to skip compaction, compact directly, or flush before compacting. Layer 0 contributes the message-level hints that travel with the data (`Message` + `CompactionPolicy`), not a compaction event vocabulary.
 
 Flow:
 1. Context pressure is detected by runtime-local compaction logic
-2. Runtime/orchestrator code flushes important state to hot/warm memory tiers (via `Effect::WriteMemory`) before destructive compaction
-3. Compaction runs; context shrinks
-4. New turns access persisted state via memory tools
+2. Runtime/orchestrator code derives a `CompactionSnapshot` and asks the orchestration-local coordinator for the next action
+3. If required, orchestration flushes important state to hot/warm memory tiers before destructive compaction
+4. Compaction runs; context shrinks
+5. New turns access persisted state via memory tools
 
-This bridges compaction and persistent memory. The flush writes to persistent tiers; the compacted context reads them back via tools. Without the flush, compaction is irreversible information loss.
+This bridges compaction and persistent memory. The flush writes to persistent tiers; the compacted context reads them back via tools. Without the flush, compaction is irreversible information loss. The coordinator MUST surface flush failure explicitly and MUST NOT run compaction after a failed flush.
 
 ## Lifecycle Coordination
 

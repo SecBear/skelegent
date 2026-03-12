@@ -99,7 +99,7 @@ Local budget enforcement is runtime-local today.
 
 Compaction coordination is also above Layer 0 today.
 - `skg-context-engine` owns the local compaction rules and summarization flow.
-- Orchestrators may add continue-as-new or persistence coordination around that runtime behavior.
+- `skg-orch-kit::CompactionCoordinator` is the small orchestration-local coordinator for deciding skip vs compact vs flush-then-compact and for enforcing flush-before-compaction ordering.
 - `CompactionPolicy` on `Message` remains a valid Layer 0 advisory hint because it travels with the message across boundaries.
 
 ### Observation and Intervention
@@ -118,10 +118,9 @@ Implemented:
 - Security middleware exists in `skg-hook-security`: `RedactionMiddleware` and `ExfilGuardMiddleware`.
 - The `Rule` system in `skg-context-engine` provides typed, operator-local interception.
 - Budget enforcement is implemented locally via `BudgetGuard` in `skg-context-engine`.
-- Compaction is implemented above Layer 0 via context-engine rules; `CompactionPolicy` remains the Layer 0 message hint.
+- Compaction is implemented above Layer 0 via context-engine rules plus `skg-orch-kit::CompactionCoordinator`; `CompactionPolicy` remains the Layer 0 message hint.
 
 Still required for "core complete":
-- Explicit examples showing how runtime/orchestration coordinates budget and compaction above Layer 0.
 - Tests for edge middleware actions (skip tool, modify tool input/output) across the operator runtime.
 
 ## Observability

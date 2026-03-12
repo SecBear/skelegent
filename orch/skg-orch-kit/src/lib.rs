@@ -10,6 +10,7 @@
 //! - pluggable effect execution policy (WriteMemory/Delegate/Handoff/Signal)
 //! - zero lock-in: callers can bypass defaults
 
+#[cfg(test)]
 mod budget;
 mod compaction;
 mod intervene;
@@ -17,8 +18,10 @@ mod kit;
 mod observe;
 mod runner;
 
-pub use budget::{BudgetDecision, BudgetSnapshot};
-pub use compaction::{CompactionDecision, CompactionSnapshot};
+pub use compaction::{
+    CompactContext, CompactionCoordinationError, CompactionCoordinator, CompactionDecision,
+    CompactionOperationError, CompactionOutcome, CompactionSnapshot, FlushBeforeCompact,
+};
 pub use intervene::{ContextIntervenor, InterventionSendError};
 pub use kit::Kit;
 pub use observe::{ContextObserver, Observation, ObservationBatch, ObservationTry};
