@@ -7,12 +7,8 @@
 //! ## Core types
 //!
 //! - [`Message`] — a concrete message with role, content, and metadata
-//! - [`ContextMessage`] — a message paired with its [`MessageMeta`]
-//! - [`ContextSnapshot`] — read-only introspection view
-//! - [`ContextError`] — mutation errors (rejected or out-of-bounds)
 
 use crate::content::Content;
-use crate::id::OperatorId;
 use crate::lifecycle::CompactionPolicy;
 use serde::{Deserialize, Serialize};
 
@@ -163,79 +159,4 @@ impl Message {
                 .join(" "),
         }
     }
-}
-
-/// A message paired with its metadata.
-///
-/// Parameterised over `M`, the concrete message type used by a particular operator.
-/// Both fields are public so callers can construct messages directly.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextMessage<M> {
-    /// The message payload.
-    pub message: M,
-
-    /// Per-message metadata (compaction policy, source, salience, version).
-    pub meta: MessageMeta,
-}
-
-/// Where to inject a message into an operator context.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Position {
-    /// Append to the end of the message list.
-    Back,
-
-    /// Prepend to the beginning of the message list.
-    Front,
-
-    /// Insert at the given 0-based index.
-    ///
-    /// An index equal to the current length is equivalent to [`Position::Back`].
-    /// An index greater than the current length returns [`ContextError::OutOfBounds`].
-    At(usize),
-}
-
-/// Read-only snapshot of an operator context for introspection and logging.
-#[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextSnapshot {
-    /// Number of messages currently in the context.
-    pub message_count: usize,
-
-    /// Metadata for each message, in order.
-    pub message_metas: Vec<MessageMeta>,
-
-    /// Whether a system prompt is currently set.
-    pub has_system: bool,
-
-    /// The operator this context belongs to.
-    pub operator_id: OperatorId,
-
-    /// Rough token estimate derived from the debug representation length of messages.
-    ///
-    /// Uses the heuristic `total_chars / 4`. Not suitable for billing — use it for
-    /// soft pressure signals only.
-    pub estimated_tokens: usize,
-}
-
-/// Errors returned by context mutation methods.
-#[non_exhaustive]
-#[derive(Debug, thiserror::Error)]
-pub enum ContextError {
-    /// A watcher or guard rejected the operation.
-    #[error("rejected by watcher: {reason}")]
-    Rejected {
-        /// The rejection reason from the watcher.
-        reason: String,
-    },
-
-    /// A position index was past the end of the message list.
-    #[error("index {index} is out of bounds (len = {len})")]
-    OutOfBounds {
-        /// The index that was out of bounds.
-        index: usize,
-
-        /// The current length of the message list at the time of the error.
-        len: usize,
-    },
 }

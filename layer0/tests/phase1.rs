@@ -82,13 +82,6 @@ fn workflow_id_new() {
 }
 
 #[test]
-fn scope_id_equality() {
-    let a = ScopeId::new("scope-1");
-    let b = ScopeId::new("scope-1");
-    assert_eq!(a, b);
-}
-
-#[test]
 fn typed_id_serde_round_trip() {
     let id = OperatorId::new("test-agent");
     let json = serde_json::to_string(&id).unwrap();

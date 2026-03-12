@@ -47,4 +47,3 @@ macro_rules! typed_id {
 typed_id!(OperatorId, "Unique identifier for an operator.");
 typed_id!(SessionId, "Unique identifier for a conversation session.");
 typed_id!(WorkflowId, "Unique identifier for a workflow execution.");
-typed_id!(ScopeId, "Unique identifier for a state scope.");
