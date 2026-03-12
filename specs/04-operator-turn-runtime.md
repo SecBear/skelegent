@@ -75,7 +75,7 @@ Priority is highest-first:
 4. Cost budget / tool-call limit — `BudgetExhausted`
 5. Timeout — `Timeout`
 
-Orchestrators that need to distinguish cost exhaustion from tool-call exhaustion should inspect the `BudgetEvent` lifecycle events.
+Layer 0 defines `MaxTurns`, `BudgetExhausted`, and `Timeout` as the structured exit vocabulary. The current `skg-context-engine` budget guard still halts with `EngineError::Halted`; callers that want structured exit reasons must wrap or extend the runtime above Layer 0 until the runtime boundary work lands.
 
 ## Steering Observability
 
@@ -87,7 +87,7 @@ Steering (`SteeringSource` in `skg-turn-kit`) is an optional source of mid-loop 
 
 ## Context Budget
 
-Context budget management is handled by the `BudgetGuard` rule in `skg-context-engine`. The guard checks four limits before each inference call:
+Context budget management is currently handled by the `BudgetGuard` rule in `skg-context-engine`. The guard checks four limits at runtime governance boundaries today:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -96,24 +96,30 @@ Context budget management is handled by the `BudgetGuard` rule in `skg-context-e
 | `max_duration` | `Option<Duration>` | `None` | Maximum wall-clock duration |
 | `max_tool_calls` | `Option<u32>` | `None` | Maximum total tool calls |
 
-When any limit is exceeded, `BudgetGuard` returns `EngineError::Halted`, which the react loop maps to `ExitReason::BudgetExhausted`.
+When any limit is exceeded, `BudgetGuard` returns `EngineError::Halted`. Honest pre-inference enforcement and canonical structured exit mapping are implementation work tracked above this spec baseline.
 
 ## Context Assembly
 
 ### Message
 
-`Message` (from `layer0::context`) wraps `ProviderMessage` with per-message metadata enabling selective compaction. Defined in `layer0/src/context.rs`.
+`Message` (from `layer0::context`) is the protocol-level conversational unit the runtime compiles into provider requests. It carries role/content plus per-message metadata that survives store, dispatch, and compaction boundaries.
 
 ```rust
 pub struct Message {
-    pub message: ProviderMessage,
-    pub policy: Option<CompactionPolicy>,  // default: Normal
-    pub source: Option<String>,            // e.g. "mcp:github", "user", "tool:shell"
-    pub salience: Option<f64>,             // 0.0–1.0 write-time importance hint
+    pub role: Role,
+    pub content: Content,
+    pub meta: MessageMeta,
+}
+
+pub struct MessageMeta {
+    pub policy: CompactionPolicy,
+    pub source: Option<String>,
+    pub salience: Option<f64>,
+    pub version: u64,
 }
 ```
 
-An unannotated `ProviderMessage` wrapped via `Message::from(msg)` behaves as if `policy = Normal`. Convenience constructors: `Message::pinned(msg)`, `Message::from_mcp(msg, server_name)`.
+Use `Message::new(role, content)` for default metadata and `Message::pinned(role, content)` for pinned messages. Compaction/source/salience annotations live under `meta`, not as top-level `Message` fields.
 
 ### CompactionPolicy
 
@@ -155,24 +161,24 @@ See `op/skg-context-engine/DESIGN.md` for the full composition pattern.
 
 ### Pre-Compaction Flush
 
-Pre-compaction flush is mandatory. Before compaction destroys in-memory context, important state MUST be written to persistent storage. This is the `PreCompactionFlush` lifecycle event pattern.
+Pre-compaction flush is mandatory. Before compaction destroys in-memory context, important state MUST be written to persistent storage.
+
+Current implementation model: this coordination lives above Layer 0. `skg-context-engine` owns the local compaction rules, and orchestrators may add their own coordination around them. Layer 0 contributes the message-level hints that travel with the data (`Message` + `CompactionPolicy`), not a compaction event vocabulary.
 
 Flow:
-1. Context pressure detected → `CompactionEvent::ContextPressure` emitted
-2. `CompactionEvent::PreCompactionFlush { operator, scope }` emitted — triggers memory flush
-3. Operator/orchestrator writes important state to hot/warm memory tiers (via `Effect::WriteMemory`)
-4. Compaction runs; context shrinks
-5. New turns access persisted state via memory tools
+1. Context pressure is detected by runtime-local compaction logic
+2. Runtime/orchestrator code flushes important state to hot/warm memory tiers (via `Effect::WriteMemory`) before destructive compaction
+3. Compaction runs; context shrinks
+4. New turns access persisted state via memory tools
 
 This bridges compaction and persistent memory. The flush writes to persistent tiers; the compacted context reads them back via tools. Without the flush, compaction is irreversible information loss.
 
-If the flush fails, `CompactionEvent::FlushFailed` is emitted with the scope and key that failed.
+## Lifecycle Coordination
 
-## Lifecycle Events
-
-Operators emit `BudgetEvent` and `CompactionEvent` lifecycle events. See `specs/09-hooks-lifecycle-and-governance.md` for the full vocabulary and semantics.
-
-Budget and compaction events are handled via the Rule system in `skg-context-engine`. Attach a `BudgetGuard` rule to the `Context` before calling `react_loop()`.
+Budget and compaction coordination are currently runtime-local or orchestrator-local behaviors above Layer 0.
+- Local budget enforcement is handled by `BudgetGuard` in `skg-context-engine` before each inference call.
+- Compaction coordination is handled by context-engine rules and orchestration code; `CompactionPolicy` on `Message` remains the Layer 0 hint that travels with data.
+- Observation and intervention mechanics live above Layer 0 via middleware, context streams, and orchestrator wiring.
 
 ## Current Implementation Status
 

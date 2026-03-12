@@ -471,34 +471,23 @@ fn environment_spec_round_trip() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Lifecycle event round-trips
+// Compaction policy round-trips
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 #[test]
-fn budget_event_cost_incurred_round_trip() {
-    let e = BudgetEvent::CostIncurred {
-        operator: OperatorId::new("a1"),
-        cost: Decimal::new(5, 3),
-        cumulative: Decimal::new(150, 3),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: BudgetEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
+fn compaction_policy_round_trip() {
+    let policies = [
+        CompactionPolicy::Pinned,
+        CompactionPolicy::Normal,
+        CompactionPolicy::CompressFirst,
+        CompactionPolicy::DiscardWhenDone,
+    ];
 
-#[test]
-fn compaction_event_round_trip() {
-    let e = CompactionEvent::ContextPressure {
-        operator: OperatorId::new("a1"),
-        fill_percent: 0.85,
-        tokens_used: 85000,
-        tokens_available: 15000,
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
+    for policy in policies {
+        let json = serde_json::to_string(&policy).unwrap();
+        let back: CompactionPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(policy, back);
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -848,22 +837,6 @@ fn env_error_display_remaining_variants() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// BudgetDecision round-trips
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn budget_decision_downgrade_round_trip() {
-    let d = layer0::lifecycle::BudgetDecision::DowngradeModel {
-        from: "claude-opus-4-20250514".into(),
-        to: "claude-haiku-4-5-20251001".into(),
-    };
-    let json = serde_json::to_string(&d).unwrap();
-    let back: layer0::lifecycle::BudgetDecision = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Effect::Log and Effect::Handoff round-trips
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1081,203 +1054,6 @@ fn credential_injection_variants_round_trip() {
         let json2 = serde_json::to_string(&back).unwrap();
         assert_eq!(json, json2);
     }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Compaction event variants
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn compaction_pre_flush_round_trip() {
-    let e = CompactionEvent::PreCompactionFlush {
-        operator: OperatorId::new("a1"),
-        scope: Scope::Session(SessionId::new("s1")),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn compaction_complete_round_trip() {
-    let e = CompactionEvent::CompactionComplete {
-        operator: OperatorId::new("a1"),
-        strategy: "sliding_window".into(),
-        tokens_freed: 50000,
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn compaction_provider_managed_round_trip() {
-    let e = CompactionEvent::ProviderManaged {
-        operator: OperatorId::new("a1"),
-        provider: "anthropic".into(),
-        tokens_before: 100000,
-        tokens_after: 50000,
-        summary: Some(Content::text("Summarized prior conversation")),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn compaction_failed_round_trip() {
-    let e = CompactionEvent::CompactionFailed {
-        operator: OperatorId::new("a1"),
-        error: "timeout during summarization".into(),
-        strategy: "sliding_window".into(),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn compaction_skipped_round_trip() {
-    let e = CompactionEvent::CompactionSkipped {
-        operator: OperatorId::new("a1"),
-        reason: "below threshold".into(),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn flush_failed_round_trip() {
-    let e = CompactionEvent::FlushFailed {
-        operator: OperatorId::new("a1"),
-        scope: Scope::Session(SessionId::new("s1")),
-        key: "notes".into(),
-        error: "write timeout".into(),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn compaction_quality_round_trip() {
-    let e = CompactionEvent::CompactionQuality {
-        operator: OperatorId::new("a1"),
-        tokens_before: 80000,
-        tokens_after: 40000,
-        items_preserved: 10,
-        items_lost: 5,
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// BudgetEvent/BudgetDecision remaining variants
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn budget_event_all_variants_round_trip() {
-    let events: Vec<BudgetEvent> = vec![
-        BudgetEvent::BudgetWarning {
-            workflow: WorkflowId::new("wf-1"),
-            spent: Decimal::new(800, 2),
-            limit: Decimal::new(1000, 2),
-        },
-        BudgetEvent::BudgetAction {
-            workflow: WorkflowId::new("wf-1"),
-            action: layer0::lifecycle::BudgetDecision::Continue,
-        },
-        BudgetEvent::BudgetAction {
-            workflow: WorkflowId::new("wf-1"),
-            action: layer0::lifecycle::BudgetDecision::HaltWorkflow,
-        },
-        BudgetEvent::BudgetAction {
-            workflow: WorkflowId::new("wf-1"),
-            action: layer0::lifecycle::BudgetDecision::RequestIncrease {
-                amount: Decimal::new(500, 2),
-            },
-        },
-    ];
-    for event in events {
-        let json = serde_json::to_string(&event).unwrap();
-        let back: BudgetEvent = serde_json::from_str(&json).unwrap();
-        let json2 = serde_json::to_string(&back).unwrap();
-        assert_eq!(json, json2);
-    }
-}
-
-#[test]
-fn budget_event_step_limit_approaching_round_trip() {
-    let e = BudgetEvent::StepLimitApproaching {
-        operator: OperatorId::new("a1"),
-        current: 8,
-        max: 10,
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: BudgetEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn budget_event_step_limit_reached_round_trip() {
-    let e = BudgetEvent::StepLimitReached {
-        operator: OperatorId::new("a1"),
-        total_sub_dispatches: 10,
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: BudgetEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn budget_event_loop_detected_round_trip() {
-    let e = BudgetEvent::LoopDetected {
-        operator: OperatorId::new("a1"),
-        operator_name: "search".to_string(),
-        consecutive_count: 3,
-        max: 3,
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: BudgetEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn budget_event_timeout_approaching_round_trip() {
-    let e = BudgetEvent::TimeoutApproaching {
-        operator: OperatorId::new("a1"),
-        elapsed: DurationMs::from_millis(8000),
-        max_duration: DurationMs::from_millis(10000),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: BudgetEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
-
-#[test]
-fn budget_event_timeout_reached_round_trip() {
-    let e = BudgetEvent::TimeoutReached {
-        operator: OperatorId::new("a1"),
-        elapsed: DurationMs::from_millis(10050),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: BudgetEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

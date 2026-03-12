@@ -1,7 +1,7 @@
 //! # layer0 — Protocol traits for composable agentic AI systems
 //!
-//! This crate defines the four protocol boundaries and two cross-cutting
-//! interfaces that compose to form any agentic AI system.
+//! This crate defines the four protocol boundaries plus two cross-cutting
+//! protocol surfaces that compose to form any agentic AI system.
 //!
 //! ## The Protocols
 //!
@@ -12,12 +12,12 @@
 //! | ③ State | [`StateStore`] | How data persists across turns |
 //! | ④ Environment | [`Environment`] | Isolation, credentials, resources |
 //!
-//! ## The Interfaces
+//! ## Cross-Cutting Protocol Surface
 //!
-//! | Interface | Types | What it does |
-//! |-----------|-------|-------------|
+//! | Surface | Types | What it does |
+//! |---------|-------|-------------|
 //! | ⑤ Middleware | [`DispatchMiddleware`], [`StoreMiddleware`], [`ExecMiddleware`] | Interception + policy |
-//! | ⑥ Lifecycle | [`BudgetEvent`], [`CompactionEvent`] | Cross-layer coordination |
+//! | ⑥ Message compaction metadata | [`CompactionPolicy`] | Advisory retention hints attached to messages |
 //!
 //! ## Design Principle
 //!
@@ -75,7 +75,7 @@ pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
 pub use id::{OperatorId, SessionId, WorkflowId};
-pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy};
+pub use lifecycle::CompactionPolicy;
 pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
     StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,

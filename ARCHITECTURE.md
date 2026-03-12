@@ -240,10 +240,7 @@ turns, write important state to persistent storage. On termination, capture work
 product before the context window is destroyed. This is the single most critical
 lifecycle mechanism for long-running agents.
 
-**Compaction**: Three-way coordination between turn (detects pressure, executes
-summarization), orchestration (may continue-as-new), and state (persists
-results). Summarization is the default. The compaction reserve must never be
-zero. `sliding_window` and `policy_trim` strategies are implemented, with
+**Compaction**: Coordination lives above Layer 0. The turn/runtime detects pressure and runs summarization, orchestration may continue-as-new, and state persists results. Layer 0 carries only the message-level hints that travel with the data (`Message` from `layer0::context`, `CompactionPolicy`). Summarization is the default. The compaction reserve must never be zero. `sliding_window` and `policy_trim` strategies are implemented, with
 LLM-driven `summarize` and `extract_cognitive_state` available. Tiered/zone-based
 compaction is tracked in `TODO-aspirational.md` as future work.
 Recursive summarization degradation is a documented failure mode: summarizing
@@ -260,9 +257,10 @@ acceptable for short tasks. Durable: replay recovery. The same operator works
 in both. This entanglement is architectural, not incidental — we accept it
 rather than fighting it with leaky abstractions.
 
-**Budget governance**: Single authority. The turn emits cost events.
-Orchestration tracks aggregate cost. The lifecycle coordinator makes
-halt/continue/downgrade decisions. Planners observe remaining budget (read-only).
+**Budget governance**: Single authority, but current enforcement is runtime-local.
+The turn/runtime currently enforces local cost, turn, duration, and tool-call limits via `BudgetGuard`, which halts with `EngineError::Halted` at runtime governance boundaries.
+Canonical structured exit mapping for those halts is not fully implemented yet. Broader halt/continue/downgrade policy belongs to orchestration above Layer 0 unless/until it becomes a real cross-boundary contract.
+Planners observe remaining budget (read-only).
 
 **Observability**: Cross-cutting. Within an operator, the context stream
 provides full-fidelity real-time visibility into every context mutation and
