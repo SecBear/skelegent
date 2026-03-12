@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use skg_run_core::{
-    ResumeInput, RunControlError, RunController, RunId, RunOutcome, RunStarter, RunStatus,
-    RunView, WaitPointId, WaitReason,
+    ResumeInput, RunControlError, RunController, RunId, RunOutcome, RunStarter, RunStatus, RunView,
+    WaitPointId, WaitReason,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -15,7 +15,10 @@ fn serde_round_trips_public_nouns() {
 
     let status = RunStatus::Waiting;
     let status_json = serde_json::to_string(&status).unwrap();
-    assert_eq!(serde_json::from_str::<RunStatus>(&status_json).unwrap(), status);
+    assert_eq!(
+        serde_json::from_str::<RunStatus>(&status_json).unwrap(),
+        status
+    );
 
     let reason = WaitReason::Custom("human-approval".to_owned());
     let reason_json = serde_json::to_string(&reason).unwrap();
@@ -24,7 +27,8 @@ fn serde_round_trips_public_nouns() {
         reason
     );
 
-    let resume = ResumeInput::new(json!({ "approved": true })).with_metadata("source", json!("ops"));
+    let resume =
+        ResumeInput::new(json!({ "approved": true })).with_metadata("source", json!("ops"));
     let resume_json = serde_json::to_string(&resume).unwrap();
     assert_eq!(
         serde_json::from_str::<ResumeInput>(&resume_json).unwrap(),
@@ -37,7 +41,10 @@ fn serde_round_trips_public_nouns() {
         WaitReason::ExternalInput,
     );
     let waiting_json = serde_json::to_string(&waiting).unwrap();
-    assert_eq!(serde_json::from_str::<RunView>(&waiting_json).unwrap(), waiting);
+    assert_eq!(
+        serde_json::from_str::<RunView>(&waiting_json).unwrap(),
+        waiting
+    );
 
     let completed = RunView::terminal(
         RunId::new("run-123"),
@@ -94,11 +101,10 @@ async fn traits_are_object_safe_and_keep_signal_distinct_from_resume() {
             wait_point: &WaitPointId,
             input: ResumeInput,
         ) -> Result<(), skg_run_core::RunControlError> {
-            self.resumes.lock().await.push((
-                run_id.to_string(),
-                wait_point.to_string(),
-                input,
-            ));
+            self.resumes
+                .lock()
+                .await
+                .push((run_id.to_string(), wait_point.to_string(), input));
             Ok(())
         }
 
@@ -147,7 +153,10 @@ async fn traits_are_object_safe_and_keep_signal_distinct_from_resume() {
         &[("run-123".to_owned(), json!({ "kind": "poke" }))]
     );
     assert_eq!(control.resumes.lock().await.len(), 1);
-    assert_eq!(control.cancels.lock().await.as_slice(), &["run-123".to_owned()]);
+    assert_eq!(
+        control.cancels.lock().await.as_slice(),
+        &["run-123".to_owned()]
+    );
 }
 
 #[tokio::test]
