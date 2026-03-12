@@ -28,3 +28,4 @@ These specs are written to ensure the project is *composable by construction*: o
 | `specs/11-testing-examples-and-backpressure.md` | DX/Quality | Example suite, test matrix, mock/real path strategy |
 | `specs/12-packaging-versioning-and-umbrella-crate.md` | Release | Crate naming, umbrella crate, feature flags, publishing |
 | `specs/13-documentation-and-dx-parity.md` | Docs/DX | Documentation requirements and parity targets |
+| `specs/14-durable-orchestration-core.md` | Orchestration | Portable durable run/control semantics above Layer 0 |

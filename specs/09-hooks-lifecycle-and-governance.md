@@ -86,7 +86,7 @@ Steering is NOT middleware because the primitives are structurally different:
 
 ## Lifecycle Coordination
 
-Current approved model: Layer 0 stays protocol-only. It carries middleware traits/stacks and message-level hints that travel with data. Budget/compaction coordination and observation/intervention mechanics live in runtime or orchestration code above Layer 0 unless promoted into a real cross-boundary contract.
+Current approved model: Layer 0 stays protocol-only. It carries middleware traits/stacks and message-level hints that travel with data. Budget/compaction coordination, observation/intervention mechanics, and durable run/control semantics all live in runtime or orchestration code above Layer 0 unless promoted into a real cross-boundary contract.
 
 ### Budget Coordination
 
@@ -107,6 +107,7 @@ Compaction coordination is also above Layer 0 today.
 Observation/intervention mechanics are above Layer 0.
 - Layer 0 defines middleware traits and middleware boundaries at protocol seams.
 - Context streams, observer channels, and intervention channels are wired by runtime/orchestrator code, not by a Layer 0 lifecycle event contract.
+- Durable wait/resume/cancel semantics are orchestration control-plane concerns above Layer 0, not middleware events; satisfying a durable wait point remains distinct from sending a signal.
 
 ## Current Implementation Status
 
