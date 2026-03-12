@@ -17,6 +17,7 @@ members = [
   "state/skg-state-fs",
   "state/skg-state-proxy",
   "env/skg-env-local",
+  "orch/skg-run-core",
   "orch/skg-orch-local",
   "orch/skg-orch-kit",
   "orch/skg-orch-env",
