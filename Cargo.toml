@@ -30,6 +30,7 @@ members = [
   "provider/skg-provider-openai",
   "provider/skg-provider-ollama",
   "provider/skg-provider-codex",
+  "provider/skg-provider-router",
   "turn/skg-mcp",
   "secret/skg-secret",
   "crypto/skg-crypto",

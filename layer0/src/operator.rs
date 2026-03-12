@@ -1,5 +1,6 @@
 //! The Operator protocol — what one operator does per cycle.
 
+use crate::context::Message;
 use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -59,6 +60,18 @@ pub struct OperatorInput {
     /// to understand.
     #[serde(default)]
     pub metadata: serde_json::Value,
+
+    /// Pre-assembled context from the caller.
+    ///
+    /// When set, the operator runtime seeds its context with these messages
+    /// before processing the new `message`. This enables parent operators
+    /// to curate child context: full inheritance, summary injection,
+    /// filtered history, or any other assembly strategy.
+    ///
+    /// When `None`, the operator assembles context from scratch using
+    /// the `StateStore` and its own identity configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<Vec<Message>>,
 }
 
 /// Per-operator configuration overrides. Every field is optional —
@@ -217,6 +230,7 @@ impl OperatorInput {
             session: None,
             config: None,
             metadata: serde_json::Value::Null,
+            context: None,
         }
     }
 }
