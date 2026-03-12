@@ -350,27 +350,47 @@ impl Context {
     /// the rule dispatch is skipped (and interventions are not drained).
     pub async fn run<O: ContextOp + 'static>(&mut self, op: O) -> Result<O::Output, EngineError> {
         let op_type = TypeId::of::<O>();
+        self.enter_governed(op_type).await?;
+        let output = op.execute(self).await?;
+        self.exit_governed(op_type).await?;
+        Ok(output)
+    }
 
+    /// Enter a typed governance boundary for non-`ContextOp` work.
+    ///
+    /// This reuses the same intervention drain + before/when sequence as
+    /// [`Context::run()`], but the boundary type is a marker rather than a real
+    /// operation. Use this for external discontinuities such as provider calls
+    /// that must still be targetable by rules.
+    pub(crate) async fn enter_boundary<B: 'static>(&mut self) -> Result<(), EngineError> {
+        self.enter_governed(TypeId::of::<B>()).await
+    }
+
+    /// Finish a typed governance boundary for non-`ContextOp` work.
+    ///
+    /// Call this only after the guarded work has succeeded. This matches
+    /// [`Context::run()`], which only fires `After` rules when the inner work
+    /// completes without error.
+    pub(crate) async fn exit_boundary<B: 'static>(&mut self) -> Result<(), EngineError> {
+        self.exit_governed(TypeId::of::<B>()).await
+    }
+
+    async fn enter_governed(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         if !self.in_rule {
-            // Drain pending interventions
             self.drain_interventions().await?;
-
-            // Fire "before" rules
             self.fire_before_rules(op_type).await?;
-
-            // Fire "when" rules
             self.fire_when_rules().await?;
         }
 
-        // Execute the operation
-        let output = op.execute(self).await?;
+        Ok(())
+    }
 
+    async fn exit_governed(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         if !self.in_rule {
-            // Fire "after" rules
             self.fire_after_rules(op_type).await?;
         }
 
-        Ok(output)
+        Ok(())
     }
 
     /// Drain and execute all pending interventions.

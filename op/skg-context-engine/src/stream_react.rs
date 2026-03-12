@@ -8,6 +8,7 @@
 //! [`infer_stream_fallback()`](skg_turn::stream::infer_stream_fallback)
 //! to get a non-streaming fallback that still works with this function.
 
+use crate::boundary::StreamInferBoundary;
 use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
@@ -19,6 +20,32 @@ use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use skg_tool::{ToolCallContext, ToolRegistry};
 use skg_turn::infer::InferResponse;
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+
+async fn infer_stream_once<P, F>(
+    ctx: &mut Context,
+    provider: &P,
+    tools: &ToolRegistry,
+    config: &ReactLoopConfig,
+    on_event: std::sync::Arc<F>,
+) -> Result<InferResponse, EngineError>
+where
+    P: StreamProvider,
+    F: Fn(StreamEvent) + Send + Sync + 'static,
+{
+    ctx.enter_boundary::<StreamInferBoundary>().await?;
+
+    let compile_config = config.compile_config(tools, ctx);
+    let request = build_stream_request(ctx, &compile_config);
+    let cb = std::sync::Arc::clone(&on_event);
+
+    let response = provider
+        .infer_stream(request, move |event| cb(event))
+        .await
+        .map_err(EngineError::Provider)?;
+
+    ctx.exit_boundary::<StreamInferBoundary>().await?;
+    Ok(response)
+}
 
 /// Run the streaming ReAct loop.
 ///
@@ -49,16 +76,15 @@ pub async fn stream_react_loop<P: StreamProvider>(
 ) -> Result<OperatorOutput, EngineError> {
     let on_event = std::sync::Arc::new(on_event);
     loop {
-        // Phase 1: Compile context (re-filter tools each turn)
-        let compile_config = config.compile_config(tools, ctx);
-        let request = build_stream_request(ctx, &compile_config);
-
-        // Phase 2: Stream inference
-        let cb = std::sync::Arc::clone(&on_event);
-        let response = provider
-            .infer_stream(request, move |e| cb(e))
-            .await
-            .map_err(EngineError::Provider)?;
+        // Phase 1: Stream inference behind the governed boundary
+        let response = infer_stream_once(
+            ctx,
+            provider,
+            tools,
+            config,
+            std::sync::Arc::clone(&on_event),
+        )
+        .await?;
 
         // Phase 3: Append response to context (rules fire)
         ctx.run(AppendResponse::new(response.clone())).await?;
@@ -123,11 +149,15 @@ fn build_stream_request(ctx: &Context, config: &CompileConfig) -> StreamRequest 
 mod tests {
     use super::*;
     use crate::context::Context;
+    use crate::op::ContextOp;
+    use crate::{Rule, StreamInferBoundary};
+    use async_trait::async_trait;
     use layer0::content::Content;
     use layer0::context::{Message, Role};
     use layer0::id::OperatorId;
     use serde_json::json;
     use skg_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
+    use skg_turn::provider::ProviderError;
     use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest, infer_stream_fallback};
     use skg_turn::test_utils::TestProvider;
     use std::pin::Pin;
@@ -202,6 +232,218 @@ mod tests {
         > {
             Box::pin(async { Ok(json!("mock result")) })
         }
+    }
+
+    struct HaltBeforeStreamInference;
+
+    #[async_trait]
+    impl ContextOp for HaltBeforeStreamInference {
+        type Output = ();
+
+        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+            Err(EngineError::Halted {
+                reason: "blocked before stream inference".into(),
+            })
+        }
+    }
+
+    struct PushMarker(&'static str);
+
+    #[async_trait]
+    impl ContextOp for PushMarker {
+        type Output = ();
+
+        async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            ctx.push_message(Message::new(Role::System, Content::text(self.0)));
+            Ok(())
+        }
+    }
+
+    struct AlwaysErrorStreamProvider;
+
+    impl skg_turn::provider::Provider for AlwaysErrorStreamProvider {
+        async fn infer(
+            &self,
+            _request: skg_turn::InferRequest,
+        ) -> Result<skg_turn::InferResponse, ProviderError> {
+            Err(ProviderError::TransientError {
+                message: "stream failure".into(),
+                status: None,
+            })
+        }
+    }
+
+
+    impl StreamProvider for AlwaysErrorStreamProvider {
+        async fn infer_stream(
+            &self,
+            _request: StreamRequest,
+            _on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
+        ) -> Result<skg_turn::InferResponse, ProviderError> {
+            Err(ProviderError::TransientError {
+                message: "stream failure".into(),
+                status: None,
+            })
+        }
+    }
+
+
+    #[tokio::test]
+    async fn stream_react_before_boundary_rule_mutates_request_before_provider_call() {
+        let provider = FallbackStreamProvider::new();
+        provider.inner.respond_with_text("done");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
+            "mark before stream inference",
+            100,
+            PushMarker("before stream marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let request = provider
+            .inner
+            .last_request()
+            .expect("provider should record request");
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.text_content() == "before stream marker"),
+            "before rule must mutate context before stream request compilation and provider send"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_react_after_boundary_rule_runs_after_success_only() {
+        let provider = FallbackStreamProvider::new();
+        provider.inner.respond_with_text("done");
+
+        let mut ctx = Context::with_rules(vec![Rule::after::<StreamInferBoundary>(
+            "mark after stream inference",
+            100,
+            PushMarker("after stream marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let request = provider
+            .inner
+            .last_request()
+            .expect("provider should record request");
+        assert!(
+            !request
+                .messages
+                .iter()
+                .any(|message| message.text_content() == "after stream marker"),
+            "after rule must not mutate the request that was already sent to the provider"
+        );
+        assert!(
+            ctx.messages()
+                .iter()
+                .any(|message| message.text_content() == "after stream marker"),
+            "after rule must run after a successful provider call"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_react_after_boundary_rule_does_not_run_on_provider_error() {
+        let provider = AlwaysErrorStreamProvider;
+
+        let mut ctx = Context::with_rules(vec![Rule::after::<StreamInferBoundary>(
+            "mark after stream inference",
+            100,
+            PushMarker("after stream marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let err = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, EngineError::Provider(ProviderError::TransientError { .. })));
+        assert!(
+            !ctx.messages()
+                .iter()
+                .any(|message| message.text_content() == "after stream marker"),
+            "after rule must not run when streaming provider inference fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_react_loop_halts_before_provider_call_on_stream_boundary_rule() {
+        let provider = FallbackStreamProvider::new();
+        provider.inner.respond_with_text("should never be used");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
+            "halt before stream inference",
+            100,
+            HaltBeforeStreamInference,
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let err = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, EngineError::Halted { .. }));
+        assert_eq!(provider.inner.call_count(), 0);
     }
 
     #[tokio::test]

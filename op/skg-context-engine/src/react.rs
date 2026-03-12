@@ -7,6 +7,7 @@
 //! `react_loop_structured()` extends this with structured output: the model
 //! returns validated JSON via a tool call or text response, with automatic
 //! retry on validation failure.
+use crate::boundary::InferBoundary;
 use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
@@ -153,6 +154,27 @@ pub fn format_tool_error(e: &EngineError) -> String {
     format!("Error: {e}")
 }
 
+async fn infer_once<P: Provider>(
+    ctx: &mut Context,
+    provider: &P,
+    tools: &ToolRegistry,
+    config: &ReactLoopConfig,
+    extra_tool: Option<&ToolSchema>,
+) -> Result<crate::InferResult, EngineError> {
+    ctx.enter_boundary::<InferBoundary>().await?;
+
+    let mut compile_config = config.compile_config(tools, ctx);
+    if let Some(schema) = extra_tool {
+        compile_config.tools.push(schema.clone());
+    }
+
+    let compiled = ctx.compile(&compile_config);
+    let result = compiled.infer(provider).await?;
+
+    ctx.exit_boundary::<InferBoundary>().await?;
+    Ok(result)
+}
+
 /// Run the ReAct (Reasoning + Acting) loop.
 ///
 /// This is the ReAct *pattern* expressed as composition of context engine
@@ -182,9 +204,7 @@ pub async fn react_loop<P: Provider>(
 ) -> Result<OperatorOutput, EngineError> {
     loop {
         // Phase 1: Compile and infer (re-filter tools each turn)
-        let compile_config = config.compile_config(tools, ctx);
-        let compiled = ctx.compile(&compile_config);
-        let result = compiled.infer(provider).await?;
+        let result = infer_once(ctx, provider, tools, config, None).await?;
 
         // Phase 2: Append response to context (this is a context op — rules fire)
         ctx.run(AppendResponse::new(result.response.clone()))
@@ -309,12 +329,14 @@ pub async fn react_loop_structured<P: Provider>(
 
     loop {
         // Phase 1: Compile and infer (re-filter tools each turn)
-        let mut compile_config = config.compile_config(tools, ctx);
-        if let Some(schema) = &output_tool_schema {
-            compile_config.tools.push(schema.clone());
-        }
-        let compiled = ctx.compile(&compile_config);
-        let result = compiled.infer(provider).await?;
+        let result = infer_once(
+            ctx,
+            provider,
+            tools,
+            config,
+            output_tool_schema.as_ref(),
+        )
+        .await?;
 
         // Phase 2: Append response to context (rules fire)
         ctx.run(AppendResponse::new(result.response.clone()))
@@ -459,13 +481,18 @@ async fn dispatch_function_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::op::ContextOp;
     use crate::output::OutputSchema;
+    use crate::{InferBoundary, Rule};
+    use async_trait::async_trait;
     use layer0::id::OperatorId;
     use serde_json::json;
     use skg_tool::{ToolDyn, ToolError};
-    use skg_turn::test_utils::TestProvider;
+    use skg_turn::provider::ProviderError;
+    use skg_turn::test_utils::{TestProvider, error_provider_transient};
     use std::pin::Pin;
     use std::sync::Arc;
+    use tokio::sync::mpsc;
 
     struct MockTool {
         name: &'static str,
@@ -510,6 +537,203 @@ mod tests {
             return Err("missing 'population'".into());
         }
         Ok(v.clone())
+    }
+
+    struct HaltBeforeInference;
+
+    #[async_trait]
+    impl ContextOp for HaltBeforeInference {
+        type Output = ();
+
+        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+            Err(EngineError::Halted {
+                reason: "blocked before inference".into(),
+            })
+        }
+    }
+
+    struct InjectInterventionMessage(&'static str);
+
+    #[async_trait]
+    impl ContextOp for InjectInterventionMessage {
+        type Output = ();
+
+        async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            ctx.push_message(Message::new(Role::System, Content::text(self.0)));
+            Ok(())
+        }
+    }
+
+    struct PushMarker(&'static str);
+
+    #[async_trait]
+    impl ContextOp for PushMarker {
+        type Output = ();
+
+        async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            ctx.push_message(Message::new(Role::System, Content::text(self.0)));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn react_loop_before_infer_boundary_rule_mutates_request_before_provider_call() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "mark before inference",
+            100,
+            PushMarker("before infer marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let request = provider.last_request().expect("provider should record request");
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.text_content() == "before infer marker"),
+            "before rule must mutate context before request compilation and provider send"
+        );
+    }
+
+    #[tokio::test]
+    async fn react_loop_after_infer_boundary_rule_runs_after_success_only() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
+
+        let mut ctx = Context::with_rules(vec![Rule::after::<InferBoundary>(
+            "mark after inference",
+            100,
+            PushMarker("after infer marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let request = provider.last_request().expect("provider should record request");
+        assert!(
+            !request
+                .messages
+                .iter()
+                .any(|message| message.text_content() == "after infer marker"),
+            "after rule must not mutate the request that was already sent to the provider"
+        );
+        assert!(
+            ctx.messages()
+                .iter()
+                .any(|message| message.text_content() == "after infer marker"),
+            "after rule must run after a successful provider call"
+        );
+    }
+
+    #[tokio::test]
+    async fn react_loop_after_infer_boundary_rule_does_not_run_on_provider_error() {
+        let provider = error_provider_transient("boom");
+
+        let mut ctx = Context::with_rules(vec![Rule::after::<InferBoundary>(
+            "mark after inference",
+            100,
+            PushMarker("after infer marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let err = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EngineError::Provider(ProviderError::TransientError { .. })));
+        assert!(
+            !ctx.messages()
+                .iter()
+                .any(|message| message.text_content() == "after infer marker"),
+            "after rule must not run when provider inference fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn react_loop_halts_before_provider_call_on_infer_boundary_rule() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("should never be used");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "halt before inference",
+            100,
+            HaltBeforeInference,
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let err = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EngineError::Halted { .. }));
+        assert_eq!(provider.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn intervention_updates_context_before_provider_sees_next_inference() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
+
+        let (itx, irx) = mpsc::channel::<Box<dyn crate::op::ErasedOp>>(4);
+        let mut ctx = Context::new();
+        ctx.with_intervention(irx);
+        ctx.inject_message(Message::new(Role::User, Content::text("original")))
+            .await
+            .unwrap();
+
+        itx.send(Box::new(InjectInterventionMessage("supervisor note")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(provider.call_count(), 1);
+
+        let request = provider.last_request().expect("provider should record request");
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.text_content() == "supervisor note"),
+            "intervention message must be present in the compiled request"
+        );
     }
 
     #[tokio::test]
