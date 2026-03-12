@@ -15,6 +15,7 @@ use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
 use crate::ops::tool::ExecuteTool;
 use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error};
+use layer0::content::Content;
 use layer0::duration::DurationMs;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use skg_tool::{ToolCallContext, ToolRegistry};
@@ -77,17 +78,23 @@ pub async fn stream_react_loop<P: StreamProvider>(
     let on_event = std::sync::Arc::new(on_event);
     loop {
         // Phase 1: Stream inference behind the governed boundary
-        let response = infer_stream_once(
+        let response = match infer_stream_once(
             ctx,
             provider,
             tools,
             config,
             std::sync::Arc::clone(&on_event),
         )
-        .await?;
+        .await
+        {
+            Ok(response) => response,
+            Err(err) => return structured_exit_output(err, ctx),
+        };
 
         // Phase 3: Append response to context (rules fire)
-        ctx.run(AppendResponse::new(response.clone())).await?;
+        if let Err(err) = ctx.run(AppendResponse::new(response.clone())).await {
+            return structured_exit_output(err, ctx);
+        }
         ctx.metrics.turns_completed += 1;
 
         // Phase 4: Check if model is done
@@ -116,18 +123,30 @@ pub async fn stream_react_loop<P: StreamProvider>(
                 .await
             {
                 Ok(s) => s,
+                Err(EngineError::Exit { reason, .. }) => {
+                    return Ok(make_context_output(Content::text(""), reason, ctx));
+                }
                 Err(e) => format_tool_error(&e),
             };
 
             let result_msg =
                 InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
-            ctx.inject_message(result_msg).await?;
+            if let Err(err) = ctx.inject_message(result_msg).await {
+                return structured_exit_output(err, ctx);
+            }
         }
     }
 }
 
-fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> OperatorOutput {
-    let mut output = OperatorOutput::new(response.content, exit);
+fn structured_exit_output(err: EngineError, ctx: &Context) -> Result<OperatorOutput, EngineError> {
+    match err {
+        EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
+        other => Err(other),
+    }
+}
+
+fn make_context_output(message: Content, exit: ExitReason, ctx: &Context) -> OperatorOutput {
+    let mut output = OperatorOutput::new(message, exit);
     let mut meta = OperatorMetadata::default();
     meta.tokens_in = ctx.metrics.tokens_in;
     meta.tokens_out = ctx.metrics.tokens_out;
@@ -137,6 +156,10 @@ fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> Oper
     output.metadata = meta;
     output.effects = ctx.effects().to_vec();
     output
+}
+
+fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> OperatorOutput {
+    make_context_output(response.content, exit, ctx)
 }
 
 fn build_stream_request(ctx: &Context, config: &CompileConfig) -> StreamRequest {
@@ -150,6 +173,7 @@ mod tests {
     use super::*;
     use crate::context::Context;
     use crate::op::ContextOp;
+    use crate::rules::{BudgetGuard, BudgetGuardConfig};
     use crate::{Rule, StreamInferBoundary};
     use async_trait::async_trait;
     use layer0::content::Content;
@@ -162,6 +186,7 @@ mod tests {
     use skg_turn::test_utils::TestProvider;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     // A wrapper that makes TestProvider implement StreamProvider via fallback
     struct FallbackStreamProvider {
@@ -412,6 +437,88 @@ mod tests {
                 .any(|message| message.text_content() == "after stream marker"),
             "after rule must not run when streaming provider inference fails"
         );
+    }
+
+    async fn assert_stream_budget_exit_before_provider_call(
+        mutate_ctx: impl FnOnce(&mut Context),
+        config: BudgetGuardConfig,
+        expected_exit: ExitReason,
+    ) {
+        let provider = FallbackStreamProvider::new();
+        provider.inner.respond_with_text("should never be used");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
+            "budget_guard",
+            100,
+            BudgetGuard::with_config(config),
+        )]);
+        mutate_ctx(&mut ctx);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            |_| {},
+        )
+        .await
+        .expect("budget exits should return structured operator output");
+
+        assert_eq!(output.exit_reason, expected_exit);
+        assert_eq!(output.message.as_text(), Some(""));
+        assert_eq!(provider.inner.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn stream_react_loop_returns_structured_budget_exhausted_exit_before_provider_call() {
+        assert_stream_budget_exit_before_provider_call(
+            |ctx| ctx.metrics.cost = rust_decimal::Decimal::new(250, 2),
+            BudgetGuardConfig {
+                max_cost: Some(rust_decimal::Decimal::new(100, 2)),
+                max_turns: None,
+                max_duration: None,
+                max_tool_calls: None,
+            },
+            ExitReason::BudgetExhausted,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stream_react_loop_returns_structured_max_turns_exit_before_provider_call() {
+        assert_stream_budget_exit_before_provider_call(
+            |ctx| ctx.metrics.turns_completed = 1,
+            BudgetGuardConfig {
+                max_cost: None,
+                max_turns: Some(1),
+                max_duration: None,
+                max_tool_calls: None,
+            },
+            ExitReason::MaxTurns,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stream_react_loop_returns_structured_timeout_exit_before_provider_call() {
+        assert_stream_budget_exit_before_provider_call(
+            |ctx| ctx.metrics.start = Instant::now() - Duration::from_secs(5),
+            BudgetGuardConfig {
+                max_cost: None,
+                max_turns: None,
+                max_duration: Some(Duration::from_secs(1)),
+                max_tool_calls: None,
+            },
+            ExitReason::Timeout,
+        )
+        .await;
     }
 
     #[tokio::test]

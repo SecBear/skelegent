@@ -65,3 +65,7 @@ agent = ["context-engine", "state-memory"]
 
 # Proc-macro support for deriving ToolDyn
 macros = ["skg-tool/macros"]
+
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

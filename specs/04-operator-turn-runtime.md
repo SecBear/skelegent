@@ -75,7 +75,7 @@ Priority is highest-first:
 4. Cost budget / tool-call limit — `BudgetExhausted`
 5. Timeout — `Timeout`
 
-Layer 0 defines `MaxTurns`, `BudgetExhausted`, and `Timeout` as the structured exit vocabulary. The current `skg-context-engine` budget guard still halts with `EngineError::Halted`; callers that want structured exit reasons must wrap or extend the runtime above Layer 0 until the runtime boundary work lands.
+Layer 0 defines `MaxTurns`, `BudgetExhausted`, and `Timeout` as the structured exit vocabulary. `skg-context-engine` now enforces budget at the real `InferBoundary`, with `BudgetGuard` returning structured exits that `react_loop()` surfaces as `OperatorOutput.exit_reason` values. Generic `EngineError::Halted` remains available for non-budget local halts.
 
 ## Steering Observability
 
@@ -96,7 +96,7 @@ Context budget management is currently handled by the `BudgetGuard` rule in `skg
 | `max_duration` | `Option<Duration>` | `None` | Maximum wall-clock duration |
 | `max_tool_calls` | `Option<u32>` | `None` | Maximum total tool calls |
 
-When any limit is exceeded, `BudgetGuard` returns `EngineError::Halted`. Honest pre-inference enforcement and canonical structured exit mapping are implementation work tracked above this spec baseline.
+When any limit is exceeded, `BudgetGuard` returns `EngineError::Exit` with `ExitReason::MaxTurns`, `BudgetExhausted`, or `Timeout` as appropriate. The plain `react_loop()` path converts that into a structured `OperatorOutput` with empty content, current metadata, and accumulated effects.
 
 ## Context Assembly
 

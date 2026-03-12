@@ -91,8 +91,8 @@ Current approved model: Layer 0 stays protocol-only. It carries middleware trait
 ### Budget Coordination
 
 Local budget enforcement is runtime-local today.
-- `BudgetGuard` in `skg-context-engine` currently enforces cost, turn, duration, and tool-call limits at `Context::run()` governance boundaries.
-- Canonical structured exit-reason mapping is implementation work above this spec baseline.
+- `BudgetGuard` in `skg-context-engine` enforces cost, turn, duration, and tool-call limits at the real inference boundary (`InferBoundary`, or `StreamInferBoundary` for streaming).
+- `BudgetGuard` returns structured runtime exits (`MaxTurns`, `BudgetExhausted`, `Timeout`), and `react_loop()` surfaces them as structured `OperatorOutput` exits rather than generic inference failures.
 - Broader halt/continue/downgrade policy belongs to orchestrator code above Layer 0.
 
 ### Compaction Coordination

@@ -258,8 +258,7 @@ in both. This entanglement is architectural, not incidental — we accept it
 rather than fighting it with leaky abstractions.
 
 **Budget governance**: Single authority, but current enforcement is runtime-local.
-The turn/runtime currently enforces local cost, turn, duration, and tool-call limits via `BudgetGuard`, which halts with `EngineError::Halted` at runtime governance boundaries.
-Canonical structured exit mapping for those halts is not fully implemented yet. Broader halt/continue/downgrade policy belongs to orchestration above Layer 0 unless/until it becomes a real cross-boundary contract.
+The turn/runtime currently enforces local cost, turn, duration, and tool-call limits via `BudgetGuard` at governed runtime boundaries. Budget-triggered stops surface as structured exits (`MaxTurns`, `BudgetExhausted`, `Timeout`) in the plain ReAct loops, while broader halt/continue/downgrade policy belongs to orchestration above Layer 0 unless/until it becomes a real cross-boundary contract.
 Planners observe remaining budget (read-only).
 
 **Observability**: Cross-cutting. Within an operator, the context stream

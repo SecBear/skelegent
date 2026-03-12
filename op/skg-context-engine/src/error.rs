@@ -1,6 +1,7 @@
 //! Error types for the context engine.
 
 use layer0::error::OperatorError;
+use layer0::operator::ExitReason;
 use skg_tool::ToolError;
 use skg_turn::provider::ProviderError;
 use std::fmt;
@@ -12,6 +13,13 @@ pub enum EngineError {
     Halted {
         /// Human-readable reason for the halt.
         reason: String,
+    },
+    /// A rule or runtime path requested a structured operator exit.
+    Exit {
+        /// Structured exit reason that should propagate to operator output.
+        reason: ExitReason,
+        /// Human-readable detail for logging and debugging.
+        detail: String,
     },
     /// Inference failed at the provider level.
     Provider(ProviderError),
@@ -27,6 +35,7 @@ impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Halted { reason } => write!(f, "halted: {reason}"),
+            Self::Exit { reason, detail } => write!(f, "exit {:?}: {}", reason, detail),
             Self::Provider(e) => write!(f, "provider: {e}"),
             Self::Operator(e) => write!(f, "operator: {e}"),
             Self::Tool(e) => write!(f, "tool: {e}"),
