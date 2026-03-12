@@ -94,9 +94,7 @@ pub enum KernelError {
         event: &'static str,
     },
     /// The caller attempted to resume a different wait point than the one currently active.
-    #[error(
-        "invalid resume token for run {run_id}: expected {expected}, found {found}"
-    )]
+    #[error("invalid resume token for run {run_id}: expected {expected}, found {found}")]
     InvalidResumeToken {
         /// Run receiving the invalid resume attempt.
         run_id: RunId,
@@ -255,7 +253,10 @@ impl RunKernel {
         })
     }
 
-    fn running_run_id(current: Option<&RunView>, event: &'static str) -> Result<RunId, KernelError> {
+    fn running_run_id(
+        current: Option<&RunView>,
+        event: &'static str,
+    ) -> Result<RunId, KernelError> {
         match current {
             Some(RunView::Running { run_id }) => Ok(run_id.clone()),
             _ => Err(Self::invalid_transition(current, event)),
@@ -265,9 +266,7 @@ impl RunKernel {
     fn waiting_context(current: Option<&RunView>) -> Result<(RunId, &WaitPointId), KernelError> {
         match current {
             Some(RunView::Waiting {
-                run_id,
-                wait_point,
-                ..
+                run_id, wait_point, ..
             }) => Ok((run_id.clone(), wait_point)),
             _ => Err(Self::invalid_transition(current, "resume")),
         }

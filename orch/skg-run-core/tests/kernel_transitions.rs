@@ -63,7 +63,11 @@ fn waiting_resume_continue_returns_to_running_and_dispatches_operator() {
     let run_id = RunId::new("run-1");
     let wait_point = WaitPointId::new("wait-1");
     let resume_input = ResumeInput::new(json!({ "answer": 42 }));
-    let current = RunView::waiting(run_id.clone(), wait_point.clone(), WaitReason::ExternalInput);
+    let current = RunView::waiting(
+        run_id.clone(),
+        wait_point.clone(),
+        WaitReason::ExternalInput,
+    );
 
     let transition = RunKernel::apply(
         Some(&current),
@@ -126,9 +130,13 @@ fn waiting_resume_complete_finishes_run() {
 fn cancel_running_transitions_to_cancelled() {
     let run_id = RunId::new("run-1");
 
-    let transition = RunKernel::apply(Some(&RunView::running(run_id.clone())), RunEvent::Cancel).unwrap();
+    let transition =
+        RunKernel::apply(Some(&RunView::running(run_id.clone())), RunEvent::Cancel).unwrap();
 
-    assert_eq!(transition.next, RunView::terminal(run_id.clone(), skg_run_core::RunOutcome::Cancelled));
+    assert_eq!(
+        transition.next,
+        RunView::terminal(run_id.clone(), skg_run_core::RunOutcome::Cancelled)
+    );
     assert_eq!(
         transition.commands,
         vec![OrchestrationCommand::CancelRun { run_id }]
@@ -149,7 +157,10 @@ fn cancel_waiting_transitions_to_cancelled() {
     )
     .unwrap();
 
-    assert_eq!(transition.next, RunView::terminal(run_id.clone(), skg_run_core::RunOutcome::Cancelled));
+    assert_eq!(
+        transition.next,
+        RunView::terminal(run_id.clone(), skg_run_core::RunOutcome::Cancelled)
+    );
     assert_eq!(
         transition.commands,
         vec![OrchestrationCommand::CancelRun { run_id }]
@@ -186,7 +197,6 @@ fn invalid_resume_token_is_rejected() {
             && found == WaitPointId::new("wait-found")
     ));
 }
-
 
 #[test]
 fn waiting_with_wake_deadline_schedules_canonical_deadline() {
