@@ -2225,7 +2225,9 @@ version = "0.4.1"
 dependencies = [
  "async-trait",
  "layer0",
+ "rust_decimal",
  "serde_json",
+ "skg-context-engine",
  "skg-effects-core",
  "skg-effects-local",
  "thiserror",
