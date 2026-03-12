@@ -82,7 +82,7 @@ impl Context {
     /// Messages are cloned into the request. The context continues to exist
     /// for post-inference operations.
     pub fn compile(&self, config: &CompileConfig) -> CompiledContext {
-        let mut request = InferRequest::new(self.messages.clone());
+        let mut request = InferRequest::new(self.messages().to_vec());
 
         if let Some(system) = &config.system {
             request = request.with_system(system.clone());
@@ -116,8 +116,7 @@ mod tests {
     #[test]
     fn compile_produces_request_with_messages() {
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         let config = CompileConfig {
             system: Some("You are helpful.".into()),
@@ -136,13 +135,12 @@ mod tests {
     #[test]
     fn compile_does_not_consume_context() {
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         let config = CompileConfig::default();
         let _compiled = ctx.compile(&config);
 
         // Context still has its messages
-        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages().len(), 1);
     }
 }

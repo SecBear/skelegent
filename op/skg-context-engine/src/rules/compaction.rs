@@ -43,10 +43,10 @@
 //!
 //! // Step 2: summarize with custom config
 //! let config = SummarizeConfig { max_tokens: 1024, ..Default::default() };
-//! let request = config.build_request(&ctx.messages);
+//! let request = config.build_request(ctx.messages());
 //! let response = provider.infer(request).await?;
 //! let summary = config.parse_response(response)?;
-//! ctx.messages = vec![summary];  // or prepend, or inject
+//! ctx.set_messages(vec![summary]);  // or prepend, or inject
 //! ```
 
 use crate::context::Context;
@@ -292,7 +292,7 @@ impl CompactionRule {
         let trigger = self
             .custom_trigger
             .take()
-            .unwrap_or_else(|| Trigger::When(Box::new(move |ctx| ctx.messages.len() > max)));
+            .unwrap_or_else(|| Trigger::When(Box::new(move |ctx| ctx.messages().len() > max)));
         let priority = self.priority;
         Rule::new("compaction", trigger, priority, self)
     }
@@ -303,14 +303,15 @@ impl ContextOp for CompactionRule {
     type Output = ();
 
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-        let before = ctx.messages.len();
+        let before = ctx.messages().len();
 
-        ctx.messages = match &self.strategy {
-            CompactionStrategy::SlidingWindow { keep } => sliding_window(&ctx.messages, *keep),
-            CompactionStrategy::PolicyTrim { target } => policy_trim(&ctx.messages, *target),
+        let compacted = match &self.strategy {
+            CompactionStrategy::SlidingWindow { keep } => sliding_window(ctx.messages(), *keep),
+            CompactionStrategy::PolicyTrim { target } => policy_trim(ctx.messages(), *target),
         };
+        ctx.set_messages(compacted);
 
-        let after = ctx.messages.len();
+        let after = ctx.messages().len();
         tracing::info!(
             messages_before = before,
             messages_after = after,
@@ -689,8 +690,7 @@ mod tests {
 
         // Add 20 normal messages.
         for i in 0..20 {
-            ctx.messages
-                .push(Message::new(Role::User, Content::text(format!("msg {i}"))));
+            ctx.push_message(Message::new(Role::User, Content::text(format!("msg {i}"))));
         }
 
         // Rule: keep at most 5 non-pinned messages. Fires when len > 5.
@@ -700,9 +700,9 @@ mod tests {
         ctx.run(Noop).await.unwrap();
 
         assert!(
-            ctx.messages.len() <= 5,
+            ctx.messages().len() <= 5,
             "expected <=5 messages after compaction, got {}",
-            ctx.messages.len()
+            ctx.messages().len()
         );
     }
 
@@ -712,8 +712,7 @@ mod tests {
 
         // Add 10 messages — well under the max_messages=50 threshold.
         for i in 0..10 {
-            ctx.messages
-                .push(Message::new(Role::User, Content::text(format!("msg {i}"))));
+            ctx.push_message(Message::new(Role::User, Content::text(format!("msg {i}"))));
         }
 
         // Rule fires when len > 50. With only 10 messages, it must not fire.
@@ -722,7 +721,7 @@ mod tests {
         ctx.run(Noop).await.unwrap();
 
         assert_eq!(
-            ctx.messages.len(),
+            ctx.messages().len(),
             10,
             "no compaction expected under the threshold"
         );

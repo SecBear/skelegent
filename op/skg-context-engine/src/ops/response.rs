@@ -31,7 +31,7 @@ impl ContextOp for AppendResponse {
 
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
         // Append assistant message
-        ctx.messages.push(self.response.to_message());
+        ctx.push_message(self.response.to_message());
 
         // Update metrics
         ctx.metrics.tokens_in += self.response.usage.input_tokens;

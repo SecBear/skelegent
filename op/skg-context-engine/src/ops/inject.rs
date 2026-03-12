@@ -23,10 +23,10 @@ impl ContextOp for InjectSystem {
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
         let system_msg = Message::new(Role::System, Content::text(&self.prompt));
 
-        if ctx.messages.first().is_some_and(|m| m.role == Role::System) {
-            ctx.messages[0] = system_msg;
+        if ctx.messages().first().is_some_and(|m| m.role == Role::System) {
+            ctx.replace_message(0, system_msg);
         } else {
-            ctx.messages.insert(0, system_msg);
+            ctx.insert_message(0, system_msg);
         }
         Ok(())
     }
@@ -43,7 +43,7 @@ impl ContextOp for InjectMessage {
     type Output = ();
 
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-        ctx.messages.push(self.message.clone());
+        ctx.push_message(self.message.clone());
         Ok(())
     }
 }
@@ -59,7 +59,7 @@ impl ContextOp for InjectMessages {
     type Output = ();
 
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-        ctx.messages.extend(self.messages.iter().cloned());
+        ctx.extend_messages(self.messages.iter().cloned());
         Ok(())
     }
 }
@@ -71,8 +71,7 @@ mod tests {
     #[tokio::test]
     async fn inject_system_inserts_at_start() {
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         ctx.run(InjectSystem {
             prompt: "You are helpful.".into(),
@@ -80,18 +79,16 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(ctx.messages.len(), 2);
-        assert_eq!(ctx.messages[0].role, Role::System);
-        assert_eq!(ctx.messages[0].text_content(), "You are helpful.");
+        assert_eq!(ctx.messages().len(), 2);
+        assert_eq!(ctx.messages()[0].role, Role::System);
+        assert_eq!(ctx.messages()[0].text_content(), "You are helpful.");
     }
 
     #[tokio::test]
     async fn inject_system_replaces_existing() {
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::System, Content::text("old")));
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::System, Content::text("old")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         ctx.run(InjectSystem {
             prompt: "new".into(),
@@ -99,8 +96,8 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(ctx.messages.len(), 2);
-        assert_eq!(ctx.messages[0].text_content(), "new");
+        assert_eq!(ctx.messages().len(), 2);
+        assert_eq!(ctx.messages()[0].text_content(), "new");
     }
 
     #[tokio::test]
@@ -117,9 +114,9 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(ctx.messages.len(), 2);
-        assert_eq!(ctx.messages[0].role, Role::User);
-        assert_eq!(ctx.messages[1].role, Role::Assistant);
+        assert_eq!(ctx.messages().len(), 2);
+        assert_eq!(ctx.messages()[0].role, Role::User);
+        assert_eq!(ctx.messages()[1].role, Role::Assistant);
     }
 
     #[tokio::test]
@@ -135,6 +132,6 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(ctx.messages.len(), 3);
+        assert_eq!(ctx.messages().len(), 3);
     }
 }

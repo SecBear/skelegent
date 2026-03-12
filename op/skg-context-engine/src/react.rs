@@ -204,7 +204,7 @@ pub async fn react_loop<P: Provider>(
         let approval_effects = check_approval(&tool_calls, tools);
 
         if !approval_effects.is_empty() {
-            ctx.effects.extend(approval_effects);
+            ctx.extend_effects(approval_effects);
             return Ok(make_output(
                 result.response,
                 ExitReason::AwaitingApproval,
@@ -243,7 +243,7 @@ fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> Oper
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = ctx.effects.clone();
+    output.effects = ctx.effects().to_vec();
     output
 }
 
@@ -430,7 +430,7 @@ async fn dispatch_function_tools(
     let approval_effects = check_approval(&function_calls, tools);
 
     if !approval_effects.is_empty() {
-        ctx.effects.extend(approval_effects);
+        ctx.extend_effects(approval_effects);
         return Ok(true); // Caller should exit with AwaitingApproval
     }
 

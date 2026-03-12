@@ -42,19 +42,19 @@ impl ContextOp for Compact {
     type Output = CompactResult;
 
     async fn execute(&self, ctx: &mut Context) -> Result<CompactResult, EngineError> {
-        let before = ctx.messages.len();
+        let before = ctx.messages().len();
 
         let compacted = {
             let mut strategy = self.strategy.lock().map_err(|e| {
                 EngineError::Custom(format!("compaction mutex poisoned: {e}").into())
             })?;
-            strategy(&ctx.messages)
+            strategy(ctx.messages())
         };
-        ctx.messages = compacted;
+        ctx.set_messages(compacted);
 
         Ok(CompactResult {
             before,
-            after: ctx.messages.len(),
+            after: ctx.messages().len(),
         })
     }
 }
@@ -69,8 +69,7 @@ mod tests {
     async fn compact_reduces_messages() {
         let mut ctx = Context::new();
         for i in 0..10 {
-            ctx.messages
-                .push(Message::new(Role::User, Content::text(format!("msg {i}"))));
+            ctx.push_message(Message::new(Role::User, Content::text(format!("msg {i}"))));
         }
 
         let result = ctx
@@ -83,7 +82,7 @@ mod tests {
 
         assert_eq!(result.before, 10);
         assert_eq!(result.after, 3);
-        assert_eq!(ctx.messages.len(), 3);
-        assert_eq!(ctx.messages[0].text_content(), "msg 7");
+        assert_eq!(ctx.messages().len(), 3);
+        assert_eq!(ctx.messages()[0].text_content(), "msg 7");
     }
 }

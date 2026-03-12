@@ -129,17 +129,18 @@ impl TurnMetrics {
 pub struct Context {
     /// The message buffer. This is what gets compiled and sent to the model.
     ///
-    /// Prefer mutation methods ([`push_message`](Self::push_message),
-    /// [`insert_message`](Self::insert_message), [`set_messages`](Self::set_messages))
-    /// which emit to the observation stream. Direct field access is available
-    /// for reads but mutations bypass stream emission.
-    pub messages: Vec<Message>,
+    /// Access via [`messages()`](Self::messages) for reads and mutation methods
+    /// ([`push_message`](Self::push_message), [`insert_message`](Self::insert_message),
+    /// [`set_messages`](Self::set_messages)) for writes. Mutation methods emit
+    /// to the observation stream; direct field access is not possible.
+    messages: Vec<Message>,
     /// Typed arbitrary state for cross-component communication.
     pub extensions: Extensions,
     /// Declared effects (write_memory, delegate, signal, etc.).
     ///
-    /// Prefer [`push_effect`](Self::push_effect) which emits to the observation stream.
-    pub effects: Vec<Effect>,
+    /// Access via [`effects()`](Self::effects) for reads and [`push_effect`](Self::push_effect)
+    /// or [`extend_effects`](Self::extend_effects) for writes.
+    effects: Vec<Effect>,
     /// Accumulated metrics for this operator invocation.
     pub metrics: TurnMetrics,
     /// Reactive rules. Sorted by priority (highest first).
@@ -209,6 +210,18 @@ impl Context {
         self.stream_tx.as_ref()
     }
 
+    // ── Read accessors ────────────────────────────────────────────
+
+    /// The message buffer (read-only).
+    pub fn messages(&self) -> &[Message] {
+        &self.messages
+    }
+
+    /// The declared effects (read-only).
+    pub fn effects(&self) -> &[Effect] {
+        &self.effects
+    }
+
     // ── Mutation methods (emit to observation stream) ──────────────
 
     /// Append a message to the context.
@@ -271,6 +284,20 @@ impl Context {
     pub fn push_effect(&mut self, effect: Effect) {
         self.effects.push(effect.clone());
         self.emit(ContextMutation::EffectDeclared(effect));
+    }
+
+    /// Append multiple messages. Each emits [`ContextMutation::MessagePushed`].
+    pub fn extend_messages(&mut self, msgs: impl IntoIterator<Item = Message>) {
+        for msg in msgs {
+            self.push_message(msg);
+        }
+    }
+
+    /// Declare multiple effects. Each emits [`ContextMutation::EffectDeclared`].
+    pub fn extend_effects(&mut self, effects: impl IntoIterator<Item = Effect>) {
+        for effect in effects {
+            self.push_effect(effect);
+        }
     }
 
     /// Emit a context event to the observation stream.
@@ -468,7 +495,7 @@ mod tests {
     impl ContextOp for AddMessage {
         type Output = ();
         async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-            ctx.messages.push(self.msg.clone());
+            ctx.push_message(self.msg.clone());
             Ok(())
         }
     }
@@ -478,8 +505,8 @@ mod tests {
         let mut ctx = Context::new();
         let msg = Message::new(Role::User, Content::text("hello"));
         ctx.run(AddMessage { msg: msg.clone() }).await.unwrap();
-        assert_eq!(ctx.messages.len(), 1);
-        assert_eq!(ctx.messages[0].text_content(), "hello");
+        assert_eq!(ctx.messages().len(), 1);
+        assert_eq!(ctx.messages()[0].text_content(), "hello");
     }
 
     #[tokio::test]
@@ -538,7 +565,7 @@ mod tests {
         impl ContextOp for InjectWarning {
             type Output = ();
             async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-                ctx.messages.push(Message::new(
+                ctx.push_message(Message::new(
                     Role::User,
                     Content::text("[WARNING] context large"),
                 ));
@@ -549,7 +576,7 @@ mod tests {
         let rules = vec![Rule::when(
             "warn_large",
             10,
-            |ctx| ctx.messages.len() >= 3,
+            |ctx| ctx.messages().len() >= 3,
             InjectWarning,
         )];
 
@@ -557,8 +584,7 @@ mod tests {
 
         // Add 3 messages to trigger the When rule
         for _ in 0..3 {
-            ctx.messages
-                .push(Message::new(Role::User, Content::text("filler")));
+            ctx.push_message(Message::new(Role::User, Content::text("filler")));
         }
 
         // Now run an op — the When rule should fire
@@ -566,8 +592,8 @@ mod tests {
         ctx.run(AddMessage { msg }).await.unwrap();
 
         // 3 filler + 1 warning (from When rule) + 1 trigger (from AddMessage) = 5
-        assert_eq!(ctx.messages.len(), 5);
-        assert!(ctx.messages[3].text_content().contains("WARNING"));
+        assert_eq!(ctx.messages().len(), 5);
+        assert!(ctx.messages()[3].text_content().contains("WARNING"));
     }
 
     #[tokio::test]
@@ -591,7 +617,7 @@ mod tests {
         let result = ctx.run(AddMessage { msg }).await;
 
         assert!(result.is_err());
-        assert!(ctx.messages.is_empty()); // op never executed
+        assert!(ctx.messages().is_empty()); // op never executed
     }
 
     #[tokio::test]
@@ -614,8 +640,8 @@ mod tests {
 
         ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
-        assert_eq!(ctx.messages.len(), 1);
-        assert_eq!(ctx.messages[0].text_content(), "hello");
+        assert_eq!(ctx.messages().len(), 1);
+        assert_eq!(ctx.messages()[0].text_content(), "hello");
 
         let event = rx.try_recv().unwrap();
         match event.mutation {
@@ -635,8 +661,8 @@ mod tests {
 
         ctx.insert_message(1, Message::new(Role::User, Content::text("injected")));
 
-        assert_eq!(ctx.messages.len(), 2);
-        assert_eq!(ctx.messages[1].text_content(), "injected");
+        assert_eq!(ctx.messages().len(), 2);
+        assert_eq!(ctx.messages()[1].text_content(), "injected");
 
         let event = rx.try_recv().unwrap();
         match event.mutation {
@@ -657,7 +683,7 @@ mod tests {
 
         ctx.replace_message(0, Message::new(Role::User, Content::text("new")));
 
-        assert_eq!(ctx.messages[0].text_content(), "new");
+        assert_eq!(ctx.messages()[0].text_content(), "new");
 
         let event = rx.try_recv().unwrap();
         match event.mutation {
@@ -680,7 +706,7 @@ mod tests {
 
         ctx.set_messages(vec![Message::new(Role::System, Content::text("compacted"))]);
 
-        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages().len(), 1);
 
         let event = rx.try_recv().unwrap();
         match event.mutation {
@@ -715,7 +741,7 @@ mod tests {
         };
         ctx.push_effect(effect);
 
-        assert_eq!(ctx.effects.len(), 1);
+        assert_eq!(ctx.effects().len(), 1);
 
         let event = rx.try_recv().unwrap();
         match event.mutation {
@@ -734,8 +760,8 @@ mod tests {
         ctx.insert_message(0, Message::new(Role::System, Content::text("sys")));
         ctx.replace_message(1, Message::new(Role::User, Content::text("b")));
         ctx.set_messages(vec![Message::new(Role::User, Content::text("c"))]);
-        assert_eq!(ctx.messages.len(), 1);
-        assert_eq!(ctx.messages[0].text_content(), "c");
+        assert_eq!(ctx.messages().len(), 1);
+        assert_eq!(ctx.messages()[0].text_content(), "c");
     }
 
     #[tokio::test]
@@ -747,7 +773,7 @@ mod tests {
 
         // Should not panic — fire-and-forget.
         ctx.push_message(Message::new(Role::User, Content::text("orphan")));
-        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages().len(), 1);
     }
 
     // ── Intervention tests ────────────────────────────────────
@@ -775,9 +801,9 @@ mod tests {
         ctx.run(AddMessage { msg }).await.unwrap();
 
         // The intervention should have fired first.
-        assert_eq!(ctx.messages.len(), 2);
-        assert_eq!(ctx.messages[0].text_content(), "injected by supervisor");
-        assert_eq!(ctx.messages[1].text_content(), "user msg");
+        assert_eq!(ctx.messages().len(), 2);
+        assert_eq!(ctx.messages()[0].text_content(), "injected by supervisor");
+        assert_eq!(ctx.messages()[1].text_content(), "user msg");
     }
 
     #[tokio::test]
@@ -802,7 +828,7 @@ mod tests {
         let result = ctx.run(AddMessage { msg }).await;
 
         assert!(result.is_err());
-        assert!(ctx.messages.is_empty()); // Neither intervention nor op added anything useful.
+        assert!(ctx.messages().is_empty()); // Neither intervention nor op added anything useful.
     }
 
     #[tokio::test]
@@ -826,10 +852,10 @@ mod tests {
         let msg = Message::new(Role::User, Content::text("user"));
         ctx.run(AddMessage { msg }).await.unwrap();
 
-        assert_eq!(ctx.messages.len(), 3);
-        assert_eq!(ctx.messages[0].text_content(), "first");
-        assert_eq!(ctx.messages[1].text_content(), "second");
-        assert_eq!(ctx.messages[2].text_content(), "user");
+        assert_eq!(ctx.messages().len(), 3);
+        assert_eq!(ctx.messages()[0].text_content(), "first");
+        assert_eq!(ctx.messages()[1].text_content(), "second");
+        assert_eq!(ctx.messages()[2].text_content(), "user");
     }
 
     #[tokio::test]
@@ -838,7 +864,7 @@ mod tests {
         // No intervention channel attached — should work fine.
         let msg = Message::new(Role::User, Content::text("hello"));
         ctx.run(AddMessage { msg }).await.unwrap();
-        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages().len(), 1);
     }
 
     #[tokio::test]
@@ -864,7 +890,7 @@ mod tests {
         ctx.run(AddMessage { msg }).await.unwrap();
 
         // Both messages present.
-        assert_eq!(ctx.messages.len(), 2);
+        assert_eq!(ctx.messages().len(), 2);
 
         // Stream should have captured the intervention's push_message event.
         let event = srx.try_recv().unwrap();

@@ -75,7 +75,7 @@ pub async fn stream_react_loop<P: StreamProvider>(
         let approval_effects = check_approval(&tool_calls, tools);
 
         if !approval_effects.is_empty() {
-            ctx.effects.extend(approval_effects);
+            ctx.extend_effects(approval_effects);
             return Ok(make_output(response, ExitReason::AwaitingApproval, ctx));
         }
 
@@ -109,7 +109,7 @@ fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> Oper
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = ctx.effects.clone();
+    output.effects = ctx.effects().to_vec();
     output
 }
 
