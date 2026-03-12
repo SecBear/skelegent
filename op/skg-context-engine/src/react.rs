@@ -349,14 +349,7 @@ pub async fn react_loop_structured<P: Provider>(
 
     loop {
         // Phase 1: Compile and infer (re-filter tools each turn)
-        let result = infer_once(
-            ctx,
-            provider,
-            tools,
-            config,
-            output_tool_schema.as_ref(),
-        )
-        .await?;
+        let result = infer_once(ctx, provider, tools, config, output_tool_schema.as_ref()).await?;
 
         // Phase 2: Append response to context (rules fire)
         ctx.run(AppendResponse::new(result.response.clone()))
@@ -620,7 +613,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
-        let request = provider.last_request().expect("provider should record request");
+        let request = provider
+            .last_request()
+            .expect("provider should record request");
         assert!(
             request
                 .messages
@@ -652,7 +647,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
-        let request = provider.last_request().expect("provider should record request");
+        let request = provider
+            .last_request()
+            .expect("provider should record request");
         assert!(
             !request
                 .messages
@@ -688,7 +685,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, EngineError::Provider(ProviderError::TransientError { .. })));
+        assert!(matches!(
+            err,
+            EngineError::Provider(ProviderError::TransientError { .. })
+        ));
         assert!(
             !ctx.messages()
                 .iter()
@@ -796,7 +796,6 @@ mod tests {
         .await;
     }
 
-
     #[tokio::test]
     async fn intervention_updates_context_before_provider_sees_next_inference() {
         let provider = TestProvider::new();
@@ -823,7 +822,9 @@ mod tests {
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(provider.call_count(), 1);
 
-        let request = provider.last_request().expect("provider should record request");
+        let request = provider
+            .last_request()
+            .expect("provider should record request");
         assert!(
             request
                 .messages

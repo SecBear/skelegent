@@ -338,7 +338,8 @@ mod tests {
         fn infer(
             &self,
             _request: InferRequest,
-        ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send
+        {
             self.calls.fetch_add(1, Ordering::SeqCst);
             async {
                 Ok(InferResponse {
@@ -369,7 +370,6 @@ mod tests {
     }
 }
 
-
 #[cfg(any(
     feature = "provider-anthropic",
     feature = "provider-openai",
@@ -381,7 +381,7 @@ fn resolve_model(
     tools: ToolRegistry,
     max_turns: u32,
     max_tokens: u32,
- ) -> Result<BuiltAgent, AgentBuildError> {
+) -> Result<BuiltAgent, AgentBuildError> {
     let provider = if model.starts_with("claude-") || model.starts_with("anthropic:") {
         #[cfg(feature = "provider-anthropic")]
         {
@@ -455,7 +455,7 @@ fn resolve_model(
     _tools: ToolRegistry,
     _max_turns: u32,
     _max_tokens: u32,
- ) -> Result<BuiltAgent, AgentBuildError> {
+) -> Result<BuiltAgent, AgentBuildError> {
     if model.starts_with("claude-") || model.starts_with("anthropic:") {
         return Err(AgentBuildError::FeatureNotEnabled {
             feature: "provider-anthropic",

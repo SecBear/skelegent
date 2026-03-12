@@ -91,9 +91,9 @@ pub enum SecretAccessOutcome {
 
 /// Lifecycle event emitted when a secret is accessed.
 ///
-/// This is part of the observability vocabulary (like [`crate::lifecycle::BudgetEvent`]).
-/// The orchestrator or a hook can subscribe to these events for audit logging,
-/// compliance tracking, or anomaly detection.
+/// This is part of the observability vocabulary for credential access. The
+/// orchestrator or a middleware/sink can subscribe to these events for audit
+/// logging, compliance tracking, or anomaly detection.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretAccessEvent {

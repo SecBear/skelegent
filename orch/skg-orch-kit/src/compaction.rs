@@ -293,7 +293,11 @@ mod tests {
         };
 
         let outcome = CompactionCoordinator::new()
-            .coordinate(CompactionSnapshot::new(true, true), &mut flusher, &mut compactor)
+            .coordinate(
+                CompactionSnapshot::new(true, true),
+                &mut flusher,
+                &mut compactor,
+            )
             .await
             .unwrap();
 
@@ -314,14 +318,15 @@ mod tests {
         };
 
         let error = CompactionCoordinator::new()
-            .coordinate(CompactionSnapshot::new(true, true), &mut flusher, &mut compactor)
+            .coordinate(
+                CompactionSnapshot::new(true, true),
+                &mut flusher,
+                &mut compactor,
+            )
             .await
             .unwrap_err();
 
-        assert!(matches!(
-            error,
-            CompactionCoordinationError::FlushFailed(_)
-        ));
+        assert!(matches!(error, CompactionCoordinationError::FlushFailed(_)));
         assert_eq!(recorder.events(), vec!["flush"]);
     }
 
@@ -336,7 +341,11 @@ mod tests {
         };
 
         let outcome = CompactionCoordinator::new()
-            .coordinate(CompactionSnapshot::new(true, false), &mut flusher, &mut compactor)
+            .coordinate(
+                CompactionSnapshot::new(true, false),
+                &mut flusher,
+                &mut compactor,
+            )
             .await
             .unwrap();
 
@@ -357,7 +366,11 @@ mod tests {
         };
 
         let outcome = CompactionCoordinator::new()
-            .coordinate(CompactionSnapshot::new(false, true), &mut flusher, &mut compactor)
+            .coordinate(
+                CompactionSnapshot::new(false, true),
+                &mut flusher,
+                &mut compactor,
+            )
             .await
             .unwrap();
 

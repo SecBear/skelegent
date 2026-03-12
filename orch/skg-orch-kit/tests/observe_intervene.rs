@@ -45,7 +45,10 @@ struct InjectSupervisorNote(&'static str);
 impl ContextOp for InjectSupervisorNote {
     type Output = ();
 
-    async fn execute(&self, ctx: &mut Context) -> Result<Self::Output, skg_context_engine::EngineError> {
+    async fn execute(
+        &self,
+        ctx: &mut Context,
+    ) -> Result<Self::Output, skg_context_engine::EngineError> {
         ctx.push_message(Message::new(Role::System, Content::text(self.0)));
         Ok(())
     }
@@ -57,7 +60,10 @@ struct PushUserMessage(&'static str);
 impl ContextOp for PushUserMessage {
     type Output = ();
 
-    async fn execute(&self, ctx: &mut Context) -> Result<Self::Output, skg_context_engine::EngineError> {
+    async fn execute(
+        &self,
+        ctx: &mut Context,
+    ) -> Result<Self::Output, skg_context_engine::EngineError> {
         ctx.push_message(Message::new(Role::User, Content::text(self.0)));
         Ok(())
     }
@@ -76,7 +82,9 @@ async fn intervenor_sends_op_processed_at_next_boundary() {
         .await
         .expect("send succeeds while worker is attached");
 
-    ctx.run(PushUserMessage("worker turn")).await.expect("run succeeds");
+    ctx.run(PushUserMessage("worker turn"))
+        .await
+        .expect("run succeeds");
 
     let messages = ctx.messages();
     assert_eq!(messages.len(), 2);

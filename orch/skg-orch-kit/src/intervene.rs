@@ -26,10 +26,7 @@ impl ContextIntervenor {
     }
 
     /// Send an already-erased intervention.
-    pub async fn send_erased(
-        &self,
-        op: Box<dyn ErasedOp>,
-    ) -> Result<(), InterventionSendError> {
+    pub async fn send_erased(&self, op: Box<dyn ErasedOp>) -> Result<(), InterventionSendError> {
         self.tx
             .send(op)
             .await

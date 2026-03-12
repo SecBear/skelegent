@@ -298,7 +298,6 @@ mod tests {
         }
     }
 
-
     impl StreamProvider for AlwaysErrorStreamProvider {
         async fn infer_stream(
             &self,
@@ -311,7 +310,6 @@ mod tests {
             })
         }
     }
-
 
     #[tokio::test]
     async fn stream_react_before_boundary_rule_mutates_request_before_provider_call() {
@@ -430,7 +428,10 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(err, EngineError::Provider(ProviderError::TransientError { .. })));
+        assert!(matches!(
+            err,
+            EngineError::Provider(ProviderError::TransientError { .. })
+        ));
         assert!(
             !ctx.messages()
                 .iter()
