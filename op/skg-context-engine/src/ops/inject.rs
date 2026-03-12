@@ -23,7 +23,11 @@ impl ContextOp for InjectSystem {
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
         let system_msg = Message::new(Role::System, Content::text(&self.prompt));
 
-        if ctx.messages().first().is_some_and(|m| m.role == Role::System) {
+        if ctx
+            .messages()
+            .first()
+            .is_some_and(|m| m.role == Role::System)
+        {
             ctx.replace_message(0, system_msg);
         } else {
             ctx.insert_message(0, system_msg);

@@ -213,7 +213,11 @@ impl ContextOp for InjectFromStore {
 
         let insert_at = match &self.position {
             InjectionPosition::AfterSystemPrompt => {
-                if ctx.messages().first().is_some_and(|m| m.role == Role::System) {
+                if ctx
+                    .messages()
+                    .first()
+                    .is_some_and(|m| m.role == Role::System)
+                {
                     1
                 } else {
                     0
@@ -304,7 +308,11 @@ impl ContextOp for InjectSearchResults {
 
         let insert_at = match &self.position {
             InjectionPosition::AfterSystemPrompt => {
-                if ctx.messages().first().is_some_and(|m| m.role == Role::System) {
+                if ctx
+                    .messages()
+                    .first()
+                    .is_some_and(|m| m.role == Role::System)
+                {
                     1
                 } else {
                     0

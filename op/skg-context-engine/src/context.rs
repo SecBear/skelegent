@@ -790,7 +790,10 @@ mod tests {
         impl ContextOp for InjectSys {
             type Output = ();
             async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-                ctx.push_message(Message::new(Role::System, Content::text("injected by supervisor")));
+                ctx.push_message(Message::new(
+                    Role::System,
+                    Content::text("injected by supervisor"),
+                ));
                 Ok(())
             }
         }
@@ -847,7 +850,9 @@ mod tests {
             }
         }
         itx.send(Box::new(InjectMsg("first".into()))).await.unwrap();
-        itx.send(Box::new(InjectMsg("second".into()))).await.unwrap();
+        itx.send(Box::new(InjectMsg("second".into())))
+            .await
+            .unwrap();
 
         let msg = Message::new(Role::User, Content::text("user"));
         ctx.run(AddMessage { msg }).await.unwrap();

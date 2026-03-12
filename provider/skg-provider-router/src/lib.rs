@@ -342,8 +342,10 @@ mod tests {
     async fn out_of_bounds_policy_falls_back_to_default() {
         let calls = Arc::new(Mutex::new(Vec::new()));
 
-        let providers: Vec<Box<dyn DynProvider>> =
-            vec![box_provider(RecordingProvider::new("only", Arc::clone(&calls)))];
+        let providers: Vec<Box<dyn DynProvider>> = vec![box_provider(RecordingProvider::new(
+            "only",
+            Arc::clone(&calls),
+        ))];
 
         // Policy returns index 99 which is out of bounds
         struct BadPolicy;

@@ -103,5 +103,5 @@ pub use react::{
 };
 pub use rule::{Rule, Trigger};
 pub use rules::*;
-pub use stream_react::stream_react_loop;
 pub use stream::{ContextEvent, ContextMutation};
+pub use stream_react::stream_react_loop;
