@@ -21,6 +21,8 @@ Then change the code. Do not let code drift from the architecture.
 **Authority**: Architecture > Specs (`specs/`) > Rules (`rules/`) > Agent
 judgment. Higher authority wins. A spec may refine but not contradict a position.
 
+**Decision surface map**: `docs/design/23-decision-surface.md` is the concrete inventory of where each golden decision currently lives: Layer 0 noun, turn-local knob, orchestration knob, and backend implementation point. Use it to normalize configuration surfaces without expanding Layer 0 speculatively.
+
 ---
 
 ## Core Values
