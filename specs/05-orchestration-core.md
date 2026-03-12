@@ -8,36 +8,49 @@ It owns:
 
 - routing/topology (who runs next)
 - concurrency (`dispatch_many`)
-- workflow control surfaces (signals, queries)
-- durability/replay boundary (implementation dependent)
+- immediate invocation through `Dispatcher`
+- workflow control surfaces (`signal`, `query`)
+- optional durable run/control above Layer 0
+- retry authority
 
 ## Protocol
 
-`layer0::Dispatcher`, `layer0::Signalable`, and `layer0::Queryable` together form the orchestration boundary:
-
-
+`layer0::Dispatcher`, `layer0::Signalable`, and `layer0::Queryable` define the immediate orchestration boundary in Layer 0:
 
 **Dispatcher:**
 
 - `dispatch` — invoke an operator by ID
 
-
-
 **Signalable:**
 
 - `signal` — fire-and-forget inter-workflow messaging
-
-
 
 **Queryable:**
 
 - `query` — read-only workflow state inspection
 
-
-
 Related: `dispatch_many()` is a free function in `skg-orch-kit` for concurrent dispatch.
 
-The protocol does not prescribe whether execution is local, remote, durable, or ephemeral.
+The Layer 0 protocol does not prescribe whether execution is local, remote, durable, or ephemeral. Durable run/control is a higher-level orchestration contract above Layer 0; it must not be smuggled into `Dispatcher`, `Signalable`, `Queryable`, or `StateStore`.
+
+## Durable Run/Control Boundary
+
+Portable durable orchestration surfaces describe run lifecycle and control-plane semantics such as starting a run, inspecting status, signalling it, resuming a specific wait point, cancelling it, and reading its terminal outcome.
+
+They intentionally do **not** standardize backend internals such as:
+
+- event history schema
+- checkpoint blob shape
+- replay substrate
+- journal format
+- worker lease/claim model
+- storage schema
+
+`signal` and durable `resume` are distinct concepts. Signals are asynchronous control-plane messages. Resume satisfies a specific durable wait point with structured input.
+
+`StateStore` remains the memory/data-plane contract even when a backend reuses the same physical database for both memory and durable orchestration data.
+
+See `specs/14-durable-orchestration-core.md` for the narrow durable-run contract this architecture intends to stabilize above Layer 0.
 
 ## Retry and Durability
 
@@ -59,10 +72,9 @@ The turn classifies errors as retriable or not:
 
 ### Durability Boundary
 
-Local orchestration provides no durability — acceptable for short, low-stakes tasks.
-Durable orchestration (e.g. Temporal, Restate) provides checkpoint/replay recovery.
-The same `Operator` implementation works in both deployments — durability is a
-configuration and infrastructure choice, not an operator-level change.
+Local orchestration provides no durability — acceptable for short, low-stakes tasks. Durable orchestration adds a run/control layer above Layer 0. Backends may implement crash recovery through replay, checkpoints, append-only journals, platform-native event history, or other mechanisms. The same `Operator` implementation works in all of these deployments — durability is a configuration and infrastructure choice, not an operator-level change.
+
+Skelegent does not define a workflow DSL or serialized behavior-descriptor format for durable orchestration. Durable backends move data across boundaries; behavior stays local to the executing process.
 
 ## Required “Core Complete” Features
 
@@ -76,11 +88,13 @@ Minimum requirements:
 
 ## Current Implementation Status
 
-- `skg-orch-local` exists as an in-process dispatcher.
-- Signals are tracked in-memory per workflow via a per-workflow signal journal; `query` returns the signal count.
+- `skg-orch-local` exists as an in-process dispatcher for immediate invocation.
+- Local orchestration currently tracks signals in memory for testing/querying; that is an implementation detail, not the durable run contract.
 - `skg-orch-kit` provides composition wiring.
+- `skg-run-core` defines a portable durable run/control surface above Layer 0 without standardizing replay/checkpoint/journal internals.
 
 Still required:
 
 - end-to-end examples exercising orchestration graph wiring
+- backend implementations that map their own recovery substrate into the durable run/control surface while preserving backend freedom over replay/checkpoint/journal internals
 

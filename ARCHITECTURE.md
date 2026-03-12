@@ -21,6 +21,8 @@ Then change the code. Do not let code drift from the architecture.
 **Authority**: Architecture > Specs (`specs/`) > Rules (`rules/`) > Agent
 judgment. Higher authority wins. A spec may refine but not contradict a position.
 
+**Decision surface map**: `docs/design/23-decision-surface.md` is the concrete inventory of where each golden decision currently lives: Layer 0 noun, turn-local knob, orchestration knob, and backend implementation point. Use it to normalize configuration surfaces without expanding Layer 0 speculatively.
+
 ---
 
 ## Core Values
@@ -140,9 +142,7 @@ acknowledged.
 **Model selection**: Turn-owned. Single through three-tier routing supported,
 not mandated.
 
-**Durability**: Orchestration-owned. The turn cooperates via heartbeat hooks.
-Local orchestration: no durability. Durable orchestration: checkpoint or replay.
-Same operator works in both — deployment choice, not code change.
+**Durability**: Orchestration-owned. The turn cooperates by respecting orchestration-controlled boundaries and explicit lifecycle outcomes. Local orchestration has no durability. Durable orchestration adds a run/control layer above Layer 0 for starting, inspecting, signalling, resuming, and cancelling long-lived runs. Recovery internals — replay, checkpoints, journals, leases, and storage schema — remain backend-specific. The same operator works in both deployments; durability is a deployment and infrastructure choice, not an operator-level change.
 
 **Retry**: Orchestration-owned. Turn classifies errors as retryable or not
 (budget exhaustion and safety refusals: never retry). A single retry
@@ -185,17 +185,9 @@ All patterns are built from seven primitives: **Chain**, **Fan-out**, **Fan-in**
 output as input. Observe watches concurrently. Intervene modifies a running
 operator's context from outside. If a new pattern can't be expressed as a
 combination of these seven, the framework may need a new primitive.
-**Dispatch capability**: Operators receive dispatch capability via `Arc<dyn Dispatcher>`
-injected at construction time. `Dispatcher` is the single invocation primitive —
-one trait, one method (`dispatch`), used everywhere. There is no separate
-"orchestrator dispatch" vs "operator dispatch."
+**Dispatch capability**: Operators receive dispatch capability via `Arc<dyn Dispatcher>` injected at construction time. `Dispatcher` is the single immediate invocation primitive — one trait, one method (`dispatch`), used everywhere an operator is invoked. Durable run/control is a separate orchestration-local capability above Layer 0; it must not redefine `Dispatcher` into a long-lived run contract.
 
-**The Orchestrator is a pattern, not a trait**: The code that builds operators,
-wires their dependencies (state stores, providers, observation channels,
-intervention channels), registers them with a Dispatcher implementation, and
-manages lifecycle — this is application code. It is the "orchestrator" in the
-same way an Erlang supervisor is application code, not a protocol trait.
-Different applications wire differently. The Dispatcher is the swappable part.
+**The Orchestrator is a pattern, not a trait**: The code that builds operators, wires their dependencies (state stores, providers, observation channels, intervention channels), registers them with a Dispatcher implementation, and manages lifecycle — this is application code. It is the "orchestrator" in the same way an Erlang supervisor is application code, not a protocol trait. Different applications wire differently. The Dispatcher is the swappable immediate-invocation part. Durable run/control, when present, sits alongside it above Layer 0.
 
 **Context transfer**: Task-only injection is the default. Context boundaries
 should be enforced by infrastructure (separate process), not by prompt
@@ -210,10 +202,7 @@ acceptable for simple cases but does not scale.
 Conversation-scoped handoff (child inherits the conversation, parent terminates)
 is a distinct pattern from delegation.
 
-**Communication**: Synchronous call/return is the default (`Dispatcher::dispatch`).
-Signals for distributed orchestration (`Effect::Signal`). Context streams for
-real-time observation. Intervention channels for cross-agent context modification.
-Shared state via `StateStore` scopes for persistent coordination.
+**Communication**: Synchronous call/return is the default (`Dispatcher::dispatch`). Signals are asynchronous control-plane messages for orchestration (`Effect::Signal`). Durable resume is a separate concept: it satisfies a specific durable wait point rather than acting as a generic signal. Context streams provide real-time observation. Intervention channels provide cross-agent context modification. Shared state via `StateStore` scopes remains persistent coordination, not the durable run contract.
 
 **Observation and intervention**: Streaming-first. The context engine's `Context`
 emits every mutation as it happens — messages pushed/removed, effects declared,
@@ -240,9 +229,7 @@ turns, write important state to persistent storage. On termination, capture work
 product before the context window is destroyed. This is the single most critical
 lifecycle mechanism for long-running agents.
 
-**Compaction**: Three-way coordination between turn (detects pressure, executes
-summarization), orchestration (may continue-as-new), and state (persists
-results). Summarization is the default. The compaction reserve must never be
+**Compaction**: Coordination lives above Layer 0. The turn/runtime detects pressure and runs summarization, orchestration may continue-as-new, and state persists results. Layer 0 carries only the message-level hints that travel with the data (`Message` from `layer0::context`, `CompactionPolicy`). Summarization is the default. The compaction reserve must never be zero. `sliding_window` and `policy_trim` strategies are implemented, with
 zero. `sliding_window` and `policy_trim` strategies are implemented, with
 LLM-driven `summarize` and `extract_cognitive_state` available. Tiered/zone-based
 compaction is tracked in `TODO-aspirational.md` as future work.
@@ -255,14 +242,11 @@ because they share the same dependency footprint and type universe as the contex
 itself. Pre-built strategies (sliding window, policy-aware trim, summarize-and-replace)
 compose with any StateStore backend.
 
-**Crash recovery**: Entangled with orchestration by design. Local: no recovery,
-acceptable for short tasks. Durable: replay recovery. The same operator works
-in both. This entanglement is architectural, not incidental — we accept it
-rather than fighting it with leaky abstractions.
+**Crash recovery**: Entangled with orchestration by design, but not with a single universal substrate. Local orchestration provides no recovery — acceptable for short tasks. Durable orchestration adds a run/control layer above Layer 0 and may recover through backend-specific replay, checkpoints, journals, leases, or platform-native history. Public contracts should describe run lifecycle and control semantics; backend recovery internals stay below that boundary. The same operator works in both deployments.
 
-**Budget governance**: Single authority. The turn emits cost events.
-Orchestration tracks aggregate cost. The lifecycle coordinator makes
-halt/continue/downgrade decisions. Planners observe remaining budget (read-only).
+**Budget governance**: Single authority, but current enforcement is runtime-local.
+The turn/runtime currently enforces local cost, turn, duration, and tool-call limits via `BudgetGuard` at governed runtime boundaries. Budget-triggered stops surface as structured exits (`MaxTurns`, `BudgetExhausted`, `Timeout`) in the plain ReAct loops, while broader halt/continue/downgrade policy belongs to orchestration above Layer 0 unless/until it becomes a real cross-boundary contract.
+Planners observe remaining budget (read-only).
 
 **Observability**: Cross-cutting. Within an operator, the context stream
 provides full-fidelity real-time visibility into every context mutation and
