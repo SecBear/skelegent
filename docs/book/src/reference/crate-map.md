@@ -6,7 +6,7 @@ All crates in the skelegent workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `layer0` | Protocol traits (`Operator`, `Orchestrator`, `StateStore`, `Environment`), middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`), message types, and error types. The stability contract. |
+| `layer0` | Protocol traits (`Operator`, `Dispatcher`, `Signalable`, `Queryable`, `StateStore`, `Environment`), middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`), message types, and error types. The stability contract. |
 
 ## Layer 1 -- Operator Implementations
 
@@ -17,6 +17,7 @@ All crates in the skelegent workspace, organized by architectural layer.
 | `skg-provider-openai` | OpenAI API provider. Implements `Provider` for the Chat Completions API. |
 | `skg-provider-ollama` | Ollama local model provider. Implements `Provider` for the Ollama API. |
 | `skg-provider-codex` | OpenAI Codex (Responses API) provider. Implements `Provider` for the Responses API. |
+| `skg-provider-router` | Provider router. Selects an underlying provider per request using pluggable routing policy. |
 | `skg-tool` | `ToolDyn` trait, `ToolRegistry`, `AliasedTool`. Object-safe tool abstraction. |
 | `skg-context` | Conversation context assembly and compaction strategies. |
 | `skg-mcp` | MCP (Model Context Protocol) client. Wraps MCP server tools as `ToolDyn` implementations. |
@@ -29,10 +30,13 @@ All crates in the skelegent workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `skg-orch-local` | In-process orchestrator. Implements `Orchestrator` with tokio tasks. |
+| `skg-orch-local` | In-process orchestrator. Implements `Dispatcher`, `Signalable`, and `Queryable` with tokio tasks. |
 | `skg-orch-kit` | Shared utilities for orchestrator implementations. |
+| `skg-orch-env` | Environment-aware orchestrator. Routes operators through `Environment::run`. |
+| `skg-run-core` | Portable durable run/control primitives and kernel above Layer 0. |
 | `skg-effects-core` | Effect execution trait (`EffectExecutor`), errors, and policy — no implementations. |
 | `skg-effects-local` | Local in-process `EffectExecutor` implementation (in-order, best-effort). |
+| `skg-runner` | Runner binary for containerized/operator-hosted execution with gRPC + healthcheck endpoints. |
 
 ## Layer 3 -- State
 
@@ -40,16 +44,19 @@ All crates in the skelegent workspace, organized by architectural layer.
 |-------|-------------|
 | `skg-state-memory` | In-memory state store. Implements `StateStore` with `HashMap`. Ephemeral. |
 | `skg-state-fs` | Filesystem state store. Implements `StateStore` with file-backed persistence. |
+| `skg-state-proxy` | gRPC proxy for `StateStore`, enabling cross-container state access. |
 
 ## Layer 4 -- Environment and Credentials
 
 | Crate | Description |
 |-------|-------------|
 | `skg-env-local` | Local environment. Implements `Environment` with no isolation (passthrough). |
+| `skg-env-docker` | Docker-backed environment implementation for isolated operator execution. |
 | `skg-secret` | Secret resolution trait. Defines the interface for secret backends. |
 | `skg-secret-vault` | HashiCorp Vault secret backend. |
 | `skg-crypto` | Cryptographic utilities and primitives. |
 | `skg-auth` | Authentication and authorization abstractions. |
+| `skg-auth-omp` | OMP credential provider that reads Oh My Pi OAuth tokens from `agent.db`. |
 
 ## Layer 5 -- Cross-Cutting
 
@@ -69,15 +76,17 @@ All crates in the skelegent workspace, organized by architectural layer.
 | Crate | Description |
 |-------|-------------|
 | `custom-operator-barrier` | Example custom operator with barrier scheduling and steering (workspace member at `examples/custom_operator_barrier`). |
+| `hello-claude` | Minimal example binary that wires OMP auth plus a single-shot Claude operator. |
 ## Summary
 
 | Layer | Crates |
 |-------|--------|
 | 0 | 1 |
-| 1 | 12 |
-| 2 | 4 |
-| 3 | 2 |
-| 4 | 5 |
+| 1 | 13 |
+| 2 | 7 |
+| 3 | 3 |
+| 4 | 7 |
 | 5 | 1 |
 | Umbrella | 1 |
-| **Total** | **26** |
+| Examples | 2 |
+| **Total** | **35** |

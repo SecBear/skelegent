@@ -9,25 +9,31 @@
 ## Overview
 
 `layer0` defines the foundational protocol traits for composable agentic AI systems. It contains
-**no implementations** — only the contracts every agentic component must satisfy.
+**no implementations** — only the contracts every agentic component must satisfy. Lifecycle
+coordination lives above Layer 0; Layer 0 carries the protocol traits, middleware surfaces,
+and message-level hints that higher layers use.
 
-Four protocol traits + two cross-cutting interfaces:
+Four protocol traits + two cross-cutting protocol surfaces:
 
 | Protocol | Trait | Responsibility |
 |----------|-------|----------------|
 | ① Operator | `Operator` | One agent's work per cycle |
-| ② Orchestration | `Orchestrator` | Multi-agent composition + workflow routing |
+| ② Dispatch | `Dispatcher` | Multi-agent invocation primitive |
 | ③ State | `StateStore` / `StateReader` | Persistent key-value memory |
 | ④ Environment | `Environment` | Isolation, credentials, resource limits |
 | ⑤ Middleware | `DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware` | Interception + policy at each boundary |
-| ⑥ Lifecycle | `BudgetEvent`, `CompactionEvent` | Cross-layer coordination events |
+| ⑥ Message hints | `Message`, `CompactionPolicy` | Advisory metadata carried with protocol messages |
 
 ## Exports
 
 **Operator:** `Operator`, `OperatorInput`, `OperatorOutput`, `OperatorConfig`, `OperatorMetadata`,
 `SubDispatchRecord`, `ToolMetadata`, `ExitReason`
 
-**Orchestrator:** `Orchestrator`, `QueryPayload`
+**Dispatcher:** `Dispatcher`, `Dispatcher::dispatch`
+
+**Signalable:** `Signalable`, `Signalable::signal`
+
+**Queryable:** `Queryable`, `Queryable::query`
 
 **State:** `StateStore`, `StateReader`, `SearchResult`
 
@@ -35,7 +41,7 @@ Four protocol traits + two cross-cutting interfaces:
 
 **Middleware:** `DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`
 
-**Lifecycle:** `BudgetEvent`, `CompactionEvent`, `ObservableEvent`
+**Message hints:** `Message`, `CompactionPolicy`
 
 **Effects:** `Effect`, `Scope`, `SignalPayload`
 

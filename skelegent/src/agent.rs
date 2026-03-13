@@ -11,12 +11,16 @@
 //! ```
 
 use layer0::content::Content;
-use layer0::context::Role;
+use layer0::context::{Message, Role};
 use layer0::error::OperatorError;
+use layer0::id::OperatorId;
+use layer0::operator::OperatorOutput;
 use skg_context_engine::{
-    AssemblyExt, Context, ReactLoopConfig, react_loop, rule::Trigger, rules::BudgetGuard,
+    Context, EngineError, InferBoundary, ReactLoopConfig, Rule, react_loop,
+    rules::{BudgetGuard, BudgetGuardConfig},
 };
-use skg_tool::ToolRegistry;
+use skg_tool::{ToolCallContext, ToolRegistry};
+use skg_turn::provider::Provider;
 
 /// Create an agent builder with the given model identifier.
 ///
@@ -111,41 +115,16 @@ pub struct BuiltAgent {
 
 impl BuiltAgent {
     /// Run the agent with a user message.
-    pub async fn run(
-        &self,
-        message: &str,
-    ) -> Result<layer0::operator::OperatorOutput, OperatorError> {
-        // Create context with budget guard rule
-        let guard = BudgetGuard::with_config(skg_context_engine::rules::BudgetGuardConfig {
-            max_cost: None,
-            max_turns: Some(self.max_turns),
-            max_duration: None,
-            max_tool_calls: None,
-        });
-        let rule =
-            skg_context_engine::rule::Rule::new("budget_guard", Trigger::BeforeAny, 100, guard);
-        let mut ctx = Context::with_rules(vec![rule]);
-
-        // Inject system prompt and user message
-        ctx.inject_system(&self.system_prompt)
-            .await
-            .map_err(|_| OperatorError::InferenceError("Failed to inject system prompt".into()))?;
-        let user_msg = layer0::context::Message::new(Role::User, Content::text(message));
-        ctx.inject_message(user_msg)
-            .await
-            .map_err(|_| OperatorError::InferenceError("Failed to inject user message".into()))?;
-
-        // Run the react loop
-        let config = ReactLoopConfig {
-            system_prompt: self.system_prompt.clone(),
-            model: Some(self.model.clone()),
-            max_tokens: Some(self.max_tokens),
-            temperature: None,
-            tool_filter: None,
-        };
-
+    pub async fn run(&self, message: &str) -> Result<OperatorOutput, OperatorError> {
         self.provider
-            .react_loop(&mut ctx, &self.tools, &config)
+            .run(
+                &self.model,
+                &self.system_prompt,
+                &self.tools,
+                self.max_turns,
+                self.max_tokens,
+                message,
+            )
             .await
     }
 }
@@ -192,43 +171,210 @@ enum ProviderKind {
     Ollama(skg_provider_ollama::OllamaProvider),
 }
 
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
 impl ProviderKind {
-    /// Call react_loop with the appropriate provider.
-    async fn react_loop(
+    async fn run(
         &self,
-        ctx: &mut Context,
+        model: &str,
+        system_prompt: &str,
         tools: &ToolRegistry,
-        config: &ReactLoopConfig,
-    ) -> Result<layer0::operator::OperatorOutput, OperatorError> {
+        max_turns: u32,
+        max_tokens: u32,
+        message: &str,
+    ) -> Result<OperatorOutput, OperatorError> {
         match self {
             #[cfg(feature = "provider-anthropic")]
             Self::Anthropic(provider) => {
-                skg_context_engine::react_loop(ctx, provider, tools, config)
-                    .await
-                    .map_err(|e| {
-                        OperatorError::InferenceError(format!("Context engine error: {e}"))
-                    })
+                run_with_provider(
+                    model,
+                    system_prompt,
+                    tools,
+                    max_turns,
+                    max_tokens,
+                    provider,
+                    message,
+                )
+                .await
             }
             #[cfg(feature = "provider-openai")]
             Self::OpenAI(provider) => {
-                skg_context_engine::react_loop(ctx, provider, tools, config)
-                    .await
-                    .map_err(|e| {
-                        OperatorError::InferenceError(format!("Context engine error: {e}"))
-                    })
+                run_with_provider(
+                    model,
+                    system_prompt,
+                    tools,
+                    max_turns,
+                    max_tokens,
+                    provider,
+                    message,
+                )
+                .await
             }
             #[cfg(feature = "provider-ollama")]
             Self::Ollama(provider) => {
-                skg_context_engine::react_loop(ctx, provider, tools, config)
-                    .await
-                    .map_err(|e| {
-                        OperatorError::InferenceError(format!("Context engine error: {e}"))
-                    })
+                run_with_provider(
+                    model,
+                    system_prompt,
+                    tools,
+                    max_turns,
+                    max_tokens,
+                    provider,
+                    message,
+                )
+                .await
             }
         }
     }
 }
 
+#[cfg(not(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+)))]
+impl ProviderKind {
+    async fn run(
+        &self,
+        _model: &str,
+        _system_prompt: &str,
+        _tools: &ToolRegistry,
+        _max_turns: u32,
+        _max_tokens: u32,
+        _message: &str,
+    ) -> Result<OperatorOutput, OperatorError> {
+        match *self {}
+    }
+}
+
+async fn run_with_provider<P: Provider>(
+    model: &str,
+    system_prompt: &str,
+    tools: &ToolRegistry,
+    max_turns: u32,
+    max_tokens: u32,
+    provider: &P,
+    message: &str,
+) -> Result<OperatorOutput, OperatorError> {
+    let guard = BudgetGuard::with_config(BudgetGuardConfig {
+        max_cost: None,
+        max_turns: Some(max_turns),
+        max_duration: None,
+        max_tool_calls: None,
+    });
+    let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+        "budget_guard",
+        100,
+        guard,
+    )]);
+
+    ctx.inject_system(system_prompt)
+        .await
+        .map_err(|e| OperatorError::ContextAssembly(e.to_string()))?;
+    let user_msg = Message::new(Role::User, Content::text(message));
+    ctx.inject_message(user_msg)
+        .await
+        .map_err(|e| OperatorError::ContextAssembly(e.to_string()))?;
+
+    let config = ReactLoopConfig {
+        system_prompt: system_prompt.to_string(),
+        model: Some(model.to_string()),
+        max_tokens: Some(max_tokens),
+        temperature: None,
+        tool_filter: None,
+    };
+    let tool_ctx = ToolCallContext::new(OperatorId::from("agent"));
+
+    react_loop(&mut ctx, provider, tools, &tool_ctx, &config)
+        .await
+        .map_err(map_engine_error)
+}
+
+fn map_engine_error(err: EngineError) -> OperatorError {
+    match err {
+        EngineError::Provider(err) => {
+            if err.is_retryable() {
+                OperatorError::Retryable(err.to_string())
+            } else {
+                OperatorError::Model(err.to_string())
+            }
+        }
+        EngineError::Operator(err) => err,
+        EngineError::Tool(err) => OperatorError::SubDispatch {
+            operator: "tool".into(),
+            message: err.to_string(),
+        },
+        EngineError::Halted { reason } => OperatorError::NonRetryable(reason),
+        EngineError::Exit { detail, .. } => OperatorError::NonRetryable(detail),
+        EngineError::Custom(err) => OperatorError::Other(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skg_turn::infer::{InferRequest, InferResponse};
+    use skg_turn::provider::ProviderError;
+    use skg_turn::types::{StopReason, TokenUsage};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone, Default)]
+    struct CountingProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CountingProvider {
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Provider for CountingProvider {
+        fn infer(
+            &self,
+            _request: InferRequest,
+        ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send
+        {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            async {
+                Ok(InferResponse {
+                    content: Content::text("done"),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    usage: TokenUsage::default(),
+                    model: "test".into(),
+                    cost: None,
+                    truncated: None,
+                })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn built_agent_budget_exit_returns_structured_output() {
+        let provider = CountingProvider::default();
+        let tools = ToolRegistry::new();
+
+        let output = run_with_provider("test-model", "system", &tools, 0, 128, &provider, "hi")
+            .await
+            .expect("budget exits should return operator output");
+
+        assert_eq!(output.exit_reason, layer0::operator::ExitReason::MaxTurns);
+        assert_eq!(output.message.as_text(), Some(""));
+        assert_eq!(provider.call_count(), 0);
+    }
+}
+
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
 fn resolve_model(
     model: &str,
     system_prompt: String,
@@ -296,4 +442,41 @@ fn resolve_model(
         max_tokens,
         provider,
     })
+}
+
+#[cfg(not(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+)))]
+fn resolve_model(
+    model: &str,
+    _system_prompt: String,
+    _tools: ToolRegistry,
+    _max_turns: u32,
+    _max_tokens: u32,
+) -> Result<BuiltAgent, AgentBuildError> {
+    if model.starts_with("claude-") || model.starts_with("anthropic:") {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-anthropic",
+        });
+    }
+
+    if model.starts_with("gpt-")
+        || model.starts_with("openai:")
+        || model.starts_with("o1-")
+        || model.starts_with("o3-")
+    {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-openai",
+        });
+    }
+
+    if model.starts_with("ollama:") {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-ollama",
+        });
+    }
+
+    Err(AgentBuildError::UnknownModel(model.to_string()))
 }

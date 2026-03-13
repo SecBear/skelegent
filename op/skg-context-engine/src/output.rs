@@ -28,9 +28,9 @@
 //! let schema = OutputSchema::from_type::<CityInfo>();
 //! ```
 
+use serde_json::Value;
 use skg_turn::infer::InferResponse;
 use skg_turn::types::ToolSchema;
-use serde_json::Value;
 use std::fmt;
 
 /// The canonical tool name for returning structured results.
@@ -345,9 +345,9 @@ pub fn extract_json_block(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use skg_turn::infer::{InferResponse, ToolCall};
     use skg_turn::types::{StopReason, TokenUsage};
-    use serde_json::json;
 
     fn text_response(text: &str) -> InferResponse {
         InferResponse {

@@ -7,6 +7,7 @@
 //! `react_loop_structured()` extends this with structured output: the model
 //! returns validated JSON via a tool call or text response, with automatic
 //! retry on validation failure.
+use crate::boundary::InferBoundary;
 use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
@@ -18,11 +19,11 @@ use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
+use serde_json::Value;
 use skg_tool::{ToolCallContext, ToolDyn, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
-use serde_json::Value;
 use std::fmt;
 use std::sync::Arc;
 
@@ -153,6 +154,53 @@ pub fn format_tool_error(e: &EngineError) -> String {
     format!("Error: {e}")
 }
 
+async fn infer_once<P: Provider>(
+    ctx: &mut Context,
+    provider: &P,
+    tools: &ToolRegistry,
+    config: &ReactLoopConfig,
+    extra_tool: Option<&ToolSchema>,
+) -> Result<crate::InferResult, EngineError> {
+    ctx.enter_boundary::<InferBoundary>().await?;
+
+    let mut compile_config = config.compile_config(tools, ctx);
+    if let Some(schema) = extra_tool {
+        compile_config.tools.push(schema.clone());
+    }
+
+    let compiled = ctx.compile(&compile_config);
+    let result = compiled.infer(provider).await?;
+
+    ctx.exit_boundary::<InferBoundary>().await?;
+    Ok(result)
+}
+
+fn structured_exit_output(err: EngineError, ctx: &Context) -> Result<OperatorOutput, EngineError> {
+    match err {
+        EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
+        other => Err(other),
+    }
+}
+
+enum ToolDispatchOutcome {
+    Continue,
+    AwaitingApproval,
+    Exit(ExitReason),
+}
+
+fn make_context_output(message: Content, exit: ExitReason, ctx: &Context) -> OperatorOutput {
+    let mut output = OperatorOutput::new(message, exit);
+    let mut meta = OperatorMetadata::default();
+    meta.tokens_in = ctx.metrics.tokens_in;
+    meta.tokens_out = ctx.metrics.tokens_out;
+    meta.cost = ctx.metrics.cost;
+    meta.turns_used = ctx.metrics.turns_completed;
+    meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
+    output.metadata = meta;
+    output.effects = ctx.effects().to_vec();
+    output
+}
+
 /// Run the ReAct (Reasoning + Acting) loop.
 ///
 /// This is the ReAct *pattern* expressed as composition of context engine
@@ -182,13 +230,15 @@ pub async fn react_loop<P: Provider>(
 ) -> Result<OperatorOutput, EngineError> {
     loop {
         // Phase 1: Compile and infer (re-filter tools each turn)
-        let compile_config = config.compile_config(tools, ctx);
-        let compiled = ctx.compile(&compile_config);
-        let result = compiled.infer(provider).await?;
+        let result = match infer_once(ctx, provider, tools, config, None).await {
+            Ok(result) => result,
+            Err(err) => return structured_exit_output(err, ctx),
+        };
 
         // Phase 2: Append response to context (this is a context op — rules fire)
-        ctx.run(AppendResponse::new(result.response.clone()))
-            .await?;
+        if let Err(err) = ctx.run(AppendResponse::new(result.response.clone())).await {
+            return structured_exit_output(err, ctx);
+        }
 
         // Count this inference as a completed turn
         ctx.metrics.turns_completed += 1;
@@ -204,7 +254,7 @@ pub async fn react_loop<P: Provider>(
         let approval_effects = check_approval(&tool_calls, tools);
 
         if !approval_effects.is_empty() {
-            ctx.effects.extend(approval_effects);
+            ctx.extend_effects(approval_effects);
             return Ok(make_output(
                 result.response,
                 ExitReason::AwaitingApproval,
@@ -223,28 +273,24 @@ pub async fn react_loop<P: Provider>(
                 .await
             {
                 Ok(s) => s,
+                Err(EngineError::Exit { reason, .. }) => {
+                    return Ok(make_context_output(Content::text(""), reason, ctx));
+                }
                 Err(e) => format_tool_error(&e),
             };
 
             // Append tool result to context
             let result_msg =
                 InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
-            ctx.inject_message(result_msg).await?;
+            if let Err(err) = ctx.inject_message(result_msg).await {
+                return structured_exit_output(err, ctx);
+            }
         }
     }
 }
 
 fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> OperatorOutput {
-    let mut output = OperatorOutput::new(response.content, exit);
-    let mut meta = OperatorMetadata::default();
-    meta.tokens_in = ctx.metrics.tokens_in;
-    meta.tokens_out = ctx.metrics.tokens_out;
-    meta.cost = ctx.metrics.cost;
-    meta.turns_used = ctx.metrics.turns_completed;
-    meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
-    output.metadata = meta;
-    output.effects = ctx.effects.clone();
-    output
+    make_context_output(response.content, exit, ctx)
 }
 
 /// Extract tool schemas from a registry, applying a filter.
@@ -290,7 +336,10 @@ fn tool_schemas(registry: &ToolRegistry) -> Vec<ToolSchema> {
 /// response. Tool calls are dispatched normally; structured output is
 /// extracted only when the model returns text without tool calls.
 ///
-/// Returns `(validated_value, operator_output)` on success.
+/// Returns `(Some(validated_value), operator_output)` on success. Returns `(None,
+/// operator_output)` when the loop exits before producing a validated value — the caller
+/// **must** inspect [`OperatorOutput::exit_reason`] to determine whether the exit is
+/// resumable ([`ExitReason::AwaitingApproval`]) or terminal (budget, timeout, safety, etc.).
 pub async fn react_loop_structured<P: Provider>(
     ctx: &mut Context,
     provider: &P,
@@ -298,7 +347,7 @@ pub async fn react_loop_structured<P: Provider>(
     tool_ctx: &ToolCallContext,
     config: &ReactLoopConfig,
     output: &OutputSchema,
-) -> Result<(Value, OperatorOutput), EngineError> {
+) -> Result<(Option<Value>, OperatorOutput), EngineError> {
     let output_tool_schema = if output.mode == OutputMode::ToolCall {
         Some(output.tool_schema())
     } else {
@@ -309,23 +358,29 @@ pub async fn react_loop_structured<P: Provider>(
 
     loop {
         // Phase 1: Compile and infer (re-filter tools each turn)
-        let mut compile_config = config.compile_config(tools, ctx);
-        if let Some(schema) = &output_tool_schema {
-            compile_config.tools.push(schema.clone());
-        }
-        let compiled = ctx.compile(&compile_config);
-        let result = compiled.infer(provider).await?;
+        let result =
+            match infer_once(ctx, provider, tools, config, output_tool_schema.as_ref()).await {
+                Ok(result) => result,
+                Err(err) => match structured_exit_output(err, ctx) {
+                    Ok(output) => return Ok((None, output)),
+                    Err(other) => return Err(other),
+                },
+            };
 
         // Phase 2: Append response to context (rules fire)
-        ctx.run(AppendResponse::new(result.response.clone()))
-            .await?;
+        if let Err(err) = ctx.run(AppendResponse::new(result.response.clone())).await {
+            match structured_exit_output(err, ctx) {
+                Ok(output) => return Ok((None, output)),
+                Err(other) => return Err(other),
+            }
+        }
         ctx.metrics.turns_completed += 1;
 
         // Phase 3: Try to extract structured output
         match output.extract(&result.response) {
             Ok(value) => {
                 let op_output = make_output(result.response, ExitReason::Complete, ctx);
-                return Ok((value, op_output));
+                return Ok((Some(value), op_output));
             }
             Err(OutputError::ValidationFailed { message, .. }) => {
                 output_retries += 1;
@@ -363,7 +418,7 @@ pub async fn react_loop_structured<P: Provider>(
                     ctx.inject_message(retry_msg).await?;
                 }
                 // Dispatch any non-output tool calls in the same response
-                let awaiting = dispatch_function_tools(
+                let dispatch = dispatch_function_tools(
                     ctx,
                     &result.response,
                     tools,
@@ -371,17 +426,23 @@ pub async fn react_loop_structured<P: Provider>(
                     &output.tool_name,
                 )
                 .await?;
-                if awaiting {
-                    return Err(EngineError::Halted {
-                        reason: "tool approval required during structured output loop".into(),
-                    });
+                match dispatch {
+                    ToolDispatchOutcome::Continue => continue,
+                    ToolDispatchOutcome::AwaitingApproval => {
+                        let op_output =
+                            make_output(result.response, ExitReason::AwaitingApproval, ctx);
+                        return Ok((None, op_output));
+                    }
+                    ToolDispatchOutcome::Exit(reason) => {
+                        let op_output = make_context_output(Content::text(""), reason, ctx);
+                        return Ok((None, op_output));
+                    }
                 }
-                continue;
             }
             Err(OutputError::NoOutput) => {
                 // No structured output — check for function tool calls
                 if result.has_tool_calls() {
-                    let awaiting = dispatch_function_tools(
+                    let dispatch = dispatch_function_tools(
                         ctx,
                         &result.response,
                         tools,
@@ -389,12 +450,18 @@ pub async fn react_loop_structured<P: Provider>(
                         &output.tool_name,
                     )
                     .await?;
-                    if awaiting {
-                        return Err(EngineError::Halted {
-                            reason: "tool approval required during structured output loop".into(),
-                        });
+                    match dispatch {
+                        ToolDispatchOutcome::Continue => continue,
+                        ToolDispatchOutcome::AwaitingApproval => {
+                            let op_output =
+                                make_output(result.response, ExitReason::AwaitingApproval, ctx);
+                            return Ok((None, op_output));
+                        }
+                        ToolDispatchOutcome::Exit(reason) => {
+                            let op_output = make_context_output(Content::text(""), reason, ctx);
+                            return Ok((None, op_output));
+                        }
                     }
-                    continue;
                 }
                 // No tool calls, no structured output — model is done without output
                 let exit = check_exit(&result.response.stop_reason);
@@ -411,15 +478,17 @@ pub async fn react_loop_structured<P: Provider>(
 /// Dispatch function tool calls, skipping the output tool.
 ///
 /// If any tool requires approval, emits [`Effect::ToolApprovalRequired`]
-/// effects on the context and returns `true` (caller should exit with
-/// [`ExitReason::AwaitingApproval`]).
+/// effects on the context and returns [`ToolDispatchOutcome::AwaitingApproval`].
+/// If a rule/interceptor exits during tool execution, returns
+/// [`ToolDispatchOutcome::Exit`] so the caller can surface the structured exit
+/// instead of treating it as a tool error string.
 async fn dispatch_function_tools(
     ctx: &mut Context,
     response: &InferResponse,
     tools: &ToolRegistry,
     tool_ctx: &ToolCallContext,
     output_tool_name: &str,
-) -> Result<bool, EngineError> {
+) -> Result<ToolDispatchOutcome, EngineError> {
     // Check for approval-required tools first (excluding output tool)
     let function_calls: Vec<_> = response
         .tool_calls
@@ -430,8 +499,8 @@ async fn dispatch_function_tools(
     let approval_effects = check_approval(&function_calls, tools);
 
     if !approval_effects.is_empty() {
-        ctx.effects.extend(approval_effects);
-        return Ok(true); // Caller should exit with AwaitingApproval
+        ctx.extend_effects(approval_effects);
+        return Ok(ToolDispatchOutcome::AwaitingApproval);
     }
 
     for call in &response.tool_calls {
@@ -447,25 +516,40 @@ async fn dispatch_function_tools(
             .await
         {
             Ok(s) => s,
+            Err(EngineError::Exit { reason, .. }) => {
+                return Ok(ToolDispatchOutcome::Exit(reason));
+            }
             Err(e) => format_tool_error(&e),
         };
         let result_msg =
             InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
-        ctx.inject_message(result_msg).await?;
+        if let Err(err) = ctx.inject_message(result_msg).await {
+            match err {
+                EngineError::Exit { reason, .. } => return Ok(ToolDispatchOutcome::Exit(reason)),
+                other => return Err(other),
+            }
+        }
     }
-    Ok(false)
+    Ok(ToolDispatchOutcome::Continue)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::op::ContextOp;
     use crate::output::OutputSchema;
+    use crate::rules::{BudgetGuard, BudgetGuardConfig};
+    use crate::{InferBoundary, Rule};
+    use async_trait::async_trait;
     use layer0::id::OperatorId;
-    use skg_tool::{ToolDyn, ToolError};
-    use skg_turn::test_utils::TestProvider;
     use serde_json::json;
+    use skg_tool::{ToolDyn, ToolError};
+    use skg_turn::provider::ProviderError;
+    use skg_turn::test_utils::{TestProvider, error_provider_transient};
     use std::pin::Pin;
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tokio::sync::mpsc;
 
     struct MockTool {
         name: &'static str,
@@ -512,6 +596,339 @@ mod tests {
         Ok(v.clone())
     }
 
+    struct HaltBeforeInference;
+
+    #[async_trait]
+    impl ContextOp for HaltBeforeInference {
+        type Output = ();
+
+        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+            Err(EngineError::Halted {
+                reason: "blocked before inference".into(),
+            })
+        }
+    }
+
+    struct InjectInterventionMessage(&'static str);
+
+    #[async_trait]
+    impl ContextOp for InjectInterventionMessage {
+        type Output = ();
+
+        async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            ctx.push_message(Message::new(Role::System, Content::text(self.0)));
+            Ok(())
+        }
+    }
+
+    struct PushMarker(&'static str);
+
+    #[async_trait]
+    impl ContextOp for PushMarker {
+        type Output = ();
+
+        async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            ctx.push_message(Message::new(Role::System, Content::text(self.0)));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn react_loop_before_infer_boundary_rule_mutates_request_before_provider_call() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "mark before inference",
+            100,
+            PushMarker("before infer marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let request = provider
+            .last_request()
+            .expect("provider should record request");
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.text_content() == "before infer marker"),
+            "before rule must mutate context before request compilation and provider send"
+        );
+    }
+
+    #[tokio::test]
+    async fn react_loop_after_infer_boundary_rule_runs_after_success_only() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
+
+        let mut ctx = Context::with_rules(vec![Rule::after::<InferBoundary>(
+            "mark after inference",
+            100,
+            PushMarker("after infer marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let request = provider
+            .last_request()
+            .expect("provider should record request");
+        assert!(
+            !request
+                .messages
+                .iter()
+                .any(|message| message.text_content() == "after infer marker"),
+            "after rule must not mutate the request that was already sent to the provider"
+        );
+        assert!(
+            ctx.messages()
+                .iter()
+                .any(|message| message.text_content() == "after infer marker"),
+            "after rule must run after a successful provider call"
+        );
+    }
+
+    #[tokio::test]
+    async fn react_loop_after_infer_boundary_rule_does_not_run_on_provider_error() {
+        let provider = error_provider_transient("boom");
+
+        let mut ctx = Context::with_rules(vec![Rule::after::<InferBoundary>(
+            "mark after inference",
+            100,
+            PushMarker("after infer marker"),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let err = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            EngineError::Provider(ProviderError::TransientError { .. })
+        ));
+        assert!(
+            !ctx.messages()
+                .iter()
+                .any(|message| message.text_content() == "after infer marker"),
+            "after rule must not run when provider inference fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn react_loop_halts_before_provider_call_on_infer_boundary_rule() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("should never be used");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "halt before inference",
+            100,
+            HaltBeforeInference,
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let err = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EngineError::Halted { .. }));
+        assert_eq!(provider.call_count(), 0);
+    }
+
+    async fn assert_budget_exit_before_provider_call(
+        mutate_ctx: impl FnOnce(&mut Context),
+        config: BudgetGuardConfig,
+        expected_exit: ExitReason,
+    ) {
+        let provider = TestProvider::new();
+        provider.respond_with_text("should never be used");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "budget_guard",
+            100,
+            BudgetGuard::with_config(config),
+        )]);
+        mutate_ctx(&mut ctx);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, expected_exit);
+        assert_eq!(output.message.as_text(), Some(""));
+        assert_eq!(provider.call_count(), 0);
+    }
+
+    async fn assert_structured_budget_exit_before_provider_call(
+        mutate_ctx: impl FnOnce(&mut Context),
+        config: BudgetGuardConfig,
+        expected_exit: ExitReason,
+    ) {
+        let provider = TestProvider::new();
+        provider.respond_with_text("should never be used");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "budget_guard",
+            100,
+            BudgetGuard::with_config(config),
+        )]);
+        mutate_ctx(&mut ctx);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let schema = OutputSchema::text_json(json!({}), |v| Ok(v.clone()));
+        let (value, output) = react_loop_structured(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            &schema,
+        )
+        .await
+        .unwrap();
+
+        assert!(value.is_none());
+        assert_eq!(output.exit_reason, expected_exit);
+        assert_eq!(output.message.as_text(), Some(""));
+        assert_eq!(provider.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn react_loop_returns_structured_max_turns_exit_before_provider_call() {
+        assert_budget_exit_before_provider_call(
+            |ctx| ctx.metrics.turns_completed = 1,
+            BudgetGuardConfig {
+                max_cost: None,
+                max_turns: Some(1),
+                max_duration: None,
+                max_tool_calls: None,
+            },
+            ExitReason::MaxTurns,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn react_loop_returns_structured_budget_exhausted_exit_before_provider_call() {
+        assert_budget_exit_before_provider_call(
+            |ctx| ctx.metrics.cost = rust_decimal::Decimal::new(250, 2),
+            BudgetGuardConfig {
+                max_cost: Some(rust_decimal::Decimal::new(100, 2)),
+                max_turns: None,
+                max_duration: None,
+                max_tool_calls: None,
+            },
+            ExitReason::BudgetExhausted,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn react_loop_returns_structured_timeout_exit_before_provider_call() {
+        assert_budget_exit_before_provider_call(
+            |ctx| ctx.metrics.start = Instant::now() - Duration::from_secs(5),
+            BudgetGuardConfig {
+                max_cost: None,
+                max_turns: None,
+                max_duration: Some(Duration::from_secs(1)),
+                max_tool_calls: None,
+            },
+            ExitReason::Timeout,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn react_loop_structured_returns_budget_exit_before_provider_call() {
+        assert_structured_budget_exit_before_provider_call(
+            |ctx| ctx.metrics.turns_completed = 1,
+            BudgetGuardConfig {
+                max_cost: None,
+                max_turns: Some(1),
+                max_duration: None,
+                max_tool_calls: None,
+            },
+            ExitReason::MaxTurns,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn intervention_updates_context_before_provider_sees_next_inference() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
+
+        let (itx, irx) = mpsc::channel::<Box<dyn crate::op::ErasedOp>>(4);
+        let mut ctx = Context::new();
+        ctx.with_intervention(irx);
+        ctx.inject_message(Message::new(Role::User, Content::text("original")))
+            .await
+            .unwrap();
+
+        itx.send(Box::new(InjectInterventionMessage("supervisor note")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(provider.call_count(), 1);
+
+        let request = provider
+            .last_request()
+            .expect("provider should record request");
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.text_content() == "supervisor note"),
+            "intervention message must be present in the compiled request"
+        );
+    }
+
     #[tokio::test]
     async fn structured_tool_call_success_first_try() {
         let provider = TestProvider::new();
@@ -541,6 +958,7 @@ mod tests {
         .await
         .unwrap();
 
+        let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Tokyo");
         assert_eq!(value["population"], 13960000_u64);
         assert!(matches!(output.exit_reason, ExitReason::Complete));
@@ -583,6 +1001,7 @@ mod tests {
         .await
         .unwrap();
 
+        let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Tokyo");
         assert_eq!(value["population"], 13960000_u64);
         assert_eq!(provider.call_count(), 2);
@@ -652,6 +1071,7 @@ mod tests {
         .await
         .unwrap();
 
+        let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Berlin");
         assert_eq!(provider.call_count(), 1);
     }
@@ -724,8 +1144,120 @@ mod tests {
         .await
         .unwrap();
 
+        let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Tokyo");
         assert_eq!(provider.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn structured_function_tools_preserve_awaiting_approval_exit() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_calls(vec![
+            ("safe_tool", "c1", json!({ "query": "status" })),
+            ("dangerous_tool", "c2", json!({ "cmd": "deploy" })),
+        ]);
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(MockTool { name: "safe_tool" }));
+        tools.register(Arc::new(ApprovalTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let schema = OutputSchema::tool_call(json!({}), city_validator);
+
+        let (value, output) = react_loop_structured(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            &schema,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            value.is_none(),
+            "approval pause must not fabricate structured output"
+        );
+        assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
+        assert_eq!(output.effects.len(), 1);
+        match &output.effects[0] {
+            Effect::ToolApprovalRequired {
+                tool_name,
+                call_id,
+                input,
+            } => {
+                assert_eq!(tool_name, "dangerous_tool");
+                assert_eq!(call_id, "c2");
+                assert_eq!(input, &json!({ "cmd": "deploy" }));
+            }
+            other => panic!("expected ToolApprovalRequired, got {other:?}"),
+        }
+
+        // Safe tool should not run once the loop pauses for approval.
+        assert_eq!(provider.call_count(), 1);
+        assert_eq!(ctx.metrics.tool_calls_total, 0);
+    }
+
+    struct ExitBeforeToolDispatch;
+
+    #[async_trait]
+    impl ContextOp for ExitBeforeToolDispatch {
+        type Output = ();
+
+        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+            Err(EngineError::Exit {
+                reason: ExitReason::Timeout,
+                detail: "tool dispatch paused".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn structured_function_tool_dispatch_preserves_structured_exit() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("search", "call_1", json!({ "query": "Tokyo" }));
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(MockTool { name: "search" }));
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<ExecuteTool>(
+            "exit before tool dispatch",
+            100,
+            ExitBeforeToolDispatch,
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let schema = OutputSchema::tool_call(json!({}), city_validator);
+        let (value, output) = react_loop_structured(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            &schema,
+        )
+        .await
+        .unwrap();
+
+        assert!(value.is_none());
+        assert_eq!(output.exit_reason, ExitReason::Timeout);
+        assert_eq!(provider.call_count(), 1);
+        assert_eq!(ctx.metrics.tool_calls_total, 0);
+        assert!(
+            !ctx.messages()
+                .iter()
+                .any(|message| message.text_content().contains("mock result")),
+            "tool result should not be injected after a structured exit"
+        );
     }
 
     #[tokio::test]

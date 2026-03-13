@@ -70,9 +70,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(ctx.messages.len(), 2);
-        assert_eq!(ctx.messages[0].role, Role::System);
-        assert_eq!(ctx.messages[1].role, Role::User);
+        assert_eq!(ctx.messages().len(), 2);
+        assert_eq!(ctx.messages()[0].role, Role::System);
+        assert_eq!(ctx.messages()[1].role, Role::User);
     }
 
     #[tokio::test]
@@ -83,13 +83,13 @@ mod tests {
             .unwrap();
 
         ctx.compact_if(
-            |ctx| ctx.messages.len() > 10,
+            |ctx| ctx.messages().len() > 10,
             |msgs| msgs.iter().rev().take(1).cloned().collect(),
         )
         .await
         .unwrap();
 
         // Only 1 message, predicate false, no compaction
-        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages().len(), 1);
     }
 }

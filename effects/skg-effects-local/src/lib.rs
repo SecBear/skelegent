@@ -3,45 +3,53 @@
 
 use async_trait::async_trait;
 use layer0::content::Content;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::{Effect, Scope};
-use layer0::error::StateError;
+use layer0::error::{OrchError, StateError};
 use layer0::middleware::{StoreStack, StoreWriteNext};
 use layer0::operator::{OperatorInput, TriggerType};
-use layer0::orchestrator::Orchestrator;
 use layer0::state::{StateStore, StoreOptions};
-use skg_effects_core::{EffectExecutor, Error, UnknownEffectPolicy};
 use serde_json::json;
+use skg_effects_core::Signalable;
+use skg_effects_core::{EffectExecutor, Error, UnknownEffectPolicy};
 use std::sync::Arc;
 
 /// Local executor that applies memory effects to a `StateStore` and
-/// translates orchestration effects into `Orchestrator` calls.
+/// translates orchestration effects into `Dispatcher` / `Signalable` calls.
 ///
 /// Semantics:
 /// - WriteMemory/DeleteMemory: executed directly against the supplied state.
-/// - Delegate: immediate dispatch via `Orchestrator::dispatch`.
-/// - Handoff: immediate dispatch via `Orchestrator::dispatch` with a metadata
+/// - Delegate: immediate dispatch via `Dispatcher::dispatch`.
+/// - Handoff: immediate dispatch via `Dispatcher::dispatch` with a metadata
 ///   flag set to mark semantic handoff. The flag is `{ "handoff": true }` on
 ///   the dispatched `OperatorInput`'s `metadata` field.
-/// - Signal: sent via `Orchestrator::signal`.
+/// - Signal: sent via `Signalable::signal`.
 ///
 /// Unknown/custom effects: ignored by default (warn logged). Configurable via
 /// `unknown_policy`.
-pub struct LocalEffectExecutor<S: StateStore + ?Sized, O: Orchestrator + ?Sized> {
+pub struct LocalEffectExecutor<S: StateStore + ?Sized> {
     /// State backend used for memory effects.
     pub state: Arc<S>,
-    /// Orchestrator used for delegation, handoff, and signals.
-    pub orch: Arc<O>,
+    /// Dispatcher used for delegation and handoff effects.
+    pub dispatcher: Arc<dyn Dispatcher>,
+    /// Signaler used for signal effects.
+    pub signaler: Option<Arc<dyn Signalable>>,
     /// Unknown effect handling policy.
     pub unknown_policy: UnknownEffectPolicy,
     middleware: Option<StoreStack>,
 }
 
-impl<S: StateStore + ?Sized, O: Orchestrator + ?Sized> LocalEffectExecutor<S, O> {
+impl<S: StateStore + ?Sized> LocalEffectExecutor<S> {
     /// Create a new local effect executor with default policy `IgnoreAndWarn`.
-    pub fn new(state: Arc<S>, orch: Arc<O>) -> Self {
+    pub fn new(
+        state: Arc<S>,
+        dispatcher: Arc<dyn Dispatcher>,
+        signaler: Option<Arc<dyn Signalable>>,
+    ) -> Self {
         Self {
             state,
-            orch,
+            dispatcher,
+            signaler,
             unknown_policy: UnknownEffectPolicy::IgnoreAndWarn,
             middleware: None,
         }
@@ -84,10 +92,9 @@ impl<S: StateStore + ?Sized + 'static> StoreWriteNext for WriteTo<S> {
 }
 
 #[async_trait]
-impl<S, O> EffectExecutor for LocalEffectExecutor<S, O>
+impl<S> EffectExecutor for LocalEffectExecutor<S>
 where
     S: StateStore + ?Sized + 'static,
-    O: Orchestrator + ?Sized + 'static,
 {
     async fn execute(&self, effects: &[Effect]) -> Result<(), Error> {
         for effect in effects {
@@ -124,11 +131,16 @@ where
                     // StateStore::delete is idempotent by contract — missing key is Ok.
                     self.state.delete(scope, key).await?;
                 }
-                Effect::Signal { target, payload } => {
-                    self.orch.signal(target, payload.clone()).await?;
-                }
+                Effect::Signal { target, payload } => match &self.signaler {
+                    Some(s) => s.signal(target, payload.clone()).await?,
+                    None => {
+                        return Err(Error::Dispatch(OrchError::DispatchFailed(
+                            "signal requires a Signalable implementation".into(),
+                        )));
+                    }
+                },
                 Effect::Delegate { operator, input } => {
-                    self.orch
+                    self.dispatcher
                         .dispatch(operator, (*input.clone()).clone())
                         .await?;
                 }
@@ -137,7 +149,7 @@ where
                     let mut input =
                         OperatorInput::new(Content::text(state.to_string()), TriggerType::Task);
                     input.metadata = json!({ "handoff": true });
-                    self.orch.dispatch(operator, input).await?;
+                    self.dispatcher.dispatch(operator, input).await?;
                 }
                 // Known but non-executing effects: treat as unknown for policy handling.
                 Effect::Log { .. } | Effect::Custom { .. } => match self.unknown_policy {

@@ -220,68 +220,15 @@ async fn local_orchestrator_dispatch_agent_not_found() {
 }
 
 #[tokio::test]
-async fn local_orchestrator_dispatch_many_concurrent() {
-    let mut orch = LocalOrchestrator::new();
-    orch.register(OperatorId::new("a"), Arc::new(EchoOperator));
-    orch.register(OperatorId::new("b"), Arc::new(EchoOperator));
-
-    let tasks = vec![
-        (OperatorId::new("a"), simple_input("msg-a")),
-        (OperatorId::new("b"), simple_input("msg-b")),
-    ];
-
-    let results = orch.dispatch_many(tasks).await;
-    assert_eq!(results.len(), 2);
-    assert_eq!(results[0].as_ref().unwrap().message, Content::text("msg-a"));
-    assert_eq!(results[1].as_ref().unwrap().message, Content::text("msg-b"));
-}
-
-#[tokio::test]
-async fn local_orchestrator_dispatch_many_partial_failure() {
-    let mut orch = LocalOrchestrator::new();
-    orch.register(OperatorId::new("a"), Arc::new(EchoOperator));
-    // "b" is not registered
-
-    let tasks = vec![
-        (OperatorId::new("a"), simple_input("ok")),
-        (OperatorId::new("b"), simple_input("fail")),
-    ];
-
-    let results = orch.dispatch_many(tasks).await;
-    assert!(results[0].is_ok());
-    assert!(results[1].is_err());
-}
-
-#[tokio::test]
-async fn local_orchestrator_is_usable_as_dyn_orchestrator() {
+async fn local_orchestrator_is_usable_as_dyn_dispatcher() {
     let mut orch = LocalOrchestrator::new();
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
-    let orch: Box<dyn Orchestrator> = Box::new(orch);
+    let orch: Box<dyn layer0::dispatch::Dispatcher> = Box::new(orch);
     let output = orch
         .dispatch(&OperatorId::new("echo"), simple_input("dyn"))
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("dyn"));
-}
-
-#[tokio::test]
-async fn orchestrator_signal_accepted() {
-    let orch = LocalOrchestrator::new();
-    let wf = WorkflowId::new("wf-1");
-    let signal = layer0::effect::SignalPayload::new("cancel", json!({"reason": "user request"}));
-    // LocalOrchestrator accepts all signals (no-op)
-    let result = orch.signal(&wf, signal).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn orchestrator_query_returns_null() {
-    let orch = LocalOrchestrator::new();
-    let wf = WorkflowId::new("wf-1");
-    let query = layer0::orchestrator::QueryPayload::new("status", json!({}));
-    // LocalOrchestrator returns Null for all queries (no-op)
-    let result = orch.query(&wf, query).await.unwrap();
-    assert_eq!(result, serde_json::Value::Null);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -306,16 +253,16 @@ async fn integration_compose_all_implementations() {
     let env = LocalEnvironment::new(Arc::new(EchoOperator));
 
     // 5. Dispatch two agents through the orchestrator
-    let tasks = vec![
-        (OperatorId::new("agent-a"), simple_input("task for A")),
-        (OperatorId::new("agent-b"), simple_input("task for B")),
-    ];
-    let results = orch.dispatch_many(tasks).await;
+    let output_a = orch
+        .dispatch(&OperatorId::new("agent-a"), simple_input("task for A"))
+        .await
+        .unwrap();
+    let output_b = orch
+        .dispatch(&OperatorId::new("agent-b"), simple_input("task for B"))
+        .await
+        .unwrap();
 
     // Verify both succeeded
-    assert_eq!(results.len(), 2);
-    let output_a = results[0].as_ref().unwrap();
-    let output_b = results[1].as_ref().unwrap();
     assert_eq!(output_a.message, Content::text("task for A"));
     assert_eq!(output_b.message, Content::text("task for B"));
 

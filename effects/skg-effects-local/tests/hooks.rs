@@ -1,24 +1,25 @@
 use async_trait::async_trait;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OrchError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
 use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
-use layer0::orchestrator::{Orchestrator, QueryPayload};
 use layer0::state::{Lifetime, StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
-use skg_effects_core::EffectExecutor;
-use skg_effects_local::LocalEffectExecutor;
 use serde_json::json;
+use skg_effects_core::EffectExecutor;
+use skg_effects_core::Signalable;
+use skg_effects_local::LocalEffectExecutor;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// ── Minimal no-op orchestrator ──────────────────────────────────────────────
+// ── Minimal no-op dispatcher + signaler ─────────────────────────────────────
 
 struct NoOpOrch;
 
 #[async_trait]
-impl Orchestrator for NoOpOrch {
+impl Dispatcher for NoOpOrch {
     async fn dispatch(
         &self,
         _operator: &OperatorId,
@@ -29,32 +30,12 @@ impl Orchestrator for NoOpOrch {
             ExitReason::Complete,
         ))
     }
+}
 
-    async fn dispatch_many(
-        &self,
-        tasks: Vec<(OperatorId, OperatorInput)>,
-    ) -> Vec<Result<OperatorOutput, OrchError>> {
-        tasks
-            .into_iter()
-            .map(|_| {
-                Ok(OperatorOutput::new(
-                    layer0::content::Content::text("ok"),
-                    ExitReason::Complete,
-                ))
-            })
-            .collect()
-    }
-
+#[async_trait]
+impl Signalable for NoOpOrch {
     async fn signal(&self, _target: &WorkflowId, _signal: SignalPayload) -> Result<(), OrchError> {
         Ok(())
-    }
-
-    async fn query(
-        &self,
-        _target: &WorkflowId,
-        _query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError> {
-        Ok(serde_json::Value::Null)
     }
 }
 
@@ -138,7 +119,12 @@ async fn halt_hook_prevents_memory_write() {
     let orch = Arc::new(NoOpOrch);
 
     let stack = StoreStack::builder().guard(Arc::new(HaltGuard)).build();
-    let exec = LocalEffectExecutor::new(state.clone(), orch).with_store_middleware(stack);
+    let exec = LocalEffectExecutor::new(
+        state.clone(),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch as Arc<dyn Signalable>),
+    )
+    .with_store_middleware(stack);
 
     exec.execute(&[Effect::WriteMemory {
         scope: Scope::Global,
@@ -162,7 +148,11 @@ async fn halt_hook_prevents_memory_write() {
 async fn no_hooks_writes_normally() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(NoOpOrch);
-    let exec = LocalEffectExecutor::new(state.clone(), orch);
+    let exec = LocalEffectExecutor::new(
+        state.clone(),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch as Arc<dyn Signalable>),
+    );
 
     exec.execute(&[Effect::WriteMemory {
         scope: Scope::Global,
@@ -189,7 +179,12 @@ async fn observer_hook_sees_key_and_value() {
 
     let observer = RecordingObserver::new();
     let stack = StoreStack::builder().observe(observer.clone()).build();
-    let exec = LocalEffectExecutor::new(state.clone(), orch).with_store_middleware(stack);
+    let exec = LocalEffectExecutor::new(
+        state.clone(),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch as Arc<dyn Signalable>),
+    )
+    .with_store_middleware(stack);
 
     exec.execute(&[Effect::WriteMemory {
         scope: Scope::Global,
@@ -234,7 +229,12 @@ async fn modify_hook_replaces_value() {
             new_value: json!("replaced"),
         }))
         .build();
-    let exec = LocalEffectExecutor::new(state.clone(), orch).with_store_middleware(stack);
+    let exec = LocalEffectExecutor::new(
+        state.clone(),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch as Arc<dyn Signalable>),
+    )
+    .with_store_middleware(stack);
 
     exec.execute(&[Effect::WriteMemory {
         scope: Scope::Global,
@@ -289,7 +289,12 @@ async fn lifetime_guardrail_blocks_transient_write() {
     let stack = StoreStack::builder()
         .guard(Arc::new(LifetimeGuardrail))
         .build();
-    let exec = LocalEffectExecutor::new(state.clone(), orch).with_store_middleware(stack);
+    let exec = LocalEffectExecutor::new(
+        state.clone(),
+        orch.clone() as Arc<dyn Dispatcher>,
+        Some(orch as Arc<dyn Signalable>),
+    )
+    .with_store_middleware(stack);
 
     // Transient write: middleware must block it.
     exec.execute(&[Effect::WriteMemory {

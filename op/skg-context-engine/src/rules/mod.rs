@@ -4,7 +4,7 @@ pub mod budget;
 pub mod compaction;
 pub mod telemetry;
 
-pub use budget::BudgetGuard;
+pub use budget::{BudgetGuard, BudgetGuardConfig};
 pub use compaction::strip_json_fences;
 pub use compaction::{CompactionRule, CompactionStrategy};
 pub use compaction::{

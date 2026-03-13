@@ -21,7 +21,7 @@ Layer 0 defines:
 - `search` may be unimplemented by some backends (returns empty vec, not an error), but
   implementations must document whether they support it.
 
-Compaction is coordinated via lifecycle vocabulary, not inside the `StateStore` trait.
+Compaction coordination lives above Layer 0; the `StateStore` trait only exposes persistence semantics and hinted data.
 Versioning is not part of this trait; implementations that support it expose additional
 traits or methods.
 
@@ -195,15 +195,15 @@ pub enum ContentKind {
 Backends with category-aware storage (e.g., separate vector namespaces per kind) can use
 `ContentKind` for routing. Backends without category support ignore it.
 
-## Message and CompactionPolicy
+## Message and CompactionPolicy hints
 
 `Message` (from `layer0::context`) wraps a provider message with optional per-message compaction metadata
-(`policy`, `source`, `salience`). `CompactionPolicy` controls how a compaction strategy
-treats the message (Pinned / Normal / CompressFirst / DiscardWhenDone).
+(`policy`, `source`, `salience`). `CompactionPolicy` is the Layer 0 message-level hint that tells
+higher-layer compaction strategies how to treat the message (Pinned / Normal / CompressFirst /
+DiscardWhenDone).
 
 `Message` is defined in `layer0/src/context.rs` and `CompactionPolicy` in
-`layer0/src/lifecycle.rs`. These types are used by the context-engine's assembly and
-compaction functions (e.g., `sliding_window_compactor`, `tiered_compactor`) to decide
+`layer0/src/lifecycle.rs`. Runtime/context-engine compaction code reads these hints to decide
 what to retain, compress, or discard during compaction.
 
 For the full reference — struct fields, variants, convenience constructors, and how
@@ -221,7 +221,7 @@ Implemented:
   unhinted variants; backends override to act on hints.
 - `clear_transient` — default no-op; backends that track `Lifetime::Transient` override.
 - `Message`, `CompactionPolicy` — defined in `layer0/src/context.rs`
-  and `layer0/src/lifecycle.rs` respectively.
+  and `layer0/src/lifecycle.rs` as message-level protocol hints.
 - `Effect::WriteMemory` carries the same five advisory fields as `StoreOptions`.
 
 Still required for "core complete":

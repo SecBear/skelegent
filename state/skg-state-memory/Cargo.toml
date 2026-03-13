@@ -1,6 +1,6 @@
 [package]
 name = "skg-state-memory"
-version = "0.4.0"
+version = "0.4.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,7 +11,7 @@ categories = ["asynchronous"]
 keywords = ["skelegent", "ai", "agent", "state", "memory"]
 
 [dependencies]
-layer0 = { path = "../../layer0", version = "0.4.0" }
+layer0 = { path = "../../layer0", version = "0.4.1" }
 async-trait = "0.1"
 serde_json = "1"
 tokio = { version = "1", features = ["sync"] }

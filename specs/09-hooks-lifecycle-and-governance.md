@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Middleware and lifecycle vocabulary provide controlled intervention and cross-layer coordination.
+Middleware provides controlled intervention at protocol boundaries. Lifecycle coordination currently lives above Layer 0 unless and until it becomes a real cross-boundary contract.
 
-This is how you enforce budget, tool policy, redaction, audit, and observability without baking those concerns into every operator.
+This is how you enforce tool policy, redaction, audit, observability, and runtime-local budget/compaction behavior without baking those concerns into every operator.
 
 ## Middleware
 
@@ -84,87 +84,51 @@ Steering is NOT middleware because the primitives are structurally different:
 - `RedactionMiddleware` — scans content for sensitive patterns (regex or literal) and redacts matches before they reach the model or output sink.
 - `ExfilGuardMiddleware` — inspects tool results and model responses for data-loss-prevention (DLP) signals; configurable block-or-alert policy. Detects exfiltration in any tool input via generic URL+sensitive-data patterns, shell-specific patterns, and base64 blobs.
 
-## Lifecycle Vocabulary
+## Lifecycle Coordination
 
-Lifecycle types define coordination events. These are shared vocabulary types,
-not a separate lifecycle service — the orchestrator listens, applies policies,
-and takes action.
+Current approved model: Layer 0 stays protocol-only. It carries middleware traits/stacks and message-level hints that travel with data. Budget/compaction coordination, observation/intervention mechanics, and durable run/control semantics all live in runtime or orchestration code above Layer 0 unless promoted into a real cross-boundary contract.
 
-### BudgetEvent
+### Budget Coordination
 
-| Variant | Emitted by | When |
-|---|---|---|
-| `CostIncurred` | Turn | After each model inference call; carries per-call and cumulative cost |
-| `BudgetWarning` | Orchestrator | When a workflow's cumulative spend nears its configured limit |
-| `BudgetAction` | Orchestrator | When the orchestrator decides how to respond to budget pressure (continue / downgrade model / halt / request increase) |
-| `StepLimitApproaching` | Operator | When sub-dispatch count approaches the configured `max_sub_dispatches` limit |
-| `StepLimitReached` | Operator | When the step (sub-dispatch) limit is reached and the operator must exit |
-| `LoopDetected` | Operator | When identical consecutive sub-dispatches exceed the configured loop detection threshold |
-| `TimeoutApproaching` | Operator | When elapsed time approaches the configured `max_duration` |
-| `TimeoutReached` | Operator | When the elapsed time limit is reached and the operator must exit |
+Local budget enforcement is runtime-local today.
+- `BudgetGuard` in `skg-context-engine` enforces cost, turn, duration, and tool-call limits at the real inference boundary (`InferBoundary`, or `StreamInferBoundary` for streaming).
+- `BudgetGuard` returns structured runtime exits (`MaxTurns`, `BudgetExhausted`, `Timeout`), and `react_loop()` surfaces them as structured `OperatorOutput` exits rather than generic inference failures.
+- Broader halt/continue/downgrade policy belongs to orchestrator code above Layer 0.
 
+### Compaction Coordination
 
-> **Loop detection is a two-part mechanism:** the operator emits
-> `BudgetEvent::LoopDetected` to sinks (observability notification) **and** returns
-> `ExitReason::Custom("stuck_detected")` (control-flow exit). These are complementary:
-> the event is for observability and audit; the exit reason is for orchestrators deciding
-> what to do next. Similarly, step limit (`max_sub_dispatches`) emits
-> `BudgetEvent::StepLimitReached` and returns `ExitReason::BudgetExhausted`.
+Compaction coordination is also above Layer 0 today.
+- `skg-context-engine` owns the local compaction rules and summarization flow.
+- `skg-orch-kit::CompactionCoordinator` is the small orchestration-local coordinator for deciding skip vs compact vs flush-then-compact and for enforcing flush-before-compaction ordering.
+- `CompactionPolicy` on `Message` remains a valid Layer 0 advisory hint because it travels with the message across boundaries.
 
-### Budget Governance Authority
+### Observation and Intervention
 
-Budget decisions have a single authority chain (from `ARCHITECTURE.md §Lifecycle`):
-
-- **Turn** emits `CostIncurred` after each model inference call.
-- **Orchestrator** tracks aggregate cost and emits `BudgetWarning` / `BudgetAction`.
-- **Lifecycle coordinator** (orchestrator role) makes halt/continue/downgrade decisions.
-- **Planners** observe remaining budget read-only — they MUST NOT make halt decisions.
-
-Single authority is required: if the SDK also applies automatic retry on budget exhaustion,
-it conflicts with the orchestrator's halt decision. SDK-level automatic retry MUST be
-disabled when the orchestrator manages budget governance.
-
-### CompactionEvent
-
-| Variant | Emitted by | When |
-|---|---|---|
-| `ContextPressure` | Turn | When context window fill percentage crosses a threshold; carries fill_percent, tokens_used, tokens_available |
-| `PreCompactionFlush` | Turn/Orchestrator | Before compaction begins, to trigger a memory flush of the given scope |
-| `CompactionComplete` | Turn/Orchestrator | After compaction finishes successfully; carries strategy used and tokens freed |
-| `ProviderManaged` | Turn | When the model provider (e.g. Anthropic server-side compaction) compacted the context; carries tokens before/after and optional summary |
-| `CompactionFailed` | Turn/Orchestrator | When compaction fails with an error; carries strategy and error description |
-| `CompactionSkipped` | Turn/Orchestrator | When compaction conditions are not met or middleware blocked it; carries reason |
-| `FlushFailed` | Turn/Orchestrator | When a pre-compaction memory flush fails; carries scope, key, and error |
-| `CompactionQuality` | Turn/Orchestrator | After compaction, reports quality metrics: tokens before/after, items preserved/lost |
+Observation/intervention mechanics are above Layer 0.
+- Layer 0 defines middleware traits and middleware boundaries at protocol seams.
+- Context streams, observer channels, and intervention channels are wired by runtime/orchestrator code, not by a Layer 0 lifecycle event contract.
+- Durable wait/resume/cancel semantics are orchestration control-plane concerns above Layer 0, not middleware events; satisfying a durable wait point remains distinct from sending a signal.
 
 ## Current Implementation Status
 
+Implemented:
 - Middleware traits exist in layer0 (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`).
 - `DispatchStack`, `StoreStack`, `ExecStack` compose middleware in registration order.
 - All nine middleware boundaries — including `PreSteeringInject`, `PostSteeringSkip`, and `PreMemoryWrite` — are in layer0.
 - Middleware error logging via `tracing::warn` is implemented.
 - Security middleware exists in `skg-hook-security`: `RedactionMiddleware` and `ExfilGuardMiddleware`.
 - The `Rule` system in `skg-context-engine` provides typed, operator-local interception.
+- Budget enforcement is implemented locally via `BudgetGuard` in `skg-context-engine`.
+- Compaction is implemented above Layer 0 via context-engine rules plus `skg-orch-kit::CompactionCoordinator`; `CompactionPolicy` remains the Layer 0 message hint.
 
 Still required for "core complete":
+- Tests for edge middleware actions (skip tool, modify tool input/output) across the operator runtime.
 
-- Explicit examples showing how orchestration consumes lifecycle vocab to coordinate compaction/budget
-- Tests for edge middleware actions (skip tool, modify tool input/output) across the operator runtime
+## Observability
 
-## Observability: Common Event Interface
+Observability is currently provided by a mix of:
+- protocol-boundary middleware in Layer 0 (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`)
+- runtime-local tracing and context streams above Layer 0
+- orchestration-local sinks/adapters above Layer 0
 
-All layers emit observability data through `layer0::lifecycle::ObservableEvent`. Every
-event carries:
-
-| Field | Type | Meaning |
-|---|---|---|
-| `source` | `EventSource` | Which protocol emitted this event |
-| `event_type` | `String` | Event type (namespaced by convention, e.g. `"turn.cost_incurred"`) |
-| `timestamp` | `DurationMs` | Milliseconds since workflow start |
-| `trace_id` | `Option<String>` | Correlation ID for cross-layer tracing |
-| `data` | `serde_json::Value` | Event payload |
-
-All new lifecycle event types MUST be emitted via `ObservableEvent` so that tracing,
-logging, and audit infrastructure has a single integration point. `BudgetEvent` and
-`CompactionEvent` are domain-specific vocabularies for sink callbacks; `ObservableEvent`
-is the cross-cutting emission interface.
+There is no generic Layer 0 telemetry envelope in this branch. If one becomes necessary later, add it only after multiple implementations depend on it.

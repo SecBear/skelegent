@@ -1,5 +1,6 @@
 //! The Operator protocol — what one operator does per cycle.
 
+use crate::context::Message;
 use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -59,6 +60,18 @@ pub struct OperatorInput {
     /// to understand.
     #[serde(default)]
     pub metadata: serde_json::Value,
+
+    /// Pre-assembled context from the caller.
+    ///
+    /// When set, the operator runtime seeds its context with these messages
+    /// before processing the new `message`. This enables parent operators
+    /// to curate child context: full inheritance, summary injection,
+    /// filtered history, or any other assembly strategy.
+    ///
+    /// When `None`, the operator assembles context from scratch using
+    /// the `StateStore` and its own identity configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<Vec<Message>>,
 }
 
 /// Per-operator configuration overrides. Every field is optional —
@@ -100,7 +113,7 @@ pub enum ExitReason {
     /// Hit the max_turns limit.
     MaxTurns,
     /// Hit the cost budget (`max_cost`) or the tool-call step limit (`max_tool_calls`).
-    /// Use `BudgetEvent` sink notifications to distinguish the two causes.
+    /// Runtime/orchestration code may distinguish the exact cause above Layer 0.
     BudgetExhausted,
     /// Circuit breaker tripped (consecutive failures).
     CircuitBreaker,
@@ -217,6 +230,7 @@ impl OperatorInput {
             session: None,
             config: None,
             metadata: serde_json::Value::Null,
+            context: None,
         }
     }
 }
@@ -318,6 +332,10 @@ pub trait Operator: Send + Sync {
     /// The operator MAY read from a StateStore during context assembly.
     /// The operator MUST NOT write to external state directly — it
     /// declares writes as Effects in the output.
+    ///
+    /// Operators that compose (invoke siblings) hold `Arc<dyn Dispatcher>`
+    /// as a field via constructor injection. The execute signature stays
+    /// clean — non-composing operators never see dispatch infrastructure.
     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError>;
 }
 

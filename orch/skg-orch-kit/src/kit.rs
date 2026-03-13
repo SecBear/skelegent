@@ -1,6 +1,7 @@
 use crate::runner::{EffectInterpreter, KitError, LocalEffectInterpreter, OrchestratedRunner};
-use layer0::orchestrator::Orchestrator;
+use layer0::dispatch::Dispatcher;
 use layer0::state::StateStore;
+use skg_effects_core::Signalable;
 use std::sync::Arc;
 
 /// Unopinionated wiring handle for assembling runnable systems.
@@ -10,14 +11,25 @@ use std::sync::Arc;
 /// directly against `layer0`.
 #[derive(Clone)]
 pub struct Kit {
-    orch: Arc<dyn Orchestrator>,
+    dispatcher: Arc<dyn Dispatcher>,
+    signaler: Option<Arc<dyn Signalable>>,
     state: Option<Arc<dyn StateStore>>,
 }
 
 impl Kit {
-    /// Create a new kit around an orchestrator implementation.
-    pub fn new(orch: Arc<dyn Orchestrator>) -> Self {
-        Self { orch, state: None }
+    /// Create a new kit with the given dispatcher.
+    pub fn new(dispatcher: Arc<dyn Dispatcher>) -> Self {
+        Self {
+            dispatcher,
+            signaler: None,
+            state: None,
+        }
+    }
+
+    /// Attach a signaler for workflows that need signal delivery.
+    pub fn with_signaler(mut self, signaler: Arc<dyn Signalable>) -> Self {
+        self.signaler = Some(signaler);
+        self
     }
 
     /// Attach a state backend for helpers that need to execute memory effects.
@@ -26,9 +38,14 @@ impl Kit {
         self
     }
 
-    /// Access the configured orchestrator.
-    pub fn orchestrator(&self) -> &Arc<dyn Orchestrator> {
-        &self.orch
+    /// Access the configured dispatcher.
+    pub fn dispatcher(&self) -> &Arc<dyn Dispatcher> {
+        &self.dispatcher
+    }
+
+    /// Access the configured signaler, if any.
+    pub fn signaler(&self) -> Option<&Arc<dyn Signalable>> {
+        self.signaler.as_ref()
     }
 
     /// Access the configured state backend, if any.
@@ -41,7 +58,11 @@ impl Kit {
         &self,
         executor: Arc<E>,
     ) -> OrchestratedRunner<E> {
-        OrchestratedRunner::new(Arc::clone(&self.orch), executor)
+        OrchestratedRunner::new(
+            Arc::clone(&self.dispatcher),
+            self.signaler.clone(),
+            executor,
+        )
     }
 
     /// Build a local runner that interprets memory effects against the kit state backend.
@@ -53,7 +74,8 @@ impl Kit {
             .as_ref()
             .ok_or_else(|| KitError::Effect("local_runner requires a state backend".into()))?;
         Ok(OrchestratedRunner::new(
-            Arc::clone(&self.orch),
+            Arc::clone(&self.dispatcher),
+            self.signaler.clone(),
             Arc::new(LocalEffectInterpreter::new(Arc::clone(state))),
         ))
     }

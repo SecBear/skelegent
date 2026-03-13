@@ -29,8 +29,8 @@ That wrapper depends on Skelegent and uses the composition factories.
 
 Two patterns for composing operators are idiomatic in Skelegent:
 
-1. **Application-layer functions** (e.g., `async fn run_sweep(orch: Arc<dyn Orchestrator>, state: ScopedState)`) — deterministic, typed sequences of operator dispatches. The calling code controls the flow; this is plain Rust with no framework overhead.
-2. **Orchestrating operators** — operators that receive dispatch capability via an injected `Arc<dyn Orchestrator>` and use LLM reasoning to decide what to dispatch next. The LLM drives the sequencing; the operator drives the dispatch.
+1. **Application-layer functions** (e.g., `async fn run_sweep(dispatcher: Arc<dyn Dispatcher>, state: ScopedState)`) — deterministic, typed sequences of operator dispatches. The calling code controls the flow; this is plain Rust with no framework overhead.
+2. **Orchestrating operators** — operators that receive dispatch capability via an injected `Arc<dyn Dispatcher>` and use LLM reasoning to decide what to dispatch next. The LLM drives the sequencing; the operator drives the dispatch.
 
 Both are valid. The choice depends on whether the sequencing logic is deterministic (use functions) or requires LLM judgment (use an orchestrating operator).
 

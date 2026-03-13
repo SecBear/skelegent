@@ -2,18 +2,16 @@
 //!
 //! [`ToolOperator`] lets any existing tool participate in orchestrator dispatch
 //! without rewriting it. [`ToolRegistryOrchestrator`] makes a whole registry
-//! available as an [`Orchestrator`], allowing operators to use tools via
+//! available as a [`Dispatcher`], allowing operators to use tools via
 //! the standard dispatch protocol.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use layer0::effect::SignalPayload;
 use layer0::operator::Operator;
-use layer0::orchestrator::QueryPayload;
 use layer0::{
     Content, DurationMs, ExitReason, OperatorError, OperatorId, OperatorInput, OperatorOutput,
-    OrchError, Orchestrator, SubDispatchRecord, ToolMetadata, WorkflowId,
+    OrchError, SubDispatchRecord, ToolMetadata,
 };
 
 use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolRegistry};
@@ -77,7 +75,7 @@ impl Operator for ToolOperator {
     }
 }
 
-/// Wraps a [`ToolRegistry`] and implements [`Orchestrator`].
+/// Wraps a [`ToolRegistry`] and implements [`Dispatcher`].
 ///
 /// This allows any operator that speaks the orchestration
 /// protocol) to use existing tools via `dispatch()` by name, without touching
@@ -98,7 +96,7 @@ impl ToolRegistryOrchestrator {
 }
 
 #[async_trait]
-impl Orchestrator for ToolRegistryOrchestrator {
+impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
     /// Dispatch by looking up `operator` as a tool name in the registry.
     ///
     /// Returns `OrchError::OperatorNotFound` when the name is not registered.
@@ -115,33 +113,6 @@ impl Orchestrator for ToolRegistryOrchestrator {
         let operator = ToolOperator::new(Arc::clone(tool));
         operator.execute(input).await.map_err(OrchError::from)
     }
-
-    /// Sequential dispatch. Tools may not be `Send`-safe across parallel
-    /// tasks, so each invocation runs to completion before the next starts.
-    async fn dispatch_many(
-        &self,
-        tasks: Vec<(OperatorId, OperatorInput)>,
-    ) -> Vec<Result<OperatorOutput, OrchError>> {
-        let mut results = Vec::with_capacity(tasks.len());
-        for (operator, input) in tasks {
-            results.push(self.dispatch(&operator, input).await);
-        }
-        results
-    }
-
-    /// No durable workflow backing — signals are accepted and discarded.
-    async fn signal(&self, _target: &WorkflowId, _signal: SignalPayload) -> Result<(), OrchError> {
-        Ok(())
-    }
-
-    /// No durable workflow backing — queries always return `null`.
-    async fn query(
-        &self,
-        _target: &WorkflowId,
-        _query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError> {
-        Ok(serde_json::Value::Null)
-    }
 }
 
 #[cfg(test)]
@@ -149,7 +120,9 @@ mod tests {
     use super::*;
     use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
     use layer0::operator::TriggerType;
-    use layer0::{Content, ExitReason, OperatorError, OperatorId, OperatorInput, OrchError};
+    use layer0::{
+        Content, Dispatcher, ExitReason, OperatorError, OperatorId, OperatorInput, OrchError,
+    };
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;

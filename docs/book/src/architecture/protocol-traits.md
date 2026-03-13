@@ -1,6 +1,6 @@
 # Protocol Traits
 
-Layer 0 defines four protocol traits and two cross-cutting interfaces. Every trait is object-safe (`Box<dyn Trait>` is `Send + Sync`), uses `#[async_trait]`, and is designed to be operation-defined rather than mechanism-defined.
+Layer 0 defines six protocol traits and two cross-cutting interfaces. Every trait is object-safe (`Box<dyn Trait>` is `Send + Sync`), uses `#[async_trait]`, and is designed to be operation-defined rather than mechanism-defined.
 
 "Operation-defined" means the trait says *what* happens, not *how*. `Operator::execute` means "cause this agent to process one cycle" -- not "make an API call" or "run a subprocess." This is what makes implementations swappable.
 
@@ -108,46 +108,121 @@ pub struct SubDispatchRecord {
 }
 ```
 
-## Protocol 2: Orchestrator
+## Protocol 2: Dispatcher
 
-**Crate:** `layer0::orchestrator`
 
-How operators from different agents compose, and how execution survives failures.
+
+**Crate:** `layer0::dispatch`
+
+
+
+The sole invocation primitive: how one agent's output becomes another agent's input.
+
+
 
 ```rust
+
 #[async_trait]
-pub trait Orchestrator: Send + Sync {
+
+pub trait Dispatcher: Send + Sync {
+
     async fn dispatch(
+
         &self,
+
         operator: &OperatorId,
+
         input: OperatorInput,
+
     ) -> Result<OperatorOutput, OrchError>;
 
-    async fn dispatch_many(
-        &self,
-        tasks: Vec<(OperatorId, OperatorInput)>,
-    ) -> Vec<Result<OperatorOutput, OrchError>>;
-
-    async fn signal(
-        &self,
-        target: &WorkflowId,
-        signal: SignalPayload,
-    ) -> Result<(), OrchError>;
-
-    async fn query(
-        &self,
-        target: &WorkflowId,
-        query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError>;
 }
+
 ```
 
-- **`dispatch`** -- Send an operator invocation to a specific agent. May be in-process or remote.
-- **`dispatch_many`** -- Parallel dispatch. Results returned in input order. Individual tasks may fail independently.
-- **`signal`** -- Fire-and-forget message to a running workflow. Returns when accepted, not when processed.
-- **`query`** -- Read-only query of a workflow's state. Returns `serde_json::Value` (schema depends on the workflow).
 
-The key property: calling code does not know which implementation is behind the trait. `dispatch()` might be a function call or a network hop.
+
+- **`dispatch`** -- Send an operator invocation to a specific agent. May be in-process or remote. The key property: calling code does not know which implementation is behind the trait.
+
+
+
+**Related:** `dispatch_many()` is a free function in `skg-orch-kit` that dispatches multiple tasks in parallel using `Dispatcher::dispatch`.
+
+
+
+## Protocol 2b: Signalable
+
+
+
+**Crate:** `layer0::signal`
+
+
+
+Fire-and-forget inter-workflow messaging.
+
+
+
+```rust
+
+#[async_trait]
+
+pub trait Signalable: Send + Sync {
+
+    async fn signal(
+
+        &self,
+
+        target: &WorkflowId,
+
+        signal: SignalPayload,
+
+    ) -> Result<(), OrchError>;
+
+}
+
+```
+
+
+
+- **`signal`** -- Fire-and-forget message to a running workflow. Returns when accepted, not when processed.
+
+
+
+## Protocol 2c: Queryable
+
+
+
+**Crate:** `layer0::query`
+
+
+
+Read-only workflow state queries.
+
+
+
+```rust
+
+#[async_trait]
+
+pub trait Queryable: Send + Sync {
+
+    async fn query(
+
+        &self,
+
+        target: &WorkflowId,
+
+        query: QueryPayload,
+
+    ) -> Result<serde_json::Value, OrchError>;
+
+}
+
+```
+
+
+
+- **`query`** -- Read-only query of a workflow's state. Returns `serde_json::Value` (schema depends on the workflow).
 
 ## Protocol 3: StateStore / StateReader
 
@@ -268,20 +343,18 @@ Each middleware wraps the next layer in the stack. The `next` parameter is a cal
 
 Middleware is composed into stacks:
 
-- **`DispatchStack`** -- wraps orchestrator dispatch (budget enforcement, logging, routing)
+- **`DispatchStack`** -- wraps Dispatcher::dispatch (budget enforcement, logging, routing)
 - **`StoreStack`** -- wraps state store access (redaction, audit logging)
 - **`ExecStack`** -- wraps operator execution (security guardrails, telemetry)
 
 The Rule system provides typed interception within the context engine specifically, for use cases like tool-call filtering that are operator-internal rather than cross-cutting. Rules fire via Trigger enum: Before (pre-inference, pre-tool), After (post-inference, post-tool), or When (exit checks, steering).
 
-## Interface 6: Lifecycle Events
+## Message-Level Hints
 
 **Crate:** `layer0::lifecycle`
 
-Cross-layer coordination events:
+This module now carries only message-level policy hints that travel with protocol data:
 
-- **`BudgetEvent`** -- Emitted when cost thresholds are crossed. A hook observes cost, emits a budget event, and the orchestrator can react (cancel the workflow, notify the user, adjust limits).
-- **`CompactionEvent`** -- Coordinates context compaction between the operator and the state store.
-- **`ObservableEvent`** -- General-purpose observable events for telemetry and monitoring.
+- **`CompactionPolicy`** -- An advisory per-message hint consumed by compaction code in the runtime or orchestration layers.
 
-These events are the glue between protocols. They carry information across boundaries that individual protocols cannot see.
+Lifecycle coordination, telemetry streams, and observation/intervention mechanics live above Layer 0 unless they are later promoted into a real cross-boundary contract.

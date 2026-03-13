@@ -87,6 +87,9 @@
               pkgs.mdbook
               pkgs.lychee
 
+              # Protobuf compiler (for tonic-build / prost-build)
+              pkgs.protobuf
+
               # Pre-commit hooks
               pkgs.prek
 
@@ -118,6 +121,12 @@
               echo "  prek run -a       — run all pre-commit hooks"
               echo ""
             '';
+          };
+
+          # ── packages ────────────────────────────────────────────
+          # dockerTools is Linux-only; guard so macOS flake eval doesn't break.
+          packages = lib.optionalAttrs pkgs.stdenv.isLinux {
+            runner-image = pkgs.callPackage ./nix/runner-image.nix { };
           };
 
         };

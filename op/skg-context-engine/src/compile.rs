@@ -29,9 +29,10 @@ pub struct CompileConfig {
 
 /// A snapshot of context compiled for inference.
 ///
-/// Produced by [`Context::compile()`]. This is the explicit phase boundary
-/// between assembly and inference. Rules with `Before(Infer)` triggers
-/// should be used to modify context before calling compile.
+/// Produced by [`Context::compile()`]. This snapshots context for a later
+/// provider call, but it is not itself the governed inference boundary.
+/// Runtime loops should target [`crate::InferBoundary`] or
+/// [`crate::StreamInferBoundary`] for pre-inference rules.
 pub struct CompiledContext {
     /// The inference request ready to send.
     pub request: InferRequest,
@@ -76,13 +77,15 @@ impl InferResult {
 impl Context {
     /// Compile the current context into an inference request.
     ///
-    /// This is the phase boundary between assembly and inference. The context
-    /// is NOT consumed — you can compile multiple times (e.g., for retry).
+    /// This snapshots the current assembled context into a provider request.
+    /// The actual governed inference boundary is `InferBoundary` /
+    /// `StreamInferBoundary`, not `compile()` itself. The context is NOT
+    /// consumed — you can compile multiple times (e.g., for retry).
     ///
     /// Messages are cloned into the request. The context continues to exist
     /// for post-inference operations.
     pub fn compile(&self, config: &CompileConfig) -> CompiledContext {
-        let mut request = InferRequest::new(self.messages.clone());
+        let mut request = InferRequest::new(self.messages().to_vec());
 
         if let Some(system) = &config.system {
             request = request.with_system(system.clone());
@@ -116,8 +119,7 @@ mod tests {
     #[test]
     fn compile_produces_request_with_messages() {
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         let config = CompileConfig {
             system: Some("You are helpful.".into()),
@@ -136,13 +138,12 @@ mod tests {
     #[test]
     fn compile_does_not_consume_context() {
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         let config = CompileConfig::default();
         let _compiled = ctx.compile(&config);
 
         // Context still has its messages
-        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages().len(), 1);
     }
 }

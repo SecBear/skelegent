@@ -1,23 +1,23 @@
 //! # layer0 — Protocol traits for composable agentic AI systems
 //!
-//! This crate defines the four protocol boundaries and two cross-cutting
-//! interfaces that compose to form any agentic AI system.
+//! This crate defines the four protocol boundaries plus two cross-cutting
+//! protocol surfaces that compose to form any agentic AI system.
 //!
 //! ## The Protocols
 //!
 //! | Protocol | Trait | What it does |
 //! |----------|-------|-------------|
 //! | ① Operator | [`Operator`] | What one operator does per cycle |
-//! | ② Orchestration | [`Orchestrator`] | How operators compose + durability |
+//! | ② Dispatch | [`Dispatcher`] | The single invocation primitive |
 //! | ③ State | [`StateStore`] | How data persists across turns |
 //! | ④ Environment | [`Environment`] | Isolation, credentials, resources |
 //!
-//! ## The Interfaces
+//! ## Cross-Cutting Protocol Surface
 //!
-//! | Interface | Types | What it does |
-//! |-----------|-------|-------------|
+//! | Surface | Types | What it does |
+//! |---------|-------|-------------|
 //! | ⑤ Middleware | [`DispatchMiddleware`], [`StoreMiddleware`], [`ExecMiddleware`] | Interception + policy |
-//! | ⑥ Lifecycle | [`BudgetEvent`], [`CompactionEvent`] | Cross-layer coordination |
+//! | ⑥ Message compaction metadata | [`CompactionPolicy`] | Advisory retention hints attached to messages |
 //!
 //! ## Design Principle
 //!
@@ -51,6 +51,7 @@
 
 pub mod content;
 pub mod context;
+pub mod dispatch;
 pub mod duration;
 pub mod effect;
 pub mod environment;
@@ -59,7 +60,6 @@ pub mod id;
 pub mod lifecycle;
 pub mod middleware;
 pub mod operator;
-pub mod orchestrator;
 pub mod secret;
 pub mod state;
 
@@ -68,16 +68,14 @@ pub mod test_utils;
 
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
-pub use context::{
-    Context, ContextError, ContextMessage, ContextSnapshot, ContextWatcher, Message, MessageMeta,
-    OperatorContext, Position, Role, WatcherVerdict,
-};
+pub use context::{Message, MessageMeta, Role};
+pub use dispatch::Dispatcher;
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
-pub use id::{OperatorId, ScopeId, SessionId, WorkflowId};
-pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy};
+pub use id::{OperatorId, SessionId, WorkflowId};
+pub use lifecycle::CompactionPolicy;
 pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
     StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,
@@ -86,7 +84,6 @@ pub use operator::{
     ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMetadata, OperatorOutput,
     SubDispatchRecord, ToolMetadata,
 };
-pub use orchestrator::{Orchestrator, QueryPayload};
 pub use secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 pub use state::{
     ContentKind, Lifetime, MemoryLink, MemoryTier, SearchOptions, SearchResult, StateReader,

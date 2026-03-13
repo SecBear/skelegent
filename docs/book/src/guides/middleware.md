@@ -11,7 +11,7 @@ Security middleware (`RedactionMiddleware`, `ExfilGuardMiddleware`) lives in the
 
 Three traits — one per Layer 0 protocol boundary — follow the continuation pattern: call `next` to forward, skip `next` to short-circuit.
 
-### DispatchMiddleware (wraps Orchestrator::dispatch)
+### DispatchMiddleware (wraps Dispatcher::dispatch)
 
 ```rust
 #[async_trait]

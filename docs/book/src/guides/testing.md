@@ -31,8 +31,30 @@ fn state_store_is_object_safe_and_send_sync() {
 }
 
 #[test]
-fn orchestrator_is_object_safe_and_send_sync() {
-    _assert_send_sync::<Box<dyn layer0::Orchestrator>>();
+fn dispatcher_is_object_safe_and_send_sync() {
+
+    _assert_send_sync::<Box<dyn layer0::Dispatcher>>();
+
+}
+
+
+
+#[test]
+
+fn signalable_is_object_safe_and_send_sync() {
+
+    _assert_send_sync::<Box<dyn layer0::Signalable>>();
+
+}
+
+
+
+#[test]
+
+fn queryable_is_object_safe_and_send_sync() {
+
+    _assert_send_sync::<Box<dyn layer0::Queryable>>();
+
 }
 
 #[test]

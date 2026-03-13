@@ -1,36 +1,71 @@
 # Orchestration
 
-Orchestration is how multiple agents compose and how execution survives failures. The `Orchestrator` trait provides dispatch (send work to agents), signaling (inter-workflow communication), and queries (read-only state inspection).
+Orchestration is how multiple agents compose and how execution survives failures. The `Dispatcher` trait provides dispatch (send work to agents), `Signalable` provides signaling (inter-workflow communication), and `Queryable` provides queries (read-only state inspection).
 
-## The Orchestrator trait
+## The Dispatcher, Signalable, and Queryable traits
 
 ```rust
 #[async_trait]
-pub trait Orchestrator: Send + Sync {
+```rust
+
+#[async_trait]
+
+pub trait Dispatcher: Send + Sync {
+
     async fn dispatch(
+
         &self,
+
         operator: &OperatorId,
+
         input: OperatorInput,
+
     ) -> Result<OperatorOutput, OrchError>;
 
-    async fn dispatch_many(
-        &self,
-        tasks: Vec<(OperatorId, OperatorInput)>,
-    ) -> Vec<Result<OperatorOutput, OrchError>>;
+}
+
+
+
+#[async_trait]
+
+pub trait Signalable: Send + Sync {
 
     async fn signal(
+
         &self,
+
         target: &WorkflowId,
+
         signal: SignalPayload,
+
     ) -> Result<(), OrchError>;
 
-    async fn query(
-        &self,
-        target: &WorkflowId,
-        query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError>;
 }
+
+
+
+#[async_trait]
+
+pub trait Queryable: Send + Sync {
+
+    async fn query(
+
+        &self,
+
+        target: &WorkflowId,
+
+        query: QueryPayload,
+
+    ) -> Result<serde_json::Value, OrchError>;
+
+}
+
 ```
+
+
+
+Related: `dispatch_many()` is a free function in `skg-orch-kit` that dispatches multiple tasks in parallel using `Dispatcher`.
+
 
 ## LocalOrch (`skg-orch-local`)
 
@@ -56,18 +91,18 @@ orchestrator.register(OperatorId("reviewer".into()), reviewer);
 Single dispatch sends work to one agent:
 
 ```rust,no_run
-use layer0::orchestrator::Orchestrator;
+use layer0::dispatch::Dispatcher;
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::content::Content;
 use layer0::id::OperatorId;
 
-# async fn example(orchestrator: &dyn Orchestrator) -> Result<(), Box<dyn std::error::Error>> {
+# async fn example(dispatcher: &dyn Dispatcher) -> Result<(), Box<dyn std::error::Error>> {
 let input = OperatorInput::new(
     Content::text("Implement the authentication module"),
     TriggerType::Task,
 );
 
-let output = orchestrator
+let output = dispatcher
     .dispatch(&OperatorId("coder".into()), input)
     .await?;
 
@@ -81,12 +116,12 @@ println!("Agent response: {:?}", output.message);
 `dispatch_many` sends work to multiple agents concurrently. The local orchestrator uses `tokio::spawn` for parallelism:
 
 ```rust,no_run
-use layer0::orchestrator::Orchestrator;
+use layer0::dispatch::Dispatcher;
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::content::Content;
 use layer0::id::OperatorId;
 
-# async fn example(orchestrator: &dyn Orchestrator) -> Result<(), Box<dyn std::error::Error>> {
+# async fn example(dispatcher: &dyn Dispatcher) -> Result<(), Box<dyn std::error::Error>> {
 let tasks = vec![
     (
         OperatorId("analyzer".into()),
@@ -98,7 +133,7 @@ let tasks = vec![
     ),
 ];
 
-let results = orchestrator.dispatch_many(tasks).await;
+let results = dispatcher.dispatch_many(tasks).await;
 for result in results {
     match result {
         Ok(output) => println!("Success: {:?}", output.exit_reason),
@@ -116,17 +151,17 @@ Results are returned in the same order as the input tasks. Individual tasks may 
 Signals provide fire-and-forget messaging to running workflows:
 
 ```rust,no_run
-use layer0::orchestrator::Orchestrator;
+use layer0::signal::Signalable;
 use layer0::effect::SignalPayload;
 use layer0::id::WorkflowId;
 
-# async fn example(orchestrator: &dyn Orchestrator) -> Result<(), Box<dyn std::error::Error>> {
+# async fn example(signalable: &dyn Signalable) -> Result<(), Box<dyn std::error::Error>> {
 let signal = SignalPayload {
     signal_type: "cancel".into(),
     data: serde_json::json!({"reason": "user requested"}),
 };
 
-orchestrator
+signalable
     .signal(&WorkflowId("wf-001".into()), signal)
     .await?;
 # Ok(())
@@ -140,12 +175,12 @@ orchestrator
 Queries provide read-only inspection of workflow state:
 
 ```rust,no_run
-use layer0::orchestrator::{Orchestrator, QueryPayload};
+use layer0::query::{Queryable, QueryPayload};
 use layer0::id::WorkflowId;
 
-# async fn example(orchestrator: &dyn Orchestrator) -> Result<(), Box<dyn std::error::Error>> {
+# async fn example(queryable: &dyn Queryable) -> Result<(), Box<dyn std::error::Error>> {
 let query = QueryPayload::new("status", serde_json::json!({}));
-let result = orchestrator
+let result = queryable
     .query(&WorkflowId("wf-001".into()), query)
     .await?;
 println!("Workflow status: {}", result);
@@ -174,13 +209,13 @@ pub enum OrchError {
 
 ## Future orchestrators
 
-The `Orchestrator` trait is designed to support orchestrators beyond in-process dispatch:
+The `Dispatcher`, `Signalable`, and `Queryable` traits are designed to support orchestrators beyond in-process dispatch:
 
 - **Temporal** -- Durable execution with automatic replay and fault tolerance. `dispatch` becomes a Temporal activity. `signal` maps to Temporal signals. `query` maps to Temporal queries.
 - **Restate** -- Durable execution with virtual objects. Similar to Temporal but with a different programming model.
 - **HTTP** -- Dispatch over HTTP for microservice architectures. `dispatch` sends a serialized `OperatorInput` over the network.
 
-The trait is transport-agnostic by design. All protocol types (`OperatorInput`, `OperatorOutput`, `SignalPayload`, `QueryPayload`) implement `Serialize + Deserialize`, so they can cross any boundary.
+The traits are transport-agnostic by design. All protocol types (`OperatorInput`, `OperatorOutput`, `SignalPayload`, `QueryPayload`) implement `Serialize + Deserialize`, so they can cross any boundary.
 
 
 ## Effects, signals, and custom operators

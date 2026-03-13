@@ -1,7 +1,7 @@
 //! Per-boundary middleware traits using the continuation pattern.
 //!
 //! Three middleware traits — one per layer0 protocol boundary:
-//! - [`DispatchMiddleware`] wraps [`crate::Orchestrator`]`::dispatch`
+//! - [`DispatchMiddleware`] wraps [`crate::Dispatcher`]`::dispatch`
 //! - [`StoreMiddleware`] wraps [`crate::StateStore`] read/write
 //! - [`ExecMiddleware`] wraps [`crate::Environment`]`::run`
 //!
@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// DISPATCH MIDDLEWARE (wraps Orchestrator::dispatch)
+// DISPATCH MIDDLEWARE (wraps Dispatcher::dispatch)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// The next layer in a dispatch middleware chain.
@@ -35,7 +35,7 @@ pub trait DispatchNext: Send + Sync {
     ) -> Result<OperatorOutput, OrchError>;
 }
 
-/// Middleware wrapping `Orchestrator::dispatch`.
+/// Middleware wrapping `Dispatcher::dispatch`.
 ///
 /// Code before `next.dispatch()` = pre-processing (input mutation, logging).
 /// Code after `next.dispatch()` = post-processing (output mutation, metrics).

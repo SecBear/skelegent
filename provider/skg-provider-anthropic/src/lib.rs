@@ -7,12 +7,12 @@ mod types;
 
 use futures_util::StreamExt;
 use layer0::content::{Content, ContentBlock, ImageSource as L0ImageSource};
+use rust_decimal::Decimal;
 use skg_auth::{AuthProvider, AuthRequest};
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
 use skg_turn::provider::{Provider, ProviderError};
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use skg_turn::types::*;
-use rust_decimal::Decimal;
 use std::sync::Arc;
 use tracing::Instrument;
 use types::*;
@@ -74,8 +74,9 @@ impl AnthropicProvider {
     /// from `skelegent-extras`.
     ///
     /// OAuth tokens (`sk-ant-oat*`) returned by the provider are sent as
-    /// `Authorization: Bearer` with the required `anthropic-beta:
-    /// oauth-2025-04-20` header. Regular API keys use `x-api-key`.
+    /// `Authorization: Bearer` with Claude Code identity headers (`anthropic-beta:
+    /// claude-code-20250219,oauth-2025-04-20`, `user-agent: claude-cli/2.1.62`,
+    /// `x-app: cli`). Regular API keys use `x-api-key`.
     pub fn with_auth(provider: Arc<dyn AuthProvider>) -> Self {
         Self {
             api_key_source: ApiKeySource::Auth {
@@ -279,8 +280,9 @@ fn parse_anthropic_infer_response(
 /// Returns `true` if `key` is an Anthropic OAuth token.
 ///
 /// OAuth tokens use prefix `sk-ant-oat` and require `Authorization: Bearer`
-/// plus the `anthropic-beta: oauth-2025-04-20` header. Standard API keys use
-/// the `x-api-key` header.
+/// plus Claude Code identity headers (`anthropic-beta: claude-code-20250219,
+/// oauth-2025-04-20`, `user-agent: claude-cli/2.1.62`, `x-app: cli`).
+/// Standard API keys use the `x-api-key` header.
 fn is_oauth_token(key: &str) -> bool {
     key.starts_with("sk-ant-oat")
 }
@@ -333,7 +335,9 @@ impl Provider for AnthropicProvider {
             if is_oauth_token(&key) {
                 builder = builder
                     .header("Authorization", format!("Bearer {key}"))
-                    .header("anthropic-beta", "oauth-2025-04-20");
+                    .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+                    .header("user-agent", "claude-cli/2.1.62")
+                    .header("x-app", "cli");
             } else {
                 builder = builder.header("x-api-key", key);
             }
@@ -415,7 +419,9 @@ impl StreamProvider for AnthropicProvider {
             if is_oauth_token(&key) {
                 builder = builder
                     .header("Authorization", format!("Bearer {key}"))
-                    .header("anthropic-beta", "oauth-2025-04-20");
+                    .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+                    .header("user-agent", "claude-cli/2.1.62")
+                    .header("x-app", "cli");
             } else {
                 builder = builder.header("x-api-key", key);
             }
@@ -836,10 +842,7 @@ mod tests_credential {
 
     #[async_trait]
     impl skg_auth::AuthProvider for StubAuth {
-        async fn provide(
-            &self,
-            request: &skg_auth::AuthRequest,
-        ) -> Result<AuthToken, AuthError> {
+        async fn provide(&self, request: &skg_auth::AuthRequest) -> Result<AuthToken, AuthError> {
             assert_eq!(
                 request.audience.as_deref().unwrap_or(""),
                 self.expected_audience,

@@ -1,6 +1,6 @@
 [package]
 name = "skg-tool-macro"
-version = "0.4.0"
+version = "0.4.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -18,7 +18,7 @@ quote = "1"
 proc-macro2 = "1"
 
 [dev-dependencies]
-skg-tool = { path = "../skg-tool", version = "0.4.0" }
-layer0 = { path = "../../layer0", version = "0.4.0" }
+skg-tool = { path = "../skg-tool", version = "0.4.1" }
+layer0 = { path = "../../layer0", version = "0.4.1" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde_json = "1"

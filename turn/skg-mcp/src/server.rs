@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use layer0::operator::{Operator, TriggerType};
 use layer0::{StateReader, ToolMetadata};
-use skg_tool::{ToolDyn, ToolError, ToolRegistry};
 use rmcp::model::{
     Annotated, CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams,
     GetPromptResult, Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult,
@@ -23,6 +22,7 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::transport::io::stdio;
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
+use skg_tool::{ToolDyn, ToolError, ToolRegistry};
 
 use crate::error::McpError;
 
@@ -395,8 +395,8 @@ impl ServerHandler for McpServerHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skg_tool::{ToolDyn, ToolError};
     use serde_json::json;
+    use skg_tool::{ToolDyn, ToolError};
     use std::future::Future;
     use std::pin::Pin;
 

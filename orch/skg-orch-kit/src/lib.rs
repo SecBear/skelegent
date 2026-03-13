@@ -10,15 +10,27 @@
 //! - pluggable effect execution policy (WriteMemory/Delegate/Handoff/Signal)
 //! - zero lock-in: callers can bypass defaults
 
+#[cfg(test)]
+mod budget;
+mod compaction;
+mod intervene;
 mod kit;
+mod observe;
 mod runner;
 
+pub use compaction::{
+    CompactContext, CompactionCoordinationError, CompactionCoordinator, CompactionDecision,
+    CompactionOperationError, CompactionOutcome, CompactionSnapshot, FlushBeforeCompact,
+};
+pub use intervene::{ContextIntervenor, InterventionSendError};
 pub use kit::Kit;
+pub use observe::{ContextObserver, Observation, ObservationBatch, ObservationTry};
 pub use runner::{
     EffectInterpreter, ExecutionEvent, ExecutionTrace, KitError, LocalEffectInterpreter,
     OrchestratedRunner,
 };
 
 pub mod effects;
+pub use skg_context_engine as context_engine;
 pub use skg_effects_core as effects_core;
 pub use skg_effects_local as effects_local;

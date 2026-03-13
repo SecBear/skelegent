@@ -1,0 +1,31 @@
+[package]
+name = "skg-runner"
+version = "0.4.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Universal operator runner binary — runs inside containers, exposes gRPC + HTTP healthcheck"
+
+[[bin]]
+name = "skg-runner"
+path = "src/main.rs"
+
+[dependencies]
+layer0 = { path = "../../layer0", version = "0.4.0" }
+skg-turn = { path = "../../turn/skg-turn", version = "0.4.0" }
+tonic = { version = "0.13", features = ["transport"] }
+prost = "0.13"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+axum = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+tokio-stream = "0.1"
+base64 = "0.22"
+
+[build-dependencies]
+tonic-build = "0.13"
+prost-build = "0.13"

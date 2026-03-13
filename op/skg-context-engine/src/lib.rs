@@ -24,9 +24,11 @@
 //!
 //! ## The Phase Boundary
 //!
-//! [`Context::compile()`] produces a [`CompiledContext`]. [`CompiledContext::infer()`]
-//! crosses the network boundary. The response is NOT automatically appended —
-//! that's a separate [`AppendResponse`] context op.
+//! [`Context::compile()`] produces a [`CompiledContext`]. The actual provider call
+//! runs behind typed governance markers like [`InferBoundary`] and
+//! [`StreamInferBoundary`], so rules and interventions can target the real
+//! pre-inference boundary. The response is NOT automatically appended — that's a
+//! separate [`AppendResponse`] context op.
 //!
 //! ## The ReAct Pattern
 //!
@@ -78,6 +80,7 @@
 //! ```
 
 pub mod assembly;
+pub mod boundary;
 pub mod compile;
 pub mod context;
 pub mod error;
@@ -87,13 +90,15 @@ pub mod output;
 pub mod react;
 pub mod rule;
 pub mod rules;
+pub mod stream;
 pub mod stream_react;
 
 // Re-exports
+pub use boundary::{InferBoundary, StreamInferBoundary};
 pub use compile::{CompileConfig, CompiledContext, InferResult};
 pub use context::{Context, Extensions, TurnMetrics};
 pub use error::EngineError;
-pub use op::ContextOp;
+pub use op::{ContextOp, ErasedOp};
 pub use ops::*;
 pub use output::{OutputError, OutputMode, OutputSchema, extract_json_block};
 pub use react::{
@@ -102,4 +107,5 @@ pub use react::{
 };
 pub use rule::{Rule, Trigger};
 pub use rules::*;
+pub use stream::{ContextEvent, ContextMutation};
 pub use stream_react::stream_react_loop;

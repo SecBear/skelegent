@@ -20,7 +20,7 @@ process using one of three delivery modes:
 | `Sidecar` | Pass a path hint; the sidecar process manages the credential |
 
 Every credential access emits a `SecretAccessEvent` through the `EnvironmentEventSink` for
-audit logging, and an `ObservableEvent` for lifecycle observability.
+audit logging. Higher-level runtimes can adapt those signals into their own observability pipelines.
 
 ## Usage
 

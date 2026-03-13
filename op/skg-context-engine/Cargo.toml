@@ -1,6 +1,6 @@
 [package]
 name = "skg-context-engine"
-version = "0.4.0"
+version = "0.4.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,22 +11,24 @@ description = "Composable context engine for skelegent agents — assembly, infe
 typed-output = ["dep:schemars"]
 
 [dependencies]
-layer0 = { path = "../../layer0", version = "0.4.0" }
-skg-turn = { path = "../../turn/skg-turn", version = "0.4.0" }
-skg-tool = { path = "../../turn/skg-tool", version = "0.4.0" }
-skg-context = { path = "../../turn/skg-context", version = "0.4.0" }
+layer0 = { path = "../../layer0", version = "0.4.1" }
+skg-turn = { path = "../../turn/skg-turn", version = "0.4.1" }
+skg-tool = { path = "../../turn/skg-tool", version = "0.4.1" }
+skg-context = { path = "../../turn/skg-context", version = "0.4.1" }
 async-trait = "0.1"
 rust_decimal = { version = "1", features = ["serde-str"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync"] }
+thiserror = "2"
 tracing = "0.1"
 schemars = { version = "0.8", optional = true }
 
 [dev-dependencies]
-layer0 = { path = "../../layer0", features = ["test-utils"], version = "0.4.0" }
+layer0 = { path = "../../layer0", features = ["test-utils"], version = "0.4.1" }
 skg-turn = { path = "../../turn/skg-turn", features = [
   "test-utils",
-], version = "0.4.0" }
+], version = "0.4.1" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+skg-state-memory = { path = "../../state/skg-state-memory" }
 schemars = "0.8"

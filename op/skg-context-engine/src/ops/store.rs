@@ -26,7 +26,7 @@ pub enum InjectionPosition {
     AfterSystemPrompt,
     /// At the end of the message list.
     Append,
-    /// At a specific index. Clamped to `ctx.messages.len()`.
+    /// At a specific index. Clamped to `ctx.messages().len()`.
     At(usize),
 }
 
@@ -67,7 +67,7 @@ pub async fn fetch_search_results(
 /// transforms, call the extractor and store directly:
 ///
 /// ```ignore
-/// let value = my_extractor(&ctx.messages);
+/// let value = my_extractor(ctx.messages());
 /// if should_write(&value) {
 ///     store.write(&scope, "key", value).await?;
 /// }
@@ -104,7 +104,7 @@ impl ContextOp for FlushToStore {
     type Output = ();
 
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-        let value = (self.extractor)(&ctx.messages);
+        let value = (self.extractor)(ctx.messages());
         self.store
             .write(&self.scope, &self.key, value)
             .await
@@ -213,18 +213,22 @@ impl ContextOp for InjectFromStore {
 
         let insert_at = match &self.position {
             InjectionPosition::AfterSystemPrompt => {
-                if ctx.messages.first().is_some_and(|m| m.role == Role::System) {
+                if ctx
+                    .messages()
+                    .first()
+                    .is_some_and(|m| m.role == Role::System)
+                {
                     1
                 } else {
                     0
                 }
             }
-            InjectionPosition::Append => ctx.messages.len(),
-            InjectionPosition::At(idx) => (*idx).min(ctx.messages.len()),
+            InjectionPosition::Append => ctx.messages().len(),
+            InjectionPosition::At(idx) => (*idx).min(ctx.messages().len()),
         };
 
         for (i, msg) in messages.into_iter().enumerate() {
-            ctx.messages.insert(insert_at + i, msg);
+            ctx.insert_message(insert_at + i, msg);
         }
 
         tracing::info!(query = %self.query, injected = count, "skg.inject_from_store");
@@ -304,18 +308,22 @@ impl ContextOp for InjectSearchResults {
 
         let insert_at = match &self.position {
             InjectionPosition::AfterSystemPrompt => {
-                if ctx.messages.first().is_some_and(|m| m.role == Role::System) {
+                if ctx
+                    .messages()
+                    .first()
+                    .is_some_and(|m| m.role == Role::System)
+                {
                     1
                 } else {
                     0
                 }
             }
-            InjectionPosition::Append => ctx.messages.len(),
-            InjectionPosition::At(idx) => (*idx).min(ctx.messages.len()),
+            InjectionPosition::Append => ctx.messages().len(),
+            InjectionPosition::At(idx) => (*idx).min(ctx.messages().len()),
         };
 
         for (i, msg) in messages.into_iter().enumerate() {
-            ctx.messages.insert(insert_at + i, msg);
+            ctx.insert_message(insert_at + i, msg);
         }
 
         tracing::info!(injected = count, "skg.inject_search_results");
@@ -325,7 +333,7 @@ impl ContextOp for InjectSearchResults {
 
 /// Serialize the current conversation messages to a [`StateStore`].
 ///
-/// Writes `ctx.messages` as a JSON array under the given scope and key.
+/// Writes the context messages as a JSON array under the given scope and key.
 /// Pair with [`LoadConversation`] to restore.
 pub struct SaveConversation {
     store: Arc<dyn StateStore>,
@@ -350,7 +358,7 @@ impl ContextOp for SaveConversation {
 
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
         let value =
-            serde_json::to_value(&ctx.messages).map_err(|e| EngineError::Custom(Box::new(e)))?;
+            serde_json::to_value(ctx.messages()).map_err(|e| EngineError::Custom(Box::new(e)))?;
         self.store
             .write(&self.scope, &self.key, value)
             .await
@@ -362,7 +370,7 @@ impl ContextOp for SaveConversation {
 
 /// Load conversation messages from a [`StateStore`] into the context.
 ///
-/// Reads a JSON array of messages from the store and replaces `ctx.messages`.
+/// Reads a JSON array of messages from the store and replaces the context messages.
 /// Returns `None` if the key does not exist (context unchanged).
 /// Returns `Some(count)` if loaded (previous messages replaced).
 pub struct LoadConversation {
@@ -401,7 +409,7 @@ impl ContextOp for LoadConversation {
                         reason: format!("failed to deserialize conversation: {err}"),
                     })?;
                 let len = messages.len();
-                ctx.messages = messages;
+                ctx.set_messages(messages);
                 tracing::info!(key = %self.key, count = len, "skg.load_conversation");
                 Ok(Some(len))
             }
@@ -488,8 +496,7 @@ mod tests {
     async fn flush_writes_to_store() {
         let store = MockStore::new();
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         ctx.run(FlushToStore::new(
             store.clone(),
@@ -514,10 +521,8 @@ mod tests {
         }
 
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::System, Content::text("main system")));
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("user question")));
+        ctx.push_message(Message::new(Role::System, Content::text("main system")));
+        ctx.push_message(Message::new(Role::User, Content::text("user question")));
 
         ctx.run(InjectFromStore::new(
             store.clone(),
@@ -529,16 +534,16 @@ mod tests {
         .unwrap();
 
         // Original system message still at position 0.
-        assert_eq!(ctx.messages[0].role, Role::System);
-        assert_eq!(ctx.messages[0].text_content(), "main system");
+        assert_eq!(ctx.messages()[0].role, Role::System);
+        assert_eq!(ctx.messages()[0].text_content(), "main system");
 
         // Two injected system messages at positions 1 and 2.
-        assert_eq!(ctx.messages[1].role, Role::System);
-        assert_eq!(ctx.messages[2].role, Role::System);
+        assert_eq!(ctx.messages()[1].role, Role::System);
+        assert_eq!(ctx.messages()[2].role, Role::System);
 
         // User message shifted to position 3.
-        assert_eq!(ctx.messages[3].role, Role::User);
-        assert_eq!(ctx.messages.len(), 4);
+        assert_eq!(ctx.messages()[3].role, Role::User);
+        assert_eq!(ctx.messages().len(), 4);
     }
 
     #[tokio::test]
@@ -568,8 +573,7 @@ mod tests {
     async fn inject_from_store_empty_results() {
         let store = MockStore::new();
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         let count = ctx
             .run(InjectFromStore::new(
@@ -582,17 +586,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 0);
-        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages().len(), 1);
     }
 
     #[tokio::test]
     async fn flush_extractor_receives_messages() {
         let store = MockStore::new();
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello world")));
-        ctx.messages
-            .push(Message::new(Role::Assistant, Content::text("hi there")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello world")));
+        ctx.push_message(Message::new(Role::Assistant, Content::text("hi there")));
 
         ctx.run(FlushToStore::new(
             store.clone(),
@@ -623,10 +625,8 @@ mod tests {
         }
 
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::System, Content::text("system")));
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("user msg")));
+        ctx.push_message(Message::new(Role::System, Content::text("system")));
+        ctx.push_message(Message::new(Role::User, Content::text("user msg")));
 
         ctx.run(
             InjectFromStore::new(store.clone(), Scope::Global, "mem", 10)
@@ -636,9 +636,9 @@ mod tests {
         .unwrap();
 
         // Memory should be at the end
-        assert_eq!(ctx.messages.len(), 3);
-        assert_eq!(ctx.messages[2].role, Role::System);
-        assert!(ctx.messages[2].text_content().contains("appended memory"));
+        assert_eq!(ctx.messages().len(), 3);
+        assert_eq!(ctx.messages()[2].role, Role::System);
+        assert!(ctx.messages()[2].text_content().contains("appended memory"));
     }
 
     #[tokio::test]
@@ -650,8 +650,7 @@ mod tests {
         }
 
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         ctx.run(
             InjectFromStore::new(store.clone(), Scope::Global, "fact", 10)
@@ -662,9 +661,9 @@ mod tests {
         .unwrap();
 
         // Should be injected at position 0 (no system message), with Role::User
-        assert_eq!(ctx.messages[0].role, Role::User);
+        assert_eq!(ctx.messages()[0].role, Role::User);
         assert_eq!(
-            ctx.messages[0].text_content(),
+            ctx.messages()[0].text_content(),
             "Fact (fact_1): \"the sky is blue\""
         );
     }
@@ -685,7 +684,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(ctx.messages[0].meta.policy, CompactionPolicy::Pinned);
+        assert_eq!(ctx.messages()[0].meta.policy, CompactionPolicy::Pinned);
     }
 
     // ── P2: fetch_search_results tests ──
@@ -758,34 +757,31 @@ mod tests {
         ];
 
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::System, Content::text("system prompt")));
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("user msg")));
+        ctx.push_message(Message::new(Role::System, Content::text("system prompt")));
+        ctx.push_message(Message::new(Role::User, Content::text("user msg")));
 
         let count = ctx.run(InjectSearchResults::new(results)).await.unwrap();
 
         assert_eq!(count, 2);
-        assert_eq!(ctx.messages.len(), 4);
+        assert_eq!(ctx.messages().len(), 4);
         // System prompt still first.
-        assert_eq!(ctx.messages[0].text_content(), "system prompt");
+        assert_eq!(ctx.messages()[0].text_content(), "system prompt");
         // Injected after system prompt.
-        assert!(ctx.messages[1].text_content().contains("key_a"));
-        assert!(ctx.messages[2].text_content().contains("key_b"));
+        assert!(ctx.messages()[1].text_content().contains("key_a"));
+        assert!(ctx.messages()[2].text_content().contains("key_b"));
         // User message shifted.
-        assert_eq!(ctx.messages[3].text_content(), "user msg");
+        assert_eq!(ctx.messages()[3].text_content(), "user msg");
     }
 
     #[tokio::test]
     async fn test_inject_search_results_empty() {
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
         let count = ctx.run(InjectSearchResults::new(vec![])).await.unwrap();
 
         assert_eq!(count, 0);
-        assert_eq!(ctx.messages.len(), 1);
+        assert_eq!(ctx.messages().len(), 1);
     }
 
     // ── P7: Conversation persistence tests ──
@@ -794,10 +790,8 @@ mod tests {
     async fn test_save_conversation() {
         let store = MockStore::new();
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("hello")));
-        ctx.messages
-            .push(Message::new(Role::Assistant, Content::text("hi")));
+        ctx.push_message(Message::new(Role::User, Content::text("hello")));
+        ctx.push_message(Message::new(Role::Assistant, Content::text("hi")));
 
         ctx.run(SaveConversation::new(store.clone(), Scope::Global, "conv"))
             .await
@@ -815,8 +809,7 @@ mod tests {
         // Save messages via SaveConversation first.
         {
             let mut ctx = Context::new();
-            ctx.messages
-                .push(Message::new(Role::User, Content::text("saved msg")));
+            ctx.push_message(Message::new(Role::User, Content::text("saved msg")));
             ctx.run(SaveConversation::new(store.clone(), Scope::Global, "conv"))
                 .await
                 .unwrap();
@@ -829,16 +822,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, Some(1));
-        assert_eq!(ctx.messages.len(), 1);
-        assert_eq!(ctx.messages[0].text_content(), "saved msg");
+        assert_eq!(ctx.messages().len(), 1);
+        assert_eq!(ctx.messages()[0].text_content(), "saved msg");
     }
 
     #[tokio::test]
     async fn test_load_conversation_missing() {
         let store = MockStore::new();
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("original")));
+        ctx.push_message(Message::new(Role::User, Content::text("original")));
 
         let result = ctx
             .run(LoadConversation::new(
@@ -850,8 +842,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, None);
-        assert_eq!(ctx.messages.len(), 1);
-        assert_eq!(ctx.messages[0].text_content(), "original");
+        assert_eq!(ctx.messages().len(), 1);
+        assert_eq!(ctx.messages()[0].text_content(), "original");
     }
 
     #[tokio::test]
@@ -860,12 +852,9 @@ mod tests {
 
         // Save
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::System, Content::text("sys")));
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("question")));
-        ctx.messages
-            .push(Message::new(Role::Assistant, Content::text("answer")));
+        ctx.push_message(Message::new(Role::System, Content::text("sys")));
+        ctx.push_message(Message::new(Role::User, Content::text("question")));
+        ctx.push_message(Message::new(Role::Assistant, Content::text("answer")));
         ctx.run(SaveConversation::new(
             store.clone(),
             Scope::Global,
@@ -886,13 +875,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, Some(3));
-        assert_eq!(ctx2.messages.len(), 3);
-        assert_eq!(ctx2.messages[0].role, Role::System);
-        assert_eq!(ctx2.messages[0].text_content(), "sys");
-        assert_eq!(ctx2.messages[1].role, Role::User);
-        assert_eq!(ctx2.messages[1].text_content(), "question");
-        assert_eq!(ctx2.messages[2].role, Role::Assistant);
-        assert_eq!(ctx2.messages[2].text_content(), "answer");
+        assert_eq!(ctx2.messages().len(), 3);
+        assert_eq!(ctx2.messages()[0].role, Role::System);
+        assert_eq!(ctx2.messages()[0].text_content(), "sys");
+        assert_eq!(ctx2.messages()[1].role, Role::User);
+        assert_eq!(ctx2.messages()[1].text_content(), "question");
+        assert_eq!(ctx2.messages()[2].role, Role::Assistant);
+        assert_eq!(ctx2.messages()[2].text_content(), "answer");
     }
 
     #[tokio::test]
@@ -902,8 +891,7 @@ mod tests {
         // Save one message
         {
             let mut ctx = Context::new();
-            ctx.messages
-                .push(Message::new(Role::User, Content::text("new msg")));
+            ctx.push_message(Message::new(Role::User, Content::text("new msg")));
             ctx.run(SaveConversation::new(
                 store.clone(),
                 Scope::Global,
@@ -915,11 +903,9 @@ mod tests {
 
         // Load into context that already has messages
         let mut ctx = Context::new();
-        ctx.messages
-            .push(Message::new(Role::System, Content::text("old system")));
-        ctx.messages
-            .push(Message::new(Role::User, Content::text("old user")));
-        ctx.messages.push(Message::new(
+        ctx.push_message(Message::new(Role::System, Content::text("old system")));
+        ctx.push_message(Message::new(Role::User, Content::text("old user")));
+        ctx.push_message(Message::new(
             Role::Assistant,
             Content::text("old assistant"),
         ));
@@ -934,7 +920,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, Some(1));
-        assert_eq!(ctx.messages.len(), 1);
-        assert_eq!(ctx.messages[0].text_content(), "new msg");
+        assert_eq!(ctx.messages().len(), 1);
+        assert_eq!(ctx.messages()[0].text_content(), "new msg");
     }
 }

@@ -4,8 +4,9 @@ This page shows how skelegent's crates depend on each other. The fundamental rul
 
 > **Note:** The ASCII diagram below reflects the core dependency relationships but is
 > incomplete — `skg-effects-core`, `skg-effects-local`, `skg-turn-kit`,
-> `skg-auth`, and `skg-crypto` are not shown. See the crate list in
-> [layers.md](layers.md) for the complete and authoritative crate inventory.
+> `skg-auth`, `skg-auth-omp`, `skg-crypto`, `skg-env-docker`, `skg-orch-env`,
+> `skg-provider-router`, `skg-run-core`, `skg-runner`, and `skg-state-proxy` are not shown. See the crate list in
+> [layers.md](layers.md) and [crate-map.md](../reference/crate-map.md) for the complete and authoritative crate inventory.
 
 ## ASCII dependency graph
 
@@ -81,15 +82,21 @@ The operator ecosystem has several internal dependencies:
 
 - **`skg-orch-local`** depends on `layer0` and `skg-orch-kit`. It holds `Arc<dyn Operator>` references.
 - **`skg-orch-kit`** provides shared utilities for orchestrator implementations.
+- **`skg-orch-env`** depends on `layer0` and routes operator execution through `Environment::run`.
+- **`skg-run-core`** depends only on general-purpose crates (`serde`, `async-trait`, `thiserror`) and defines portable durable run/control primitives above Layer 0.
+- **`skg-runner`** is a runner binary for containerized/operator-hosted execution; it depends on `layer0`, `skg-turn`, and transport/runtime crates.
 
 ### Layer 3: State
 
 - **`skg-state-memory`** and **`skg-state-fs`** depend only on `layer0` (and `tokio` for async I/O). They are completely independent of each other and of all other layers.
+- **`skg-state-proxy`** depends on `layer0` and gRPC transport crates; it exposes `StateStore` over the network for cross-container access.
 
 ### Layer 4: Environment and credentials
 
 - **`skg-env-local`** depends on `layer0`. It holds an `Arc<dyn Operator>`.
+- **`skg-env-docker`** depends on `layer0`, `skg-secret`, and Docker/gRPC crates to run operators in isolated containers.
 - The secret backends (`skg-secret-*`), auth backends (`skg-auth-*`), and crypto backends (`skg-crypto-*`) depend on `skg-secret`/`skg-auth`/`skg-crypto` respectively, and transitively on `layer0`.
+- **`skg-auth-omp`** is a local-tooling auth backend that reads OMP credentials from `agent.db`.
 
 ### Layer 5: Cross-cutting
 
@@ -117,7 +124,14 @@ the ASCII art above:
 | Crate | Layer | Depends on |
 |---|---|---|
 | `skg-turn-kit` | 1 | `layer0`, `skg-turn` |
+| `skg-provider-router` | 1 | `skg-turn` |
 | `skg-effects-core` | 2 | `layer0` |
 | `skg-effects-local` | 2 | `layer0`, `skg-effects-core` |
+| `skg-orch-env` | 2 | `layer0` |
+| `skg-run-core` | 2 | general-purpose crates only |
+| `skg-runner` | 2 | `layer0`, `skg-turn` |
+| `skg-state-proxy` | 3 | `layer0` |
+| `skg-env-docker` | 4 | `layer0`, `skg-secret` |
 | `skg-auth` | 4 | `layer0` |
+| `skg-auth-omp` | 4 | `skg-auth`, `skg-secret` |
 | `skg-crypto` | 4 | `layer0` |
