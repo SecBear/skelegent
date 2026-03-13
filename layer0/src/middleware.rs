@@ -8,6 +8,7 @@
 //! Provider middleware is NOT here — it lives in the turn layer (Layer 1)
 //! because Provider is RPITIT, not object-safe.
 
+use crate::dispatch::DispatchHandle;
 use crate::effect::Scope;
 use crate::environment::EnvironmentSpec;
 use crate::error::{EnvError, OrchError, StateError};
@@ -32,7 +33,7 @@ pub trait DispatchNext: Send + Sync {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError>;
+    ) -> Result<DispatchHandle, OrchError>;
 }
 
 /// Middleware wrapping `Dispatcher::dispatch`.
@@ -48,7 +49,7 @@ pub trait DispatchMiddleware: Send + Sync {
         operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError>;
+    ) -> Result<DispatchHandle, OrchError>;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -171,7 +172,7 @@ impl DispatchStack {
         operator: &OperatorId,
         input: OperatorInput,
         terminal: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         if self.layers.is_empty() {
             return terminal.dispatch(operator, input).await;
         }
@@ -225,7 +226,7 @@ impl DispatchNext for DispatchChain<'_> {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         if self.index >= self.layers.len() {
             return self.terminal.dispatch(operator, input).await;
         }
@@ -499,6 +500,17 @@ impl ExecNext for ExecChain<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatch::{DispatchEvent, DispatchHandle};
+    use crate::id::DispatchId;
+
+    /// Helper: create a DispatchHandle that immediately completes with the given output.
+    fn immediate_handle(output: OperatorOutput) -> DispatchHandle {
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("test"));
+        tokio::spawn(async move {
+            let _ = sender.send(DispatchEvent::Completed { output }).await;
+        });
+        handle
+    }
 
     #[tokio::test]
     async fn dispatch_middleware_is_object_safe() {
@@ -511,7 +523,7 @@ mod tests {
                 operator: &OperatorId,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<OperatorOutput, OrchError> {
+            ) -> Result<DispatchHandle, OrchError> {
                 input.metadata = serde_json::json!({"tagged": true});
                 next.dispatch(operator, input).await
             }
@@ -575,7 +587,7 @@ mod tests {
                 operator: &OperatorId,
                 input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<OperatorOutput, OrchError> {
+            ) -> Result<DispatchHandle, OrchError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 next.dispatch(operator, input).await
             }
@@ -590,7 +602,7 @@ mod tests {
                 _operator: &OperatorId,
                 _input: OperatorInput,
                 _next: &dyn DispatchNext,
-            ) -> Result<OperatorOutput, OrchError> {
+            ) -> Result<DispatchHandle, OrchError> {
                 Err(OrchError::DispatchFailed("budget exceeded".into()))
             }
         }
@@ -608,11 +620,11 @@ mod tests {
                 &self,
                 _operator: &OperatorId,
                 input: OperatorInput,
-            ) -> Result<OperatorOutput, OrchError> {
-                Ok(OperatorOutput::new(
+            ) -> Result<DispatchHandle, OrchError> {
+                Ok(immediate_handle(OperatorOutput::new(
                     input.message,
                     crate::ExitReason::Complete,
-                ))
+                )))
             }
         }
 
@@ -638,7 +650,7 @@ mod tests {
                 operator: &OperatorId,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<OperatorOutput, OrchError> {
+            ) -> Result<DispatchHandle, OrchError> {
                 input.metadata = serde_json::json!({"transformed": true});
                 next.dispatch(operator, input).await
             }
@@ -652,11 +664,11 @@ mod tests {
                 &self,
                 _operator: &OperatorId,
                 input: OperatorInput,
-            ) -> Result<OperatorOutput, OrchError> {
-                Ok(OperatorOutput::new(
+            ) -> Result<DispatchHandle, OrchError> {
+                Ok(immediate_handle(OperatorOutput::new(
                     input.message,
                     crate::ExitReason::Complete,
-                ))
+                )))
             }
         }
 

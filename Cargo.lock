@@ -2040,6 +2040,19 @@ dependencies = [
  "skg-state-memory",
  "skg-tool",
  "skg-turn",
+ "tokio",
+]
+
+[[package]]
+name = "skg-a2a-core"
+version = "0.4.1"
+dependencies = [
+ "layer0",
+ "serde",
+ "serde_json",
+ "skg-run-core",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -2224,7 +2237,9 @@ version = "0.4.1"
 dependencies = [
  "async-trait",
  "layer0",
+ "rust_decimal",
  "serde_json",
+ "skg-context-engine",
  "skg-effects-core",
  "skg-effects-local",
  "thiserror",
@@ -2326,6 +2341,18 @@ version = "0.1.0"
 dependencies = [
  "layer0",
  "skg-turn",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "skg-run-core"
+version = "0.4.1"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
 ]

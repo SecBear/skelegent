@@ -1,8 +1,9 @@
 //! LocalOrchestrator — in-process orchestrator with a HashMap of operators.
 
+use crate::dispatch::{DispatchEvent, DispatchHandle, DispatchSender};
 use crate::error::OrchError;
-use crate::id::OperatorId;
-use crate::operator::{Operator, OperatorInput, OperatorOutput};
+use crate::id::{DispatchId, OperatorId};
+use crate::operator::{Operator, OperatorInput};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,11 +40,67 @@ impl crate::dispatch::Dispatcher for LocalOrchestrator {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         let op = self
             .operators
             .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input).await.map_err(OrchError::OperatorError)
+            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?
+            .clone();
+
+        let dispatch_id = DispatchId::new(format!("test-{}", uuid_v4()));
+        let (handle, sender) = DispatchHandle::channel(dispatch_id);
+
+        tokio::spawn(run_dispatch(op, input, sender));
+
+        Ok(handle)
     }
+}
+
+/// Run an operator and send events through the dispatch channel.
+async fn run_dispatch(op: Arc<dyn Operator>, input: OperatorInput, sender: DispatchSender) {
+    if sender.is_cancelled() {
+        return;
+    }
+    match op.execute(input).await {
+        Ok(output) => {
+            // Emit progress/artifact effects as events before the terminal event.
+            for effect in &output.effects {
+                match effect {
+                    crate::effect::Effect::Progress { content } => {
+                        let _ = sender
+                            .send(DispatchEvent::Progress {
+                                content: content.clone(),
+                            })
+                            .await;
+                    }
+                    crate::effect::Effect::Artifact { artifact } => {
+                        let _ = sender
+                            .send(DispatchEvent::ArtifactProduced {
+                                artifact: artifact.clone(),
+                            })
+                            .await;
+                    }
+                    _ => {}
+                }
+            }
+            let _ = sender.send(DispatchEvent::Completed { output }).await;
+        }
+        Err(op_err) => {
+            let _ = sender
+                .send(DispatchEvent::Failed {
+                    error: OrchError::OperatorError(op_err),
+                })
+                .await;
+        }
+    }
+}
+
+/// Simple pseudo-UUID v4 for test dispatch IDs.
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{nanos:032x}")
 }

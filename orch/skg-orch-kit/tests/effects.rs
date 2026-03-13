@@ -1,7 +1,7 @@
 use layer0::content::Content;
-use layer0::dispatch::Dispatcher;
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::{Effect, Scope, SignalPayload};
-use layer0::id::{OperatorId, WorkflowId};
+use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, OperatorInput, OperatorOutput, TriggerType};
 use layer0::state::StateStore;
 use layer0::test_utils::InMemoryStore;
@@ -39,15 +39,17 @@ impl Dispatcher for MockOrch {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, layer0::error::OrchError> {
+    ) -> Result<DispatchHandle, layer0::error::OrchError> {
         self.dispatches
             .lock()
             .await
             .push((operator.clone(), input.clone()));
-        Ok(OperatorOutput::new(
-            Content::text("ok"),
-            ExitReason::Complete,
-        ))
+        let output = OperatorOutput::new(Content::text("ok"), ExitReason::Complete);
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("mock-effects"));
+        tokio::spawn(async move {
+            let _ = sender.send(DispatchEvent::Completed { output }).await;
+        });
+        Ok(handle)
     }
 }
 

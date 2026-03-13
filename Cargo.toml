@@ -45,6 +45,7 @@ members = [
   "env/skg-env-docker",
   "runner/skg-runner",
   "examples/hello-claude",
+  "a2a/skg-a2a-core",
 ]
 
 [workspace.package]

@@ -142,6 +142,8 @@ where
                 Effect::Delegate { operator, input } => {
                     self.dispatcher
                         .dispatch(operator, (*input.clone()).clone())
+                        .await?
+                        .collect()
                         .await?;
                 }
                 Effect::Handoff { operator, state } => {
@@ -149,7 +151,11 @@ where
                     let mut input =
                         OperatorInput::new(Content::text(state.to_string()), TriggerType::Task);
                     input.metadata = json!({ "handoff": true });
-                    self.dispatcher.dispatch(operator, input).await?;
+                    self.dispatcher
+                        .dispatch(operator, input)
+                        .await?
+                        .collect()
+                        .await?;
                 }
                 // Known but non-executing effects: treat as unknown for policy handling.
                 Effect::Log { .. } | Effect::Custom { .. } => match self.unknown_policy {

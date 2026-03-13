@@ -423,6 +423,9 @@ async fn multi_agent_dispatch_single() {
     let summary = orch
         .dispatch(&OperatorId::new("summarizer"), simple_input("Hello there!"))
         .await
+        .unwrap()
+        .collect()
+        .await
         .unwrap();
     assert_eq!(summary.exit_reason, ExitReason::Complete);
     assert_eq!(
@@ -433,6 +436,9 @@ async fn multi_agent_dispatch_single() {
     let classification = orch
         .dispatch(&OperatorId::new("classifier"), simple_input("Hello there!"))
         .await
+        .unwrap()
+        .collect()
+        .await
         .unwrap();
     assert_eq!(classification.exit_reason, ExitReason::Complete);
     assert_eq!(
@@ -442,6 +448,9 @@ async fn multi_agent_dispatch_single() {
 
     let echoed = orch
         .dispatch(&OperatorId::new("echo"), simple_input("Hello there!"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     assert_eq!(echoed.message.as_text().unwrap(), "Hello there!");
@@ -476,7 +485,7 @@ async fn multi_agent_parallel_dispatch() {
 
     let mut results = Vec::new();
     for (op, input) in tasks {
-        results.push(orch.dispatch(&op, input).await);
+        results.push(orch.dispatch(&op, input).await.unwrap().collect().await);
     }
 
     // All three should succeed
@@ -518,6 +527,9 @@ async fn multi_agent_with_state_storage() {
             simple_input("Research Rust programming"),
         )
         .await
+        .unwrap()
+        .collect()
+        .await
         .unwrap();
 
     // Step 2: Store research results
@@ -540,6 +552,9 @@ async fn multi_agent_with_state_storage() {
             &OperatorId::new("writer"),
             simple_input("Write about Rust based on research"),
         )
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
 
@@ -647,11 +662,18 @@ async fn combined_all_patterns() {
     ];
     let mut results = Vec::new();
     for (op, input) in tasks {
-        results.push(orch.dispatch(&op, input).await);
+        results.push(
+            orch.dispatch(&op, input)
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap(),
+        );
     }
 
-    let analysis = results[0].as_ref().unwrap();
-    let rating = results[1].as_ref().unwrap();
+    let analysis = &results[0];
+    let rating = &results[1];
 
     // State swap: store in both memory and filesystem
     let memory = MemoryStore::new();

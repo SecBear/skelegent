@@ -7,10 +7,11 @@
 
 use async_trait::async_trait;
 use layer0::content::Content;
+use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::error::OrchError;
 use layer0::id::OperatorId;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
-use layer0::operator::{OperatorInput, OperatorOutput};
+use layer0::operator::OperatorInput;
 use regex::Regex;
 
 /// Middleware that redacts secrets from dispatch output.
@@ -37,18 +38,6 @@ impl RedactionMiddleware {
         self.patterns.push(pattern);
         self
     }
-
-    fn redact(&self, text: &str) -> Option<String> {
-        let mut redacted = text.to_owned();
-        let mut found = false;
-        for pattern in &self.patterns {
-            if pattern.is_match(&redacted) {
-                found = true;
-                redacted = pattern.replace_all(&redacted, "[REDACTED]").into_owned();
-            }
-        }
-        found.then_some(redacted)
-    }
 }
 
 impl Default for RedactionMiddleware {
@@ -65,12 +54,37 @@ impl DispatchMiddleware for RedactionMiddleware {
         operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError> {
-        let mut output = next.dispatch(operator, input).await?;
-        if let Some(redacted) = output.message.as_text().and_then(|t| self.redact(t)) {
-            output.message = Content::text(redacted);
-        }
-        Ok(output)
+    ) -> Result<DispatchHandle, OrchError> {
+        let mut inner_handle = next.dispatch(operator, input).await?;
+        let (handle, sender) = DispatchHandle::channel(inner_handle.id.clone());
+        let patterns = self.patterns.clone();
+        tokio::spawn(async move {
+            while let Some(event) = inner_handle.recv().await {
+                match event {
+                    DispatchEvent::Completed { mut output } => {
+                        let redacted = output.message.as_text().and_then(|t| {
+                            let mut r = t.to_owned();
+                            let mut found = false;
+                            for pattern in &patterns {
+                                if pattern.is_match(&r) {
+                                    found = true;
+                                    r = pattern.replace_all(&r, "[REDACTED]").into_owned();
+                                }
+                            }
+                            found.then_some(r)
+                        });
+                        if let Some(redacted) = redacted {
+                            output.message = Content::text(redacted);
+                        }
+                        let _ = sender.send(DispatchEvent::Completed { output }).await;
+                    }
+                    other => {
+                        let _ = sender.send(other).await;
+                    }
+                }
+            }
+        });
+        Ok(handle)
     }
 }
 
@@ -161,7 +175,7 @@ impl DispatchMiddleware for ExfilGuardMiddleware {
         operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         let input_str = serde_json::to_string(&input.message).unwrap_or_default();
 
         if self.detect_generic_exfil(&input_str) {
@@ -188,7 +202,8 @@ impl DispatchMiddleware for ExfilGuardMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer0::operator::{ExitReason, TriggerType};
+    use layer0::id::DispatchId;
+    use layer0::operator::{ExitReason, OperatorOutput, TriggerType};
 
     struct MockDispatchNext {
         output_text: String,
@@ -200,11 +215,14 @@ mod tests {
             &self,
             _operator: &OperatorId,
             _input: OperatorInput,
-        ) -> Result<OperatorOutput, OrchError> {
-            Ok(OperatorOutput::new(
-                Content::text(&self.output_text),
-                ExitReason::Complete,
-            ))
+        ) -> Result<DispatchHandle, OrchError> {
+            let output =
+                OperatorOutput::new(Content::text(&self.output_text), ExitReason::Complete);
+            let (handle, sender) = DispatchHandle::channel(DispatchId::new("mock"));
+            tokio::spawn(async move {
+                let _ = sender.send(DispatchEvent::Completed { output }).await;
+            });
+            Ok(handle)
         }
     }
 
@@ -221,6 +239,9 @@ mod tests {
         let result = mw
             .dispatch(&OperatorId::from("a"), test_input("go"), &next)
             .await
+            .unwrap()
+            .collect()
+            .await
             .unwrap();
         let text = result.message.as_text().unwrap();
         assert!(text.contains("[REDACTED]"));
@@ -235,6 +256,9 @@ mod tests {
         };
         let result = mw
             .dispatch(&OperatorId::from("a"), test_input("go"), &next)
+            .await
+            .unwrap()
+            .collect()
             .await
             .unwrap();
         assert_eq!(result.message.as_text().unwrap(), "Just normal text.");

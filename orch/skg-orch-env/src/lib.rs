@@ -9,11 +9,11 @@
 //! and "execution happens in containers" (skg-env-docker).
 
 use async_trait::async_trait;
-use layer0::dispatch::Dispatcher;
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::environment::{Environment, EnvironmentSpec};
 use layer0::error::{EnvError, OrchError};
-use layer0::id::OperatorId;
-use layer0::operator::{OperatorInput, OperatorOutput};
+use layer0::id::{DispatchId, OperatorId};
+use layer0::operator::OperatorInput;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -93,21 +93,31 @@ impl Dispatcher for EnvOrch {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
-        if let Some(binding) = self.bindings.get(operator.as_str()) {
-            binding
-                .env
-                .run(input, &binding.spec)
-                .await
-                .map_err(env_err_to_orch)
+    ) -> Result<DispatchHandle, OrchError> {
+        let (env, spec) = if let Some(binding) = self.bindings.get(operator.as_str()) {
+            (binding.env.clone(), binding.spec.clone())
         } else if let Some(ref default) = self.default_env {
-            default
-                .run(input, &self.default_spec)
-                .await
-                .map_err(env_err_to_orch)
+            (default.clone(), self.default_spec.clone())
         } else {
-            Err(OrchError::OperatorNotFound(operator.to_string()))
-        }
+            return Err(OrchError::OperatorNotFound(operator.to_string()));
+        };
+
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new(operator.as_str()));
+        tokio::spawn(async move {
+            match env.run(input, &spec).await {
+                Ok(output) => {
+                    let _ = sender.send(DispatchEvent::Completed { output }).await;
+                }
+                Err(err) => {
+                    let _ = sender
+                        .send(DispatchEvent::Failed {
+                            error: env_err_to_orch(err),
+                        })
+                        .await;
+                }
+            }
+        });
+        Ok(handle)
     }
 }
 
@@ -139,7 +149,10 @@ mod tests {
         let result = orch
             .dispatch(&OperatorId::new("echo"), input("hello"))
             .await
-            .expect("dispatch should succeed");
+            .expect("dispatch should succeed")
+            .collect()
+            .await
+            .expect("collect should succeed");
 
         assert_eq!(result.message, Content::Text("hello".to_string()));
         assert!(matches!(result.exit_reason, ExitReason::Complete));
@@ -152,7 +165,10 @@ mod tests {
         let result = orch
             .dispatch(&OperatorId::new("anything"), input("fallback"))
             .await
-            .expect("default env should handle unbound operator");
+            .expect("default env should handle unbound operator")
+            .collect()
+            .await
+            .expect("collect should succeed");
 
         assert_eq!(result.message, Content::Text("fallback".to_string()));
     }

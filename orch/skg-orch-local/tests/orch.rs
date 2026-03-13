@@ -20,6 +20,9 @@ async fn dispatch_to_registered_agent() {
     let output = orch
         .dispatch(&OperatorId::new("echo"), simple_input("hello"))
         .await
+        .unwrap()
+        .collect()
+        .await
         .unwrap();
     assert_eq!(output.message, Content::text("hello"));
 }
@@ -63,6 +66,9 @@ async fn dispatch_propagates_operator_error() {
 
     let result = orch
         .dispatch(&OperatorId::new("fail"), simple_input("boom"))
+        .await
+        .unwrap()
+        .collect()
         .await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("always fails"));
@@ -79,6 +85,9 @@ async fn usable_as_dyn_dispatcher() {
     let output = orch
         .dispatch(&OperatorId::new("echo"), simple_input("dyn"))
         .await
+        .unwrap()
+        .collect()
+        .await
         .unwrap();
     assert_eq!(output.message, Content::text("dyn"));
 }
@@ -91,6 +100,9 @@ async fn usable_as_arc_dyn_dispatcher() {
     let orch: Arc<dyn Dispatcher> = Arc::new(orch);
     let output = orch
         .dispatch(&OperatorId::new("echo"), simple_input("arc"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("arc"));
@@ -116,7 +128,7 @@ async fn middleware_observer_fires_on_dispatch() {
             operator: &OperatorId,
             input: OperatorInput,
             next: &dyn DispatchNext,
-        ) -> Result<OperatorOutput, OrchError> {
+        ) -> Result<layer0::dispatch::DispatchHandle, OrchError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             next.dispatch(operator, input).await
         }
@@ -132,7 +144,11 @@ async fn middleware_observer_fires_on_dispatch() {
     let mut orch = LocalOrch::new().with_middleware(stack);
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
-    orch.dispatch(&OperatorId::new("echo"), simple_input("ping"))
+    let output = orch
+        .dispatch(&OperatorId::new("echo"), simple_input("ping"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
 
@@ -158,7 +174,7 @@ async fn middleware_guard_can_halt_dispatch() {
             _operator: &OperatorId,
             _input: OperatorInput,
             _next: &dyn DispatchNext,
-        ) -> Result<OperatorOutput, OrchError> {
+        ) -> Result<layer0::dispatch::DispatchHandle, OrchError> {
             Err(OrchError::DispatchFailed("denied by guard".into()))
         }
     }

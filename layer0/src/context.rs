@@ -136,6 +136,8 @@ impl Message {
                     ContentBlock::ToolUse { input, .. } => input.to_string().len() / 4,
                     ContentBlock::ToolResult { content, .. } => content.len() / 4,
                     ContentBlock::Image { .. } => 1000,
+                    ContentBlock::File { .. } => 1000,
+                    ContentBlock::Data { data, .. } => data.to_string().len() / 4,
                     ContentBlock::Custom { data, .. } => data.to_string().len() / 4,
                 })
                 .sum(),

@@ -7,12 +7,12 @@
 //! minimal `query` are implemented via an in-memory, per-workflow signal journal.
 
 use async_trait::async_trait;
-use layer0::dispatch::Dispatcher;
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::SignalPayload;
 use layer0::error::OrchError;
-use layer0::id::{OperatorId, WorkflowId};
+use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::middleware::{DispatchNext, DispatchStack};
-use layer0::operator::{Operator, OperatorInput, OperatorOutput};
+use layer0::operator::{Operator, OperatorInput};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -75,12 +75,28 @@ impl DispatchNext for OperatorDispatch<'_> {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         let op = self
             .agents
             .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input).await.map_err(OrchError::OperatorError)
+            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?
+            .clone();
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new(operator.as_str()));
+        tokio::spawn(async move {
+            match op.execute(input).await {
+                Ok(output) => {
+                    let _ = sender.send(DispatchEvent::Completed { output }).await;
+                }
+                Err(err) => {
+                    let _ = sender
+                        .send(DispatchEvent::Failed {
+                            error: OrchError::OperatorError(err),
+                        })
+                        .await;
+                }
+            }
+        });
+        Ok(handle)
     }
 }
 
@@ -91,7 +107,7 @@ impl Dispatcher for LocalOrch {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         let terminal = OperatorDispatch {
             agents: &self.agents,
         };

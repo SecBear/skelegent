@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use layer0::content::Content;
-use layer0::dispatch::Dispatcher;
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
-use layer0::id::{OperatorId, WorkflowId};
+use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
 use layer0::state::{SearchResult, StateStore};
 use serde_json::json;
@@ -41,12 +41,28 @@ impl Dispatcher for SimpleOrch {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         let op = self
             .agents
             .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input).await.map_err(OrchError::OperatorError)
+            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?
+            .clone();
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("simple-orch"));
+        tokio::spawn(async move {
+            match op.execute(input).await {
+                Ok(output) => {
+                    let _ = sender.send(DispatchEvent::Completed { output }).await;
+                }
+                Err(err) => {
+                    let _ = sender
+                        .send(DispatchEvent::Failed {
+                            error: OrchError::OperatorError(err),
+                        })
+                        .await;
+                }
+            }
+        });
+        Ok(handle)
     }
 }
 

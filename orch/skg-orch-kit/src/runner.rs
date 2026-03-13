@@ -297,7 +297,12 @@ impl<E: EffectInterpreter> OrchestratedRunner<E> {
             trace.events.push(ExecutionEvent::Dispatched {
                 operator: op_id.clone(),
             });
-            let output = self.dispatcher.dispatch(&op_id, op_input).await?;
+            let output = self
+                .dispatcher
+                .dispatch(&op_id, op_input)
+                .await?
+                .collect()
+                .await?;
 
             // Interpret effects into state updates + followups.
             let mut followups: Vec<(OperatorId, OperatorInput)> = vec![];

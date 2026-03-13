@@ -354,7 +354,7 @@ impl OpenAIProvider {
                             }
                             OpenAIContentPart::ImageUrl { image_url } => {
                                 content_blocks.push(ContentBlock::Image {
-                                    source: layer0::content::ImageSource::Url {
+                                    source: layer0::content::ContentSource::Url {
                                         url: image_url.url,
                                     },
                                     media_type: "image/png".into(),
@@ -783,8 +783,8 @@ fn blocks_to_openai_content(blocks: &[ContentBlock]) -> OpenAIContent {
                 ContentBlock::Text { text } => Some(OpenAIContentPart::Text { text: text.clone() }),
                 ContentBlock::Image { source, .. } => {
                     let url = match source {
-                        layer0::content::ImageSource::Url { url } => url.clone(),
-                        layer0::content::ImageSource::Base64 { data } => {
+                        layer0::content::ContentSource::Url { url } => url.clone(),
+                        layer0::content::ContentSource::Base64 { data } => {
                             format!("data:image/png;base64,{data}")
                         }
                         _ => return None,

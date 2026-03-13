@@ -6,7 +6,7 @@
 mod types;
 
 use futures_util::StreamExt;
-use layer0::content::{Content, ContentBlock, ImageSource as L0ImageSource};
+use layer0::content::{Content, ContentBlock, ContentSource as L0ContentSource};
 use rust_decimal::Decimal;
 use skg_auth::{AuthProvider, AuthRequest};
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
@@ -184,10 +184,10 @@ fn content_block_to_anthropic(block: &ContentBlock) -> Option<AnthropicContentBl
         }),
         ContentBlock::Image { source, media_type } => Some(AnthropicContentBlock::Image {
             source: match source {
-                L0ImageSource::Base64 { data } => {
+                L0ContentSource::Base64 { data } => {
                     AnthropicImageSource::Base64 { data: data.clone() }
                 }
-                L0ImageSource::Url { url } => AnthropicImageSource::Url { url: url.clone() },
+                L0ContentSource::Url { url } => AnthropicImageSource::Url { url: url.clone() },
                 _ => return None,
             },
             media_type: media_type.clone(),
@@ -223,10 +223,10 @@ fn parse_anthropic_infer_response(
                 text_parts.push(ContentBlock::Image {
                     source: match source {
                         AnthropicImageSource::Base64 { data } => {
-                            L0ImageSource::Base64 { data: data.clone() }
+                            L0ContentSource::Base64 { data: data.clone() }
                         }
                         AnthropicImageSource::Url { url } => {
-                            L0ImageSource::Url { url: url.clone() }
+                            L0ContentSource::Url { url: url.clone() }
                         }
                     },
                     media_type: media_type.clone(),

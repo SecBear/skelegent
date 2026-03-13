@@ -142,7 +142,7 @@ fn content_blocks_serde_round_trip() {
             text: "hello".into(),
         },
         ContentBlock::Image {
-            source: layer0::content::ImageSource::Url {
+            source: layer0::content::ContentSource::Url {
                 url: "https://example.com/img.png".into(),
             },
             media_type: "image/png".into(),

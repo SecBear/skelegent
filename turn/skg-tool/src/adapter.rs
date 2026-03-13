@@ -104,14 +104,32 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
         &self,
         operator: &OperatorId,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<layer0::DispatchHandle, OrchError> {
         let tool = self
             .registry
             .get(operator.as_str())
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
 
         let operator = ToolOperator::new(Arc::clone(tool));
-        operator.execute(input).await.map_err(OrchError::from)
+        let (handle, sender) =
+            layer0::DispatchHandle::channel(layer0::DispatchId::new("tool-registry"));
+        tokio::spawn(async move {
+            match operator.execute(input).await {
+                Ok(output) => {
+                    let _ = sender
+                        .send(layer0::DispatchEvent::Completed { output })
+                        .await;
+                }
+                Err(err) => {
+                    let _ = sender
+                        .send(layer0::DispatchEvent::Failed {
+                            error: OrchError::from(err),
+                        })
+                        .await;
+                }
+            }
+        });
+        Ok(handle)
     }
 }
 
@@ -249,7 +267,10 @@ mod tests {
         let output = orch
             .dispatch(&operator, input)
             .await
-            .expect("should succeed");
+            .expect("should succeed")
+            .collect()
+            .await
+            .expect("should complete");
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let text = output.message.as_text().expect("should be text");

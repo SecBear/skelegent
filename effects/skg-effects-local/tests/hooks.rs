@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use layer0::dispatch::Dispatcher;
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OrchError, StateError};
-use layer0::id::{OperatorId, WorkflowId};
+use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
 use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
 use layer0::state::{Lifetime, StateStore, StoreOptions};
@@ -24,11 +24,14 @@ impl Dispatcher for NoOpOrch {
         &self,
         _operator: &OperatorId,
         _input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
-        Ok(OperatorOutput::new(
-            layer0::content::Content::text("ok"),
-            ExitReason::Complete,
-        ))
+    ) -> Result<DispatchHandle, OrchError> {
+        let output =
+            OperatorOutput::new(layer0::content::Content::text("ok"), ExitReason::Complete);
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("noop"));
+        tokio::spawn(async move {
+            let _ = sender.send(DispatchEvent::Completed { output }).await;
+        });
+        Ok(handle)
     }
 }
 

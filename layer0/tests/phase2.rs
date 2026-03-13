@@ -201,6 +201,9 @@ async fn local_orchestrator_dispatch_to_echo() {
     let output = orch
         .dispatch(&OperatorId::new("echo"), input)
         .await
+        .unwrap()
+        .collect()
+        .await
         .unwrap();
     assert_eq!(output.message, Content::text("dispatch test"));
 }
@@ -226,6 +229,9 @@ async fn local_orchestrator_is_usable_as_dyn_dispatcher() {
     let orch: Box<dyn layer0::dispatch::Dispatcher> = Box::new(orch);
     let output = orch
         .dispatch(&OperatorId::new("echo"), simple_input("dyn"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("dyn"));
@@ -256,9 +262,15 @@ async fn integration_compose_all_implementations() {
     let output_a = orch
         .dispatch(&OperatorId::new("agent-a"), simple_input("task for A"))
         .await
+        .unwrap()
+        .collect()
+        .await
         .unwrap();
     let output_b = orch
         .dispatch(&OperatorId::new("agent-b"), simple_input("task for B"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
 

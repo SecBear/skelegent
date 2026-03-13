@@ -69,12 +69,12 @@ pub mod test_utils;
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
 pub use context::{Message, MessageMeta, Role};
-pub use dispatch::Dispatcher;
+pub use dispatch::{Artifact, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher};
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
-pub use id::{OperatorId, SessionId, WorkflowId};
+pub use id::{DispatchId, OperatorId, SessionId, WorkflowId};
 pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy};
 pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
