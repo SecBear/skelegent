@@ -13,7 +13,6 @@ keywords = ["skelegent", "ai", "agent", "orchestration", "composition"]
 [dependencies]
 async-trait = "0.1"
 layer0 = { path = "../../layer0", version = "0.4.1" }
-rust_decimal = "1"
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
@@ -25,6 +24,6 @@ tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
-serde_json = "1"
+rust_decimal = "1"
 
 layer0 = { path = "../../layer0", features = ["test-utils"], version = "0.4.1" }

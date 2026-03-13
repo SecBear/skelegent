@@ -2,34 +2,34 @@ use rust_decimal::Decimal;
 
 /// Snapshot of orchestration-local spend against a hard budget limit.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BudgetSnapshot {
+pub(crate) struct BudgetSnapshot {
     spent: Decimal,
     hard_limit: Decimal,
 }
 
 impl BudgetSnapshot {
     /// Create a new budget snapshot.
-    pub fn new(spent: Decimal, hard_limit: Decimal) -> Self {
+    pub(crate) fn new(spent: Decimal, hard_limit: Decimal) -> Self {
         Self { spent, hard_limit }
     }
 
     /// Spend already recorded against this budget.
-    pub fn spent(&self) -> Decimal {
+    pub(crate) fn spent(&self) -> Decimal {
         self.spent
     }
 
     /// Hard upper limit for this budget.
-    pub fn hard_limit(&self) -> Decimal {
+    pub(crate) fn hard_limit(&self) -> Decimal {
         self.hard_limit
     }
 
     /// Remaining headroom before the hard limit is exhausted.
-    pub fn remaining(&self) -> Decimal {
+    pub(crate) fn remaining(&self) -> Decimal {
         (self.hard_limit - self.spent).max(Decimal::ZERO)
     }
 
     /// Decide whether additional spend can be admitted.
-    pub fn decide(&self, additional_spend: Decimal) -> BudgetDecision {
+    pub(crate) fn decide(&self, additional_spend: Decimal) -> BudgetDecision {
         let remaining = self.remaining();
 
         if additional_spend <= remaining {
@@ -46,7 +46,7 @@ impl BudgetSnapshot {
 
 /// Result of checking a hard budget limit.
 #[derive(Debug, Clone, PartialEq)]
-pub enum BudgetDecision {
+pub(crate) enum BudgetDecision {
     /// Additional work fits under the hard limit.
     Allow {
         /// Remaining headroom after admitting the work.
