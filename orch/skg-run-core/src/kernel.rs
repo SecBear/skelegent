@@ -103,6 +103,14 @@ pub enum KernelError {
         /// Wait point supplied by the caller.
         found: WaitPointId,
     },
+    /// A timer wait was requested without a wake deadline, which would strand the run.
+    #[error("timer wait for run {run_id} at wait point {wait_point} requires a wake deadline")]
+    TimerWithoutDeadline {
+        /// Run that would be stranded.
+        run_id: RunId,
+        /// Wait point missing its deadline.
+        wait_point: WaitPointId,
+    },
 }
 
 /// Stateless pure transition kernel for durable orchestration.
@@ -155,6 +163,9 @@ impl RunKernel {
         wake_at: Option<PortableWakeDeadline>,
     ) -> Result<RunTransition, KernelError> {
         let run_id = Self::running_run_id(current, "wait")?;
+        if reason == WaitReason::Timer && wake_at.is_none() {
+            return Err(KernelError::TimerWithoutDeadline { run_id, wait_point });
+        }
         let mut commands = vec![OrchestrationCommand::EnterWaitPoint {
             run_id: run_id.clone(),
             wait_point: wait_point.clone(),

@@ -336,9 +336,10 @@ fn tool_schemas(registry: &ToolRegistry) -> Vec<ToolSchema> {
 /// response. Tool calls are dispatched normally; structured output is
 /// extracted only when the model returns text without tool calls.
 ///
-/// Returns `(validated_value, operator_output)` on success. If the loop must pause
-/// for tool approval before a validated value exists, returns `(None,
-/// operator_output)` with [`ExitReason::AwaitingApproval`].
+/// Returns `(Some(validated_value), operator_output)` on success. Returns `(None,
+/// operator_output)` when the loop exits before producing a validated value — the caller
+/// **must** inspect [`OperatorOutput::exit_reason`] to determine whether the exit is
+/// resumable ([`ExitReason::AwaitingApproval`]) or terminal (budget, timeout, safety, etc.).
 pub async fn react_loop_structured<P: Provider>(
     ctx: &mut Context,
     provider: &P,

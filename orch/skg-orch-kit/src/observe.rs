@@ -49,12 +49,28 @@ impl ContextObserver {
     /// empty, the observer may have lagged behind, or the stream may be closed.
     pub fn drain_available(&mut self) -> ObservationBatch {
         let mut events = Vec::new();
+        let mut total_lagged: u64 = 0;
 
         loop {
             match self.try_recv() {
                 ObservationTry::Event(event) => events.push(event),
-                status => {
+                ObservationTry::Lagged(skipped) => {
+                    // Broadcast channel repositioned — keep draining post-lag events
+                    total_lagged += skipped;
+                }
+                ObservationTry::Empty => {
+                    let status = if total_lagged > 0 {
+                        ObservationTry::Lagged(total_lagged)
+                    } else {
+                        ObservationTry::Empty
+                    };
                     return ObservationBatch { events, status };
+                }
+                ObservationTry::Closed => {
+                    return ObservationBatch {
+                        events,
+                        status: ObservationTry::Closed,
+                    };
                 }
             }
         }
@@ -102,4 +118,73 @@ pub struct ObservationBatch {
     pub events: Vec<ContextEvent>,
     /// Why draining stopped.
     pub status: ObservationTry,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skg_context_engine::ContextMutation;
+    use std::time::Instant;
+
+    fn dummy_event() -> ContextEvent {
+        ContextEvent {
+            timestamp: Instant::now(),
+            mutation: ContextMutation::MessagesSet {
+                previous_len: 0,
+                new_len: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn drain_available_returns_empty_on_no_events() {
+        let (tx, _) = broadcast::channel::<ContextEvent>(16);
+        let mut observer = ContextObserver::subscribe(&tx);
+        let batch = observer.drain_available();
+        assert!(batch.events.is_empty());
+        assert!(matches!(batch.status, ObservationTry::Empty));
+    }
+
+    #[test]
+    fn drain_available_collects_buffered_events() {
+        let (tx, _) = broadcast::channel::<ContextEvent>(16);
+        let mut observer = ContextObserver::subscribe(&tx);
+        tx.send(dummy_event()).unwrap();
+        tx.send(dummy_event()).unwrap();
+        let batch = observer.drain_available();
+        assert_eq!(batch.events.len(), 2);
+        assert!(matches!(batch.status, ObservationTry::Empty));
+    }
+
+    #[test]
+    fn drain_available_continues_past_lag() {
+        // Capacity 2: sending 3 events causes the slow subscriber to lag
+        let (tx, _) = broadcast::channel::<ContextEvent>(2);
+        let mut observer = ContextObserver::subscribe(&tx);
+        // Send 3 events into a capacity-2 channel — oldest is evicted
+        tx.send(dummy_event()).unwrap();
+        tx.send(dummy_event()).unwrap();
+        tx.send(dummy_event()).unwrap();
+        let batch = observer.drain_available();
+        // Should have recovered post-lag events, not returned empty
+        assert!(!batch.events.is_empty(), "should recover events after lag");
+        assert!(
+            matches!(batch.status, ObservationTry::Lagged(_)),
+            "should report lag"
+        );
+    }
+
+    #[test]
+    fn drain_available_closed_after_lag_reports_closed() {
+        let (tx, _) = broadcast::channel::<ContextEvent>(2);
+        let mut observer = ContextObserver::subscribe(&tx);
+        tx.send(dummy_event()).unwrap();
+        tx.send(dummy_event()).unwrap();
+        tx.send(dummy_event()).unwrap();
+        // Drop sender so channel closes after lag
+        drop(tx);
+        let batch = observer.drain_available();
+        // Closed takes priority over Lagged
+        assert!(matches!(batch.status, ObservationTry::Closed));
+    }
 }

@@ -434,3 +434,20 @@ fn waiting_rejects_direct_complete_and_fail() {
         }
     );
 }
+
+#[test]
+fn timer_wait_without_deadline_is_rejected() {
+    let run_id = RunId::new("run-1");
+    let result = RunKernel::apply(
+        Some(&RunView::running(run_id.clone())),
+        RunEvent::Wait {
+            wait_point: WaitPointId::new("wait-timer"),
+            reason: WaitReason::Timer,
+            wake_at: None,
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(KernelError::TimerWithoutDeadline { .. })
+    ));
+}
