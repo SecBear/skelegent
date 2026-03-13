@@ -30,9 +30,7 @@ Those remain backend implementation details.
 
 `Dispatcher` remains the immediate invocation primitive. Calling `dispatch` asks an implementation to invoke an operator now; it is not the durable run/control contract.
 
-`Signalable::signal` remains asynchronous control-plane messaging. Durable `resume` is a different operation: it satisfies a specific durable wait point with structured input. Signals and resume MUST NOT be collapsed into one primitive.
-
-`Queryable::query` remains read-only inspection at the Layer 0 orchestration boundary. Durable run inspection MAY build on similar ideas above Layer 0, but the public durable contract is not required to reuse the same wire model.
+Durable run/control lives above Layer 0 in `skg-run-core` via `RunStarter`, `RunController`, and the associated durable nouns. Signals remain asynchronous control-plane messages; durable `resume` is a different operation that satisfies a specific durable wait point with structured input. Signals and resume MUST NOT be collapsed into one primitive.
 
 `StateStore` remains the memory/data-plane contract. A backend MAY store both memory and durable-run metadata in the same physical system, but durable lifecycle semantics MUST NOT be presented as `StateStore` behavior.
 

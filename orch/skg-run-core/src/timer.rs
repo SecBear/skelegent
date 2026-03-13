@@ -32,6 +32,10 @@ impl ScheduledTimer {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TimerStoreError {
     /// The requested timer does not exist.
+    ///
+    /// Backends MAY surface this for direct diagnostic queries, but
+    /// [`TimerStore::cancel_timer`] is defined as idempotent and SHOULD return
+    /// `Ok(())` when a timer is already absent.
     #[error("timer not found for run {run_id} wait point {wait_point}")]
     TimerNotFound {
         /// Run that was queried.
@@ -54,6 +58,10 @@ pub trait TimerStore: Send + Sync {
     async fn schedule_timer(&self, timer: ScheduledTimer) -> Result<(), TimerStoreError>;
 
     /// Cancel a previously scheduled wake-up deadline.
+    ///
+    /// This operation is idempotent: cancelling an already-absent timer MUST
+    /// succeed so durable backends can safely process portable `CancelWake`
+    /// commands without reconstructing whether a timer was ever scheduled.
     async fn cancel_timer(
         &self,
         run_id: &RunId,

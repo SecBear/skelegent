@@ -22,16 +22,14 @@ use skg_tool::{ToolCallContext, ToolRegistry};
 use skg_turn::infer::InferResponse;
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 
-async fn infer_stream_once<P, F>(
+async fn infer_stream_once<P>(
     ctx: &mut Context,
     provider: &P,
     tools: &ToolRegistry,
     config: &ReactLoopConfig,
-    on_event: std::sync::Arc<F>,
-) -> Result<InferResponse, EngineError>
+) -> Result<(InferResponse, Vec<StreamEvent>), EngineError>
 where
     P: StreamProvider,
-    F: Fn(StreamEvent) + Send + Sync + 'static,
 {
     ctx.enter_boundary::<StreamInferBoundary>().await?;
 
@@ -53,21 +51,16 @@ where
         let mut events = buffered_events.lock().unwrap();
         std::mem::take(&mut *events)
     };
-    for event in drained_events {
-        on_event(event);
-    }
-    Ok(response)
+    Ok((response, drained_events))
 }
-
-/// Run the streaming ReAct loop.
 ///
 /// Same flow as [`react_loop()`](crate::react_loop) but streams inference
 /// output through `on_event`. Tool dispatch, approval checking, budget guards,
 /// and all rules work identically.
 ///
-/// The `on_event` callback receives [`StreamEvent`]s during inference. After
-/// streaming completes, the response is appended to context and tool dispatch
-/// proceeds normally (non-streaming).
+/// The `on_event` callback receives [`StreamEvent`]s only after the streamed
+/// response has passed the stream boundary and been committed into context via
+/// [`AppendResponse`]. Tool dispatch then proceeds normally (non-streaming).
 ///
 /// ```ignore
 /// let output = stream_react_loop(
@@ -89,22 +82,18 @@ pub async fn stream_react_loop<P: StreamProvider>(
     let on_event = std::sync::Arc::new(on_event);
     loop {
         // Phase 1: Stream inference behind the governed boundary
-        let response = match infer_stream_once(
-            ctx,
-            provider,
-            tools,
-            config,
-            std::sync::Arc::clone(&on_event),
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => return structured_exit_output(err, ctx),
-        };
+        let (response, streamed_events) =
+            match infer_stream_once(ctx, provider, tools, config).await {
+                Ok(result) => result,
+                Err(err) => return structured_exit_output(err, ctx),
+            };
 
         // Phase 3: Append response to context (rules fire)
         if let Err(err) = ctx.run(AppendResponse::new(response.clone())).await {
             return structured_exit_output(err, ctx);
+        }
+        for event in streamed_events {
+            on_event(event);
         }
         ctx.metrics.turns_completed += 1;
 
@@ -409,6 +398,58 @@ mod tests {
                 .iter()
                 .any(|message| message.text_content() == "after stream marker"),
             "after rule must run after a successful provider call"
+        );
+    }
+
+    struct ExitBeforeStreamAppend;
+
+    #[async_trait]
+    impl ContextOp for ExitBeforeStreamAppend {
+        type Output = ();
+
+        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+            Err(EngineError::Exit {
+                reason: ExitReason::Timeout,
+                detail: "append boundary timeout".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_react_loop_does_not_emit_events_before_append_commit() {
+        let provider = FallbackStreamProvider::new();
+        provider.inner.respond_with_text("hello before append exit");
+
+        let mut ctx =
+            Context::with_rules(vec![Rule::before::<crate::ops::response::AppendResponse>(
+                "exit before append commit",
+                100,
+                ExitBeforeStreamAppend,
+            )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let events = Arc::new(Mutex::new(Vec::<StreamEvent>::new()));
+        let events_clone = Arc::clone(&events);
+
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            move |event| events_clone.lock().unwrap().push(event),
+        )
+        .await
+        .expect("append exit should return structured operator output");
+
+        assert_eq!(output.exit_reason, ExitReason::Timeout);
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "stream events must not be emitted before the streamed turn is committed to context"
         );
     }
 
