@@ -330,7 +330,9 @@ fn tool_schemas(registry: &ToolRegistry) -> Vec<ToolSchema> {
 /// response. Tool calls are dispatched normally; structured output is
 /// extracted only when the model returns text without tool calls.
 ///
-/// Returns `(validated_value, operator_output)` on success.
+/// Returns `(validated_value, operator_output)` on success. If the loop must pause
+/// for tool approval before a validated value exists, returns `(None,
+/// operator_output)` with [`ExitReason::AwaitingApproval`].
 pub async fn react_loop_structured<P: Provider>(
     ctx: &mut Context,
     provider: &P,
@@ -338,7 +340,7 @@ pub async fn react_loop_structured<P: Provider>(
     tool_ctx: &ToolCallContext,
     config: &ReactLoopConfig,
     output: &OutputSchema,
-) -> Result<(Value, OperatorOutput), EngineError> {
+) -> Result<(Option<Value>, OperatorOutput), EngineError> {
     let output_tool_schema = if output.mode == OutputMode::ToolCall {
         Some(output.tool_schema())
     } else {
@@ -360,7 +362,7 @@ pub async fn react_loop_structured<P: Provider>(
         match output.extract(&result.response) {
             Ok(value) => {
                 let op_output = make_output(result.response, ExitReason::Complete, ctx);
-                return Ok((value, op_output));
+                return Ok((Some(value), op_output));
             }
             Err(OutputError::ValidationFailed { message, .. }) => {
                 output_retries += 1;
@@ -407,9 +409,8 @@ pub async fn react_loop_structured<P: Provider>(
                 )
                 .await?;
                 if awaiting {
-                    return Err(EngineError::Halted {
-                        reason: "tool approval required during structured output loop".into(),
-                    });
+                    let op_output = make_output(result.response, ExitReason::AwaitingApproval, ctx);
+                    return Ok((None, op_output));
                 }
                 continue;
             }
@@ -425,9 +426,9 @@ pub async fn react_loop_structured<P: Provider>(
                     )
                     .await?;
                     if awaiting {
-                        return Err(EngineError::Halted {
-                            reason: "tool approval required during structured output loop".into(),
-                        });
+                        let op_output =
+                            make_output(result.response, ExitReason::AwaitingApproval, ctx);
+                        return Ok((None, op_output));
                     }
                     continue;
                 }
@@ -863,6 +864,7 @@ mod tests {
         .await
         .unwrap();
 
+        let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Tokyo");
         assert_eq!(value["population"], 13960000_u64);
         assert!(matches!(output.exit_reason, ExitReason::Complete));
@@ -905,6 +907,7 @@ mod tests {
         .await
         .unwrap();
 
+        let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Tokyo");
         assert_eq!(value["population"], 13960000_u64);
         assert_eq!(provider.call_count(), 2);
@@ -974,6 +977,7 @@ mod tests {
         .await
         .unwrap();
 
+        let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Berlin");
         assert_eq!(provider.call_count(), 1);
     }
@@ -1046,8 +1050,64 @@ mod tests {
         .await
         .unwrap();
 
+        let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Tokyo");
         assert_eq!(provider.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn structured_function_tools_preserve_awaiting_approval_exit() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_calls(vec![
+            ("safe_tool", "c1", json!({ "query": "status" })),
+            ("dangerous_tool", "c2", json!({ "cmd": "deploy" })),
+        ]);
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(MockTool { name: "safe_tool" }));
+        tools.register(Arc::new(ApprovalTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let schema = OutputSchema::tool_call(json!({}), city_validator);
+
+        let (value, output) = react_loop_structured(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            &schema,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            value.is_none(),
+            "approval pause must not fabricate structured output"
+        );
+        assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
+        assert_eq!(output.effects.len(), 1);
+        match &output.effects[0] {
+            Effect::ToolApprovalRequired {
+                tool_name,
+                call_id,
+                input,
+            } => {
+                assert_eq!(tool_name, "dangerous_tool");
+                assert_eq!(call_id, "c2");
+                assert_eq!(input, &json!({ "cmd": "deploy" }));
+            }
+            other => panic!("expected ToolApprovalRequired, got {other:?}"),
+        }
+
+        // Safe tool should not run once the loop pauses for approval.
+        assert_eq!(provider.call_count(), 1);
+        assert_eq!(ctx.metrics.tool_calls_total, 0);
     }
 
     #[tokio::test]
