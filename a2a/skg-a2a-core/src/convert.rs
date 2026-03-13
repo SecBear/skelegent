@@ -42,6 +42,17 @@ fn part_to_content_block(part: &Part) -> ContentBlock {
                 }
             }
         }
+        PartContent::Raw { raw } => {
+            let media_type = part
+                .media_type
+                .clone()
+                .unwrap_or_else(|| "application/octet-stream".into());
+            ContentBlock::File {
+                source: ContentSource::Base64 { data: raw.clone() },
+                media_type,
+                filename: part.filename.clone(),
+            }
+        }
         PartContent::Data { data } => ContentBlock::Data {
             data: data.clone(),
             media_type: Some("application/json".into()),
@@ -205,14 +216,14 @@ pub fn content_to_parts(content: &Content) -> Vec<Part> {
 /// Convert an A2A [`TaskState`] to a skelegent [`RunStatus`].
 ///
 /// Lossy mappings:
-/// - `Submitted` → `Running` (closest approximation; no "pending" status)
+/// - `Unspecified` / `Submitted` → `Running` (not-yet-known defaults to running)
 /// - `Rejected` → `Failed`
 /// - `InputRequired` / `AuthRequired` → `Waiting`
 /// - `Canceled` (one L) → `Cancelled` (two L's)
 pub fn task_state_to_run_status(state: TaskState) -> RunStatus {
     #[allow(unreachable_patterns)]
     match state {
-        TaskState::Working | TaskState::Submitted => RunStatus::Running,
+        TaskState::Unspecified | TaskState::Working | TaskState::Submitted => RunStatus::Running,
         TaskState::InputRequired | TaskState::AuthRequired => RunStatus::Waiting,
         TaskState::Completed => RunStatus::Completed,
         TaskState::Failed | TaskState::Rejected => RunStatus::Failed,
@@ -283,14 +294,14 @@ pub fn run_artifact_to_a2a_artifact(artifact: &RunArtifact) -> A2aArtifact {
 /// Convert an A2A [`A2aMessage`] into a skelegent [`OperatorInput`].
 ///
 /// The message role determines the trigger type:
-/// - `A2aRole::User` → `TriggerType::User`
+/// - `A2aRole::Unspecified` / `A2aRole::User` → `TriggerType::User`
 /// - `A2aRole::Agent` → `TriggerType::Task`
 ///
 /// Metadata from the A2A message is passed through as-is.
 pub fn a2a_message_to_operator_input(msg: &A2aMessage) -> OperatorInput {
     #[allow(unreachable_patterns)]
     let trigger = match msg.role {
-        A2aRole::User => TriggerType::User,
+        A2aRole::Unspecified | A2aRole::User => TriggerType::User,
         A2aRole::Agent => TriggerType::Task,
         _ => TriggerType::User,
     };
@@ -350,6 +361,7 @@ mod tests {
     #[test]
     fn task_state_covers_all_variants() {
         let cases = [
+            (TaskState::Unspecified, RunStatus::Running),
             (TaskState::Submitted, RunStatus::Running),
             (TaskState::Working, RunStatus::Running),
             (TaskState::Completed, RunStatus::Completed),
@@ -424,5 +436,46 @@ mod tests {
             }
             other => panic!("expected Data, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn raw_part_becomes_file_block() {
+        let part = Part {
+            content: PartContent::Raw {
+                raw: "c29tZSBiaW5hcnk=".into(),
+            },
+            media_type: Some("application/pdf".into()),
+            filename: Some("doc.pdf".into()),
+            metadata: None,
+        };
+        let block = part_to_content_block(&part);
+        match block {
+            ContentBlock::File {
+                source: ContentSource::Base64 { data },
+                media_type,
+                filename,
+            } => {
+                assert_eq!(data, "c29tZSBiaW5hcnk=");
+                assert_eq!(media_type, "application/pdf");
+                assert_eq!(filename.as_deref(), Some("doc.pdf"));
+            }
+            other => panic!("expected File with Base64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unspecified_role_maps_to_user_trigger() {
+        let msg = A2aMessage {
+            message_id: "test".into(),
+            context_id: None,
+            task_id: None,
+            role: A2aRole::Unspecified,
+            parts: vec![Part::text("hello")],
+            metadata: None,
+            extensions: Vec::new(),
+            reference_task_ids: Vec::new(),
+        };
+        let input = a2a_message_to_operator_input(&msg);
+        assert!(matches!(input.trigger, TriggerType::User));
     }
 }

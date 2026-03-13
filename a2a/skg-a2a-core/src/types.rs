@@ -13,13 +13,15 @@ use uuid::Uuid;
 /// The role of a message sender in the A2A protocol.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum A2aRole {
+    /// Unspecified role (proto3 default).
+    #[serde(rename = "ROLE_UNSPECIFIED")]
+    Unspecified,
     /// A human or upstream caller.
-    #[serde(rename = "user")]
+    #[serde(rename = "ROLE_USER", alias = "user")]
     User,
     /// An AI agent.
-    #[serde(rename = "agent")]
+    #[serde(rename = "ROLE_AGENT", alias = "agent")]
     Agent,
 }
 
@@ -67,6 +69,11 @@ pub enum PartContent {
         /// The text string.
         text: String,
     },
+    /// Raw binary data (base64-encoded in JSON).
+    Raw {
+        /// Base64-encoded binary data.
+        raw: String,
+    },
     /// URL pointing to content.
     Url {
         /// The URL.
@@ -87,6 +94,16 @@ impl Part {
             metadata: None,
             filename: None,
             media_type: None,
+        }
+    }
+
+    /// Create a raw binary part with a media type.
+    pub fn raw(data: String, media_type: impl Into<String>) -> Self {
+        Self {
+            content: PartContent::Raw { raw: data },
+            metadata: None,
+            filename: None,
+            media_type: Some(media_type.into()),
         }
     }
 
@@ -177,31 +194,33 @@ impl A2aMessage {
 /// Maps to the proto3 `TaskState` enum.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum TaskState {
+    /// Unspecified state (proto3 default, value 0).
+    #[serde(rename = "TASK_STATE_UNSPECIFIED")]
+    Unspecified,
     /// Task has been received but not yet started.
-    #[serde(rename = "submitted")]
+    #[serde(rename = "TASK_STATE_SUBMITTED", alias = "submitted")]
     Submitted,
     /// Task is actively being processed.
-    #[serde(rename = "working")]
+    #[serde(rename = "TASK_STATE_WORKING", alias = "working")]
     Working,
     /// Task finished successfully.
-    #[serde(rename = "completed")]
+    #[serde(rename = "TASK_STATE_COMPLETED", alias = "completed")]
     Completed,
     /// Task failed.
-    #[serde(rename = "failed")]
+    #[serde(rename = "TASK_STATE_FAILED", alias = "failed")]
     Failed,
     /// Task was canceled by the caller.
-    #[serde(rename = "canceled")]
+    #[serde(rename = "TASK_STATE_CANCELED", alias = "canceled")]
     Canceled,
     /// Agent needs more input from the caller.
-    #[serde(rename = "input_required")]
+    #[serde(rename = "TASK_STATE_INPUT_REQUIRED", alias = "input_required")]
     InputRequired,
     /// Agent rejected the task.
-    #[serde(rename = "rejected")]
+    #[serde(rename = "TASK_STATE_REJECTED", alias = "rejected")]
     Rejected,
     /// Authentication is required before proceeding.
-    #[serde(rename = "auth_required")]
+    #[serde(rename = "TASK_STATE_AUTH_REQUIRED", alias = "auth_required")]
     AuthRequired,
 }
 
@@ -374,12 +393,12 @@ pub struct TaskArtifactUpdateEvent {
     pub artifact: A2aArtifact,
 
     /// If `true`, append parts to an existing artifact with the same ID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub append: Option<bool>,
+    #[serde(default)]
+    pub append: bool,
 
     /// If `true`, this is the last chunk for this artifact.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_chunk: Option<bool>,
+    #[serde(default)]
+    pub last_chunk: bool,
 
     /// Arbitrary metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -826,17 +845,27 @@ mod tests {
 
     #[test]
     fn role_serialization() {
-        assert_eq!(serde_json::to_string(&A2aRole::User).unwrap(), r#""user""#);
+        assert_eq!(
+            serde_json::to_string(&A2aRole::User).unwrap(),
+            r#""ROLE_USER""#
+        );
         assert_eq!(
             serde_json::to_string(&A2aRole::Agent).unwrap(),
-            r#""agent""#
+            r#""ROLE_AGENT""#
         );
+        // proto3 canonical deserializes
+        let back: A2aRole = serde_json::from_str(r#""ROLE_AGENT""#).unwrap();
+        assert_eq!(back, A2aRole::Agent);
+        // old snake_case still deserializes (backward compat)
         let back: A2aRole = serde_json::from_str(r#""agent""#).unwrap();
         assert_eq!(back, A2aRole::Agent);
+        let back: A2aRole = serde_json::from_str(r#""user""#).unwrap();
+        assert_eq!(back, A2aRole::User);
     }
 
     #[test]
     fn task_state_terminal() {
+        assert!(!TaskState::Unspecified.is_terminal());
         assert!(!TaskState::Submitted.is_terminal());
         assert!(!TaskState::Working.is_terminal());
         assert!(TaskState::Completed.is_terminal());
@@ -849,20 +878,44 @@ mod tests {
 
     #[test]
     fn task_state_round_trip() {
-        for state in [
-            TaskState::Submitted,
-            TaskState::Working,
-            TaskState::Completed,
-            TaskState::Failed,
-            TaskState::Canceled,
-            TaskState::InputRequired,
-            TaskState::Rejected,
-            TaskState::AuthRequired,
+        for (state, expected_json) in [
+            (TaskState::Unspecified, r#""TASK_STATE_UNSPECIFIED""#),
+            (TaskState::Submitted, r#""TASK_STATE_SUBMITTED""#),
+            (TaskState::Working, r#""TASK_STATE_WORKING""#),
+            (TaskState::Completed, r#""TASK_STATE_COMPLETED""#),
+            (TaskState::Failed, r#""TASK_STATE_FAILED""#),
+            (TaskState::Canceled, r#""TASK_STATE_CANCELED""#),
+            (TaskState::InputRequired, r#""TASK_STATE_INPUT_REQUIRED""#),
+            (TaskState::Rejected, r#""TASK_STATE_REJECTED""#),
+            (TaskState::AuthRequired, r#""TASK_STATE_AUTH_REQUIRED""#),
         ] {
             let json = serde_json::to_string(&state).unwrap();
+            assert_eq!(json, expected_json, "serialization mismatch for {state:?}");
             let back: TaskState = serde_json::from_str(&json).unwrap();
             assert_eq!(back, state, "round-trip failed for {json}");
         }
+    }
+
+    #[test]
+    fn task_state_backward_compat() {
+        // Old snake_case values must still deserialize
+        let back: TaskState = serde_json::from_str(r#""submitted""#).unwrap();
+        assert_eq!(back, TaskState::Submitted);
+        let back: TaskState = serde_json::from_str(r#""working""#).unwrap();
+        assert_eq!(back, TaskState::Working);
+        let back: TaskState = serde_json::from_str(r#""input_required""#).unwrap();
+        assert_eq!(back, TaskState::InputRequired);
+        let back: TaskState = serde_json::from_str(r#""auth_required""#).unwrap();
+        assert_eq!(back, TaskState::AuthRequired);
+    }
+
+    #[test]
+    fn part_raw_round_trip() {
+        let part = Part::raw("SGVsbG8gV29ybGQ=".into(), "application/octet-stream");
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(json.contains(r#""raw":"SGVsbG8gV29ybGQ=""#), "got: {json}");
+        let back: Part = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, part);
     }
 
     #[test]
