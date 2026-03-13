@@ -535,6 +535,22 @@ pub struct CancelTaskRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// Request to subscribe to updates for an existing task.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscribeToTaskRequest {
+    /// Tenant identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
+
+    /// Task ID to subscribe to.
+    pub id: String,
+
+    /// Maximum number of history messages to replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_length: Option<u32>,
+}
+
 /// Request to list tasks, optionally filtered.
 #[non_exhaustive]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -562,6 +578,13 @@ pub struct ListTasksRequest {
 pub struct ListTasksResponse {
     /// The matching tasks.
     pub tasks: Vec<A2aTask>,
+}
+
+impl ListTasksResponse {
+    /// Create a new response with the given tasks.
+    pub fn new(tasks: Vec<A2aTask>) -> Self {
+        Self { tasks }
+    }
 }
 
 // ---------------------------------------------------------------------------

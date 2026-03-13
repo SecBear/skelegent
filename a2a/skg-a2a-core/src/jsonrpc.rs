@@ -121,4 +121,6 @@ pub mod methods {
     pub const LIST_PUSH_CONFIGS: &str = "tasks/pushNotificationConfigs/list";
     /// Delete push notification config.
     pub const DELETE_PUSH_CONFIG: &str = "tasks/pushNotificationConfigs/delete";
+    /// Get the extended agent card.
+    pub const GET_EXTENDED_AGENT_CARD: &str = "extendedAgentCard/get";
 }

@@ -32,5 +32,6 @@ pub use error::A2aError;
 pub use jsonrpc::{JsonRpcError, JsonRpcErrorResponse, JsonRpcRequest, JsonRpcResponse};
 pub use types::{
     A2aArtifact, A2aMessage, A2aRole, A2aTask, Part, PartContent, SendMessageRequest,
-    SendMessageResponse, StreamResponse, TaskState, TaskStatus,
+    SendMessageResponse, StreamResponse, SubscribeToTaskRequest, TaskState, TaskStatus,
 };
+
