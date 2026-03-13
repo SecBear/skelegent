@@ -55,6 +55,14 @@ pub enum OrchestrationCommand {
         /// Backend-neutral wake deadline encoded as canonical RFC 3339 UTC.
         wake_at: PortableWakeDeadline,
     },
+    /// Cancel a previously scheduled durable wake-up for a wait point.
+    CancelWake {
+        /// Durable run whose wake should be removed.
+        run_id: RunId,
+        /// Wait point whose wake is no longer active.
+        wait_point: WaitPointId,
+    },
+
     /// Commit successful terminal completion for the run.
     CompleteRun {
         /// Durable run that completed.

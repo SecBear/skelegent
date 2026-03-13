@@ -15,23 +15,17 @@ It owns:
 
 ## Protocol
 
-`layer0::Dispatcher`, `layer0::Signalable`, and `layer0::Queryable` define the immediate orchestration boundary in Layer 0:
+`layer0::Dispatcher` defines the immediate invocation boundary in Layer 0:
 
 **Dispatcher:**
 
 - `dispatch` — invoke an operator by ID
 
-**Signalable:**
-
-- `signal` — fire-and-forget inter-workflow messaging
-
-**Queryable:**
-
-- `query` — read-only workflow state inspection
-
 Related: `dispatch_many()` is a free function in `skg-orch-kit` for concurrent dispatch.
 
-The Layer 0 protocol does not prescribe whether execution is local, remote, durable, or ephemeral. Durable run/control is a higher-level orchestration contract above Layer 0; it must not be smuggled into `Dispatcher`, `Signalable`, `Queryable`, or `StateStore`.
+Durable run/control lives above Layer 0 in `skg-run-core` via traits such as `RunStarter` and `RunController`. Those surfaces cover starting a run, inspecting status, signalling it, resuming a specific wait point, cancelling it, and reading its terminal outcome.
+
+The Layer 0 protocol does not prescribe whether execution is local, remote, durable, or ephemeral. Durable run/control is a higher-level orchestration contract above Layer 0; it must not be smuggled into `Dispatcher` or `StateStore`.
 
 ## Durable Run/Control Boundary
 

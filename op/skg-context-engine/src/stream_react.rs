@@ -37,14 +37,25 @@ where
 
     let compile_config = config.compile_config(tools, ctx);
     let request = build_stream_request(ctx, &compile_config);
-    let cb = std::sync::Arc::clone(&on_event);
+    let buffered_events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let buffered_for_provider = std::sync::Arc::clone(&buffered_events);
 
     let response = provider
-        .infer_stream(request, move |event| cb(event))
+        .infer_stream(request, move |event| {
+            buffered_for_provider.lock().unwrap().push(event)
+        })
         .await
         .map_err(EngineError::Provider)?;
 
     ctx.exit_boundary::<StreamInferBoundary>().await?;
+
+    let drained_events = {
+        let mut events = buffered_events.lock().unwrap();
+        std::mem::take(&mut *events)
+    };
+    for event in drained_events {
+        on_event(event);
+    }
     Ok(response)
 }
 
@@ -398,6 +409,57 @@ mod tests {
                 .iter()
                 .any(|message| message.text_content() == "after stream marker"),
             "after rule must run after a successful provider call"
+        );
+    }
+
+    struct ExitAfterStreamInference;
+
+    #[async_trait]
+    impl ContextOp for ExitAfterStreamInference {
+        type Output = ();
+
+        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+            Err(EngineError::Exit {
+                reason: ExitReason::Timeout,
+                detail: "stream boundary timeout".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_react_loop_does_not_emit_events_before_after_boundary_exit() {
+        let provider = FallbackStreamProvider::new();
+        provider.inner.respond_with_text("hello before exit");
+
+        let mut ctx = Context::with_rules(vec![Rule::after::<StreamInferBoundary>(
+            "exit after stream inference",
+            100,
+            ExitAfterStreamInference,
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let events = Arc::new(Mutex::new(Vec::<StreamEvent>::new()));
+        let events_clone = Arc::clone(&events);
+
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            move |event| events_clone.lock().unwrap().push(event),
+        )
+        .await
+        .expect("stream exit should return structured operator output");
+
+        assert_eq!(output.exit_reason, ExitReason::Timeout);
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "stream events must not be emitted before the after-boundary exit is accepted"
         );
     }
 

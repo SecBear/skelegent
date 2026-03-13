@@ -82,13 +82,19 @@ fn waiting_resume_continue_returns_to_running_and_dispatches_operator() {
     assert_eq!(transition.next, RunView::running(run_id.clone()));
     assert_eq!(
         transition.commands,
-        vec![OrchestrationCommand::DispatchOperator {
-            run_id,
-            payload: DispatchPayload::Resume {
-                wait_point,
-                input: resume_input,
+        vec![
+            OrchestrationCommand::CancelWake {
+                run_id: run_id.clone(),
+                wait_point: wait_point.clone(),
             },
-        }]
+            OrchestrationCommand::DispatchOperator {
+                run_id,
+                payload: DispatchPayload::Resume {
+                    wait_point,
+                    input: resume_input,
+                },
+            },
+        ]
     );
 }
 
@@ -122,7 +128,13 @@ fn waiting_resume_complete_finishes_run() {
     );
     assert_eq!(
         transition.commands,
-        vec![OrchestrationCommand::CompleteRun { run_id, result }]
+        vec![
+            OrchestrationCommand::CancelWake {
+                run_id: run_id.clone(),
+                wait_point: WaitPointId::new("wait-1"),
+            },
+            OrchestrationCommand::CompleteRun { run_id, result },
+        ]
     );
 }
 
@@ -163,7 +175,13 @@ fn cancel_waiting_transitions_to_cancelled() {
     );
     assert_eq!(
         transition.commands,
-        vec![OrchestrationCommand::CancelRun { run_id }]
+        vec![
+            OrchestrationCommand::CancelWake {
+                run_id: run_id.clone(),
+                wait_point: WaitPointId::new("wait-1"),
+            },
+            OrchestrationCommand::CancelRun { run_id },
+        ]
     );
 }
 
@@ -228,6 +246,66 @@ fn waiting_with_wake_deadline_schedules_canonical_deadline() {
                 wait_point,
                 wake_at,
             },
+        ]
+    );
+}
+
+#[test]
+fn waiting_resume_continue_cancels_wake_before_dispatch() {
+    let run_id = RunId::new("run-1");
+    let wait_point = WaitPointId::new("wait-1");
+    let resume_input = ResumeInput::new(json!({ "answer": 42 }));
+    let current = RunView::waiting(run_id.clone(), wait_point.clone(), WaitReason::Timer);
+
+    let transition = RunKernel::apply(
+        Some(&current),
+        RunEvent::Resume {
+            wait_point: wait_point.clone(),
+            input: resume_input.clone(),
+            action: ResumeAction::Continue,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(transition.next, RunView::running(run_id.clone()));
+    assert_eq!(
+        transition.commands,
+        vec![
+            OrchestrationCommand::CancelWake {
+                run_id: run_id.clone(),
+                wait_point: wait_point.clone(),
+            },
+            OrchestrationCommand::DispatchOperator {
+                run_id,
+                payload: DispatchPayload::Resume {
+                    wait_point,
+                    input: resume_input,
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn cancel_waiting_cancels_wake_before_terminal_cancel() {
+    let run_id = RunId::new("run-1");
+    let wait_point = WaitPointId::new("wait-1");
+    let current = RunView::waiting(run_id.clone(), wait_point.clone(), WaitReason::Timer);
+
+    let transition = RunKernel::apply(Some(&current), RunEvent::Cancel).unwrap();
+
+    assert_eq!(
+        transition.next,
+        RunView::terminal(run_id.clone(), skg_run_core::RunOutcome::Cancelled)
+    );
+    assert_eq!(
+        transition.commands,
+        vec![
+            OrchestrationCommand::CancelWake {
+                run_id: run_id.clone(),
+                wait_point,
+            },
+            OrchestrationCommand::CancelRun { run_id },
         ]
     );
 }

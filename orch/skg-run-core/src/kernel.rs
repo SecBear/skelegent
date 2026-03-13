@@ -190,32 +190,39 @@ impl RunKernel {
             });
         }
 
+        let mut commands = Self::exit_wait_commands(&run_id, &wait_point);
+
         match action {
-            ResumeAction::Continue => Ok(RunTransition {
-                next: RunView::running(run_id.clone()),
-                commands: vec![OrchestrationCommand::DispatchOperator {
-                    run_id,
+            ResumeAction::Continue => {
+                commands.push(OrchestrationCommand::DispatchOperator {
+                    run_id: run_id.clone(),
                     payload: DispatchPayload::Resume { wait_point, input },
-                }],
-            }),
-            ResumeAction::Complete { result } => Ok(RunTransition {
-                next: RunView::terminal(
-                    run_id.clone(),
-                    RunOutcome::Completed {
-                        result: result.clone(),
-                    },
-                ),
-                commands: vec![OrchestrationCommand::CompleteRun { run_id, result }],
-            }),
-            ResumeAction::Fail { error } => Ok(RunTransition {
-                next: RunView::terminal(
-                    run_id.clone(),
-                    RunOutcome::Failed {
-                        error: error.clone(),
-                    },
-                ),
-                commands: vec![OrchestrationCommand::FailRun { run_id, error }],
-            }),
+                });
+                Ok(RunTransition {
+                    next: RunView::running(run_id),
+                    commands,
+                })
+            }
+            ResumeAction::Complete { result } => {
+                commands.push(OrchestrationCommand::CompleteRun {
+                    run_id: run_id.clone(),
+                    result: result.clone(),
+                });
+                Ok(RunTransition {
+                    next: RunView::terminal(run_id, RunOutcome::Completed { result }),
+                    commands,
+                })
+            }
+            ResumeAction::Fail { error } => {
+                commands.push(OrchestrationCommand::FailRun {
+                    run_id: run_id.clone(),
+                    error: error.clone(),
+                });
+                Ok(RunTransition {
+                    next: RunView::terminal(run_id, RunOutcome::Failed { error }),
+                    commands,
+                })
+            }
         }
     }
 
@@ -244,12 +251,25 @@ impl RunKernel {
             commands: vec![OrchestrationCommand::FailRun { run_id, error }],
         })
     }
-
     fn cancel(current: Option<&RunView>) -> Result<RunTransition, KernelError> {
         let run_id = Self::cancellable_run_id(current)?;
+        let commands = match current {
+            Some(RunView::Waiting { wait_point, .. }) => vec![
+                OrchestrationCommand::CancelWake {
+                    run_id: run_id.clone(),
+                    wait_point: wait_point.clone(),
+                },
+                OrchestrationCommand::CancelRun {
+                    run_id: run_id.clone(),
+                },
+            ],
+            _ => vec![OrchestrationCommand::CancelRun {
+                run_id: run_id.clone(),
+            }],
+        };
         Ok(RunTransition {
-            next: RunView::terminal(run_id.clone(), RunOutcome::Cancelled),
-            commands: vec![OrchestrationCommand::CancelRun { run_id }],
+            next: RunView::terminal(run_id, RunOutcome::Cancelled),
+            commands,
         })
     }
 
@@ -279,6 +299,13 @@ impl RunKernel {
             }
             _ => Err(Self::invalid_transition(current, "cancel")),
         }
+    }
+
+    fn exit_wait_commands(run_id: &RunId, wait_point: &WaitPointId) -> Vec<OrchestrationCommand> {
+        vec![OrchestrationCommand::CancelWake {
+            run_id: run_id.clone(),
+            wait_point: wait_point.clone(),
+        }]
     }
 
     fn invalid_transition(current: Option<&RunView>, event: &'static str) -> KernelError {
