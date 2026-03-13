@@ -7,9 +7,9 @@ skelegent organizes its crates into six layers plus an umbrella crate. Each laye
  │            skelegent (umbrella crate)                │
  │         Feature-gated re-exports of all layers    │
  ├──────────────────────────────────────────────────┤
- │  LAYER 5 — Cross-Cutting                         │
- │  Security middleware, lifecycle coordination       │
- ├──────────────────────────────────────────────────┤
+│  LAYER 5 — Cross-Cutting                         │
+│  Security middleware, runtime governance         │
+├──────────────────────────────────────────────────┤
  │  LAYER 4 — Environment                           │
  │  Isolation, credentials, secret backends,         │
  │  auth backends, crypto backends                   │
@@ -23,9 +23,9 @@ skelegent organizes its crates into six layers plus an umbrella crate. Each laye
  │  LAYER 1 — Operator Implementations              │
  │  Providers, tools, operators, context, MCP        │
  ├──────────────────────────────────────────────────┤
- │  LAYER 0 — Protocol Traits (layer0)              │
-│  6 protocols + 2 interfaces + message types       │
- │  The stability contract. Changes: almost never.   │
+│  LAYER 0 — Protocol Traits (layer0)              │
+│  6 protocols + middleware + message types        │
+│  The stability contract. Changes: almost never.   │
  └──────────────────────────────────────────────────┘
 ```
 
@@ -33,7 +33,7 @@ skelegent organizes its crates into six layers plus an umbrella crate. Each laye
 
 **Crate:** `layer0`
 
-Layer 0 is the stability contract. It defines the six protocol traits (`Operator`, `Dispatcher`, `Signalable`, `Queryable`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (per-boundary middleware traits, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs).
+Layer 0 is the stability contract. It defines the six protocol traits (`Operator`, `Dispatcher`, `Signalable`, `Queryable`, `StateStore`/`StateReader`, `Environment`), the per-boundary middleware traits/stacks, and the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs, message-level hints such as `CompactionPolicy`). Runtime/orchestration code above Layer 0 owns lifecycle coordination and observability mechanics.
 
 **Dependencies:** `serde`, `async-trait`, `thiserror`, `rust_decimal`, `serde_json`. Nothing else. No runtime, no HTTP, no provider-specific types.
 

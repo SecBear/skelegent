@@ -230,7 +230,6 @@ product before the context window is destroyed. This is the single most critical
 lifecycle mechanism for long-running agents.
 
 **Compaction**: Coordination lives above Layer 0. The turn/runtime detects pressure and runs summarization, orchestration may continue-as-new, and state persists results. Layer 0 carries only the message-level hints that travel with the data (`Message` from `layer0::context`, `CompactionPolicy`). Summarization is the default. The compaction reserve must never be zero. `sliding_window` and `policy_trim` strategies are implemented, with
-zero. `sliding_window` and `policy_trim` strategies are implemented, with
 LLM-driven `summarize` and `extract_cognitive_state` available. Tiered/zone-based
 compaction is tracked in `TODO-aspirational.md` as future work.
 Recursive summarization degradation is a documented failure mode: summarizing

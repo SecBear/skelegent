@@ -13,12 +13,16 @@ keywords = ["skelegent", "ai", "agent", "orchestration", "composition"]
 [dependencies]
 async-trait = "0.1"
 layer0 = { path = "../../layer0", version = "0.4.1" }
+rust_decimal = "1"
 serde_json = "1"
 thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
 
+skg-context-engine = { path = "../../op/skg-context-engine", version = "0.4.1" }
 skg-effects-core = { path = "../../effects/skg-effects-core", version = "0.4.1" }
 skg-effects-local = { path = "../../effects/skg-effects-local", version = "0.4.1" }
 tracing = "0.1"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 serde_json = "1"

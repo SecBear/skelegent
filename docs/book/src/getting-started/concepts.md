@@ -134,7 +134,7 @@ pub trait Environment: Send + Sync {
 
 The `EnvironmentSpec` declares isolation boundaries (process, container, VM, Wasm), credential injection, resource limits, and network policy. `LocalEnv` passes through with no isolation (for development). Future implementations could spin up containers or Kubernetes pods.
 
-## The two interfaces
+## Middleware and runtime coordination
 
 ### Middleware -- Observation and intervention
 
@@ -146,17 +146,17 @@ Per-boundary middleware traits wrap each protocol's operations using the continu
 
 Middleware composes via `DispatchStack`, `StoreStack`, and `ExecStack` builders that organize layers into observer → transformer → guard ordering.
 
-For operator-local interception (before/after inference, before/after tool use), the Rule system provides typed per-trigger-point rules with default no-op implementations. Rules fire via Trigger enum: Before, After, or When.
-### Lifecycle -- Cross-layer coordination
+For operator-local interception (before/after inference, before/after tool use), the Rule system provides typed per-trigger-point rules with default no-op implementations. Rules fire via `Trigger`: `Before`, `After`, or `When`.
+### Lifecycle coordination -- Above Layer 0
 
-Lifecycle events (`BudgetEvent`, `CompactionEvent`) coordinate concerns that span multiple protocols. A budget event might originate from a middleware (observing cost) and propagate to the orchestrator (to cancel the workflow). A compaction event coordinates between the operator and the state store.
+Budget/compaction coordination and observation/intervention mechanics span multiple protocols, but they currently live in runtime or orchestration code above Layer 0. Layer 0 keeps the middleware seams and message-level hints such as `CompactionPolicy`; higher layers decide when to halt, compact, observe, or intervene.
 
 ## How layers compose
 
 The six layers form a strict dependency hierarchy:
 
 ```
-Layer 5  Cross-Cutting    (middleware, lifecycle)
+Layer 5  Cross-Cutting    (middleware, runtime governance)
 Layer 4  Environment      (isolation, credentials)
 Layer 3  State            (persistence)
 Layer 2  Orchestration    (multi-agent composition)
