@@ -65,3 +65,11 @@ agent = ["context-engine", "state-memory"]
 
 # Proc-macro support for deriving ToolDyn
 macros = ["skg-tool/macros"]
+
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+skg-turn = { path = "../turn/skg-turn", version = "0.4.1" }
+skg-context-engine = { path = "../op/skg-context-engine", version = "0.4.1" }
+layer0 = { path = "../layer0", version = "0.4.1" }
+skg-tool = { path = "../turn/skg-tool", version = "0.4.1" }

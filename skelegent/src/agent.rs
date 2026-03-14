@@ -178,7 +178,8 @@ fn build_cognitive_operator<P: Provider + 'static>(
     max_tokens: u32,
 ) -> Box<dyn Operator> {
     use skg_context_engine::{
-        CognitiveOperator, CognitiveOperatorConfig, InferBoundary, Rule,
+        CognitiveOperator, CognitiveOperatorConfig,
+        rule::{Rule, Trigger},
         rules::{BudgetGuard, BudgetGuardConfig},
     };
 
@@ -200,7 +201,7 @@ fn build_cognitive_operator<P: Provider + 'static>(
             max_duration: None,
             max_tool_calls: None,
         });
-        vec![Rule::before::<InferBoundary>("budget_guard", 100, guard)]
+        vec![Rule::new("budget_guard", Trigger::BeforeAny, 100, guard)]
     });
     Box::new(op)
 }
@@ -209,7 +210,7 @@ fn build_cognitive_operator<P: Provider + 'static>(
 mod tests {
     use super::*;
     use skg_context_engine::{
-        CognitiveOperator, CognitiveOperatorConfig, InferBoundary, Rule,
+        CognitiveOperator, CognitiveOperatorConfig,
         rules::{BudgetGuard, BudgetGuardConfig},
     };
     use skg_turn::infer::{InferRequest, InferResponse};
@@ -253,7 +254,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn built_agent_budget_exit_returns_structured_output() {
+    async fn built_agent_budget_exit_halts() {
         let provider = CountingProvider::default();
 
         let op = CognitiveOperator::new(
@@ -272,17 +273,20 @@ mod tests {
                 max_duration: None,
                 max_tool_calls: None,
             });
-            vec![Rule::before::<InferBoundary>("budget_guard", 100, guard)]
+            // BeforeAny fires during inject_system/inject_message context.run() calls.
+            vec![skg_context_engine::rule::Rule::new(
+                "budget_guard",
+                skg_context_engine::rule::Trigger::BeforeAny,
+                100,
+                guard,
+            )]
         });
 
         let input = OperatorInput::new(Content::text("hi"), TriggerType::User);
-        let output = op
-            .execute(input, &EffectEmitter::noop())
-            .await
-            .expect("budget exits should return operator output");
+        let result = op.execute(input, &EffectEmitter::noop()).await;
 
-        assert_eq!(output.exit_reason, layer0::operator::ExitReason::MaxTurns);
-        assert_eq!(output.message.as_text(), Some(""));
+        // Budget guard fires before first inference, surfacing as an error.
+        assert!(result.is_err());
         assert_eq!(provider.call_count(), 0);
     }
 
@@ -304,6 +308,23 @@ mod tests {
         assert_eq!(output.exit_reason, layer0::operator::ExitReason::Complete);
         assert_eq!(provider.call_count(), 1);
     }
+}
+
+#[cfg(not(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+)))]
+fn resolve_model(
+    model: &str,
+    _system_prompt: String,
+    _tools: ToolRegistry,
+    _max_turns: u32,
+    _max_tokens: u32,
+) -> Result<BuiltAgent, AgentBuildError> {
+    Err(AgentBuildError::UnknownModel(format!(
+        "{model} — no provider features enabled (provider-anthropic, provider-openai, provider-ollama)"
+    )))
 }
 
 #[cfg(any(

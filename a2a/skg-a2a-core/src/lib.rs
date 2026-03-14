@@ -29,6 +29,7 @@ pub mod types;
 // Re-export key types for convenience.
 pub use card::{AgentCapabilities, AgentCard, AgentCardBuilder, AgentInterface, AgentSkill};
 pub use error::A2aError;
+pub use convert::RunArtifact;
 pub use jsonrpc::{JsonRpcError, JsonRpcErrorResponse, JsonRpcRequest, JsonRpcResponse};
 pub use types::{
     A2aArtifact, A2aMessage, A2aRole, A2aTask, Part, PartContent, SendMessageRequest,

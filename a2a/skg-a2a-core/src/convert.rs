@@ -8,9 +8,63 @@
 use layer0::content::{Content, ContentBlock, ContentSource};
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use serde_json::json;
-use skg_run_core::model::{RunArtifact, RunStatus};
+use skg_run_core::model::RunStatus;
 
 use crate::types::*;
+
+// ---------------------------------------------------------------------------
+// RunArtifact — A2A-specific bridge type
+// ---------------------------------------------------------------------------
+
+/// A skelegent-native representation of an artifact produced during a run.
+///
+/// This bridges between A2A wire-format [`A2aArtifact`] and skelegent's
+/// [`Content`] model. Each artifact carries an ID, content parts, and
+/// optional metadata.
+#[derive(Debug, Clone)]
+pub struct RunArtifact {
+    /// Unique artifact identifier.
+    pub id: String,
+    /// Content parts (each is a skelegent `Content` value).
+    pub parts: Vec<Content>,
+    /// Optional human-readable name.
+    pub name: Option<String>,
+    /// Optional description.
+    pub description: Option<String>,
+    /// Optional extension metadata.
+    pub metadata: Option<serde_json::Value>,
+}
+
+impl RunArtifact {
+    /// Create a new artifact with the given ID and parts.
+    pub fn new(id: String, parts: Vec<Content>) -> Self {
+        Self {
+            id,
+            parts,
+            name: None,
+            description: None,
+            metadata: None,
+        }
+    }
+
+    /// Set the artifact name.
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    /// Set the artifact description.
+    pub fn with_description(mut self, description: String) -> Self {
+        self.description = Some(description);
+        self
+    }
+
+    /// Set extension metadata.
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Part ↔ ContentBlock
