@@ -4,7 +4,7 @@ use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher, EffectEmitter}
 use layer0::DispatchContext;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
-use layer0::id::{DispatchId, OperatorId, WorkflowId};
+use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
 use layer0::state::{SearchResult, StateStore};
 use serde_json::json;
@@ -40,16 +40,16 @@ impl SimpleOrch {
 impl Dispatcher for SimpleOrch {
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, OrchError> {
         let op = self
             .agents
-            .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?
+            .get(ctx.operator_id.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
             .clone();
-        let (handle, sender) = DispatchHandle::channel(DispatchId::new("simple-orch"));
-        let ctx = DispatchContext::new(DispatchId::new("simple-orch"), operator.clone());
+        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
+        let ctx = ctx.clone();
         tokio::spawn(async move {
             let emitter = EffectEmitter::new(sender.clone());
             match op.execute(input, &ctx, &emitter).await {

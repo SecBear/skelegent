@@ -78,6 +78,10 @@ fn test_ctx() -> DispatchContext {
     DispatchContext::new(DispatchId::new("test"), OperatorId::new("test-op"))
 }
 
+fn dispatch_ctx(name: &str) -> DispatchContext {
+    DispatchContext::new(DispatchId::new(name), OperatorId::new(name))
+}
+
 fn cognitive_config() -> CognitiveOperatorConfig {
     CognitiveOperatorConfig {
         system_prompt: "You are a helpful assistant.".into(),
@@ -401,7 +405,7 @@ async fn multi_agent_dispatch_single() {
 
     // Dispatch to individual agents
     let summary = orch
-        .dispatch(&OperatorId::new("summarizer"), simple_input("Hello there!"))
+        .dispatch(&dispatch_ctx("summarizer"), simple_input("Hello there!"))
         .await
         .unwrap()
         .collect()
@@ -414,7 +418,7 @@ async fn multi_agent_dispatch_single() {
     );
 
     let classification = orch
-        .dispatch(&OperatorId::new("classifier"), simple_input("Hello there!"))
+        .dispatch(&dispatch_ctx("classifier"), simple_input("Hello there!"))
         .await
         .unwrap()
         .collect()
@@ -427,7 +431,7 @@ async fn multi_agent_dispatch_single() {
     );
 
     let echoed = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("Hello there!"))
+        .dispatch(&dispatch_ctx("echo"), simple_input("Hello there!"))
         .await
         .unwrap()
         .collect()
@@ -465,7 +469,7 @@ async fn multi_agent_parallel_dispatch() {
 
     let mut results = Vec::new();
     for (op, input) in tasks {
-        results.push(orch.dispatch(&op, input).await.unwrap().collect().await);
+        results.push(orch.dispatch(&dispatch_ctx(op.as_str()), input).await.unwrap().collect().await);
     }
 
     // All three should succeed
@@ -503,7 +507,7 @@ async fn multi_agent_with_state_storage() {
     // Step 1: Dispatch research task
     let research = orch
         .dispatch(
-            &OperatorId::new("researcher"),
+            &dispatch_ctx("researcher"),
             simple_input("Research Rust programming"),
         )
         .await
@@ -529,7 +533,7 @@ async fn multi_agent_with_state_storage() {
     // Step 3: Dispatch writing task
     let draft = orch
         .dispatch(
-            &OperatorId::new("writer"),
+            &dispatch_ctx("writer"),
             simple_input("Write about Rust based on research"),
         )
         .await
@@ -587,7 +591,7 @@ async fn multi_agent_missing_agent_handled_gracefully() {
 
     let mut results = Vec::new();
     for (op, input) in tasks {
-        results.push(orch.dispatch(&op, input).await);
+        results.push(orch.dispatch(&dispatch_ctx(op.as_str()), input).await);
     }
     assert_eq!(results.len(), 2);
     assert!(results[0].is_ok());
@@ -643,7 +647,7 @@ async fn combined_all_patterns() {
     let mut results = Vec::new();
     for (op, input) in tasks {
         results.push(
-            orch.dispatch(&op, input)
+            orch.dispatch(&dispatch_ctx(op.as_str()), input)
                 .await
                 .unwrap()
                 .collect()

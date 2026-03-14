@@ -16,6 +16,10 @@ fn simple_input(msg: &str) -> OperatorInput {
     OperatorInput::new(Content::text(msg), layer0::operator::TriggerType::User)
 }
 
+fn test_ctx(name: &str) -> DispatchContext {
+    DispatchContext::new(DispatchId::new(name), OperatorId::new(name))
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // EchoOperator
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -202,7 +206,7 @@ async fn local_orchestrator_dispatch_to_echo() {
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
     let input = simple_input("dispatch test");
     let output = orch
-        .dispatch(&OperatorId::new("echo"), input)
+        .dispatch(&test_ctx("echo"), input)
         .await
         .unwrap()
         .collect()
@@ -215,7 +219,7 @@ async fn local_orchestrator_dispatch_to_echo() {
 async fn local_orchestrator_dispatch_agent_not_found() {
     let orch = LocalOrchestrator::new();
     let input = simple_input("nobody home");
-    let result = orch.dispatch(&OperatorId::new("missing"), input).await;
+    let result = orch.dispatch(&test_ctx("missing"), input).await;
     assert!(result.is_err());
     assert!(
         result
@@ -231,7 +235,7 @@ async fn local_orchestrator_is_usable_as_dyn_dispatcher() {
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
     let orch: Box<dyn layer0::dispatch::Dispatcher> = Box::new(orch);
     let output = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("dyn"))
+        .dispatch(&test_ctx("echo"), simple_input("dyn"))
         .await
         .unwrap()
         .collect()
@@ -263,14 +267,14 @@ async fn integration_compose_all_implementations() {
 
     // 5. Dispatch two agents through the orchestrator
     let output_a = orch
-        .dispatch(&OperatorId::new("agent-a"), simple_input("task for A"))
+        .dispatch(&test_ctx("agent-a"), simple_input("task for A"))
         .await
         .unwrap()
         .collect()
         .await
         .unwrap();
     let output_b = orch
-        .dispatch(&OperatorId::new("agent-b"), simple_input("task for B"))
+        .dispatch(&test_ctx("agent-b"), simple_input("task for B"))
         .await
         .unwrap()
         .collect()

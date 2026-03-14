@@ -108,21 +108,20 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
     /// Returns `OrchError::OperatorNotFound` when the name is not registered.
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<layer0::DispatchHandle, OrchError> {
         let tool = self
             .registry
-            .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
+            .get(ctx.operator_id.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?;
 
-        let operator_id = operator.clone();
+        let ctx_owned = ctx.clone();
         let operator = ToolOperator::new(Arc::clone(tool));
         let (handle, sender) =
-            layer0::DispatchHandle::channel(layer0::DispatchId::new("tool-registry"));
+            layer0::DispatchHandle::channel(ctx.dispatch_id.clone());
         tokio::spawn(async move {
-            let ctx = DispatchContext::new(layer0::DispatchId::new("tool-registry"), operator_id);
-            match operator.execute(input, &ctx, &EffectEmitter::noop()).await {
+            match operator.execute(input, &ctx_owned, &EffectEmitter::noop()).await {
                 Ok(output) => {
                     let _ = sender
                         .send(layer0::DispatchEvent::Completed { output })
@@ -147,8 +146,8 @@ mod tests {
     use crate::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
     use layer0::operator::TriggerType;
     use layer0::{
-        Content, DispatchId, Dispatcher, ExitReason, OperatorError, OperatorId, OperatorInput,
-        OrchError,
+        Content, DispatchContext, DispatchId, Dispatcher, ExitReason, OperatorError, OperatorId,
+        OperatorInput, OrchError,
     };
     use serde_json::json;
     use std::future::Future;
@@ -281,9 +280,10 @@ mod tests {
         let orch = ToolRegistryOrchestrator::new(reg);
 
         let operator = OperatorId::new("echo");
+        let ctx = DispatchContext::new(DispatchId::new("echo"), operator.clone());
         let input = make_input(r#"{"x": 42}"#);
         let output = orch
-            .dispatch(&operator, input)
+            .dispatch(&ctx, input)
             .await
             .expect("should succeed")
             .collect()
@@ -302,9 +302,10 @@ mod tests {
         let orch = ToolRegistryOrchestrator::new(reg);
 
         let operator = OperatorId::new("unknown_tool");
+        let ctx = DispatchContext::new(DispatchId::new("unknown_tool"), operator.clone());
         let input = make_input("{}");
         let err = orch
-            .dispatch(&operator, input)
+            .dispatch(&ctx, input)
             .await
             .expect_err("should fail");
 

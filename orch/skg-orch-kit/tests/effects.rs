@@ -38,15 +38,15 @@ impl MockOrch {
 impl Dispatcher for MockOrch {
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, layer0::error::OrchError> {
         self.dispatches
             .lock()
             .await
-            .push((operator.clone(), input.clone()));
+            .push((ctx.operator_id.clone(), input.clone()));
         let output = OperatorOutput::new(Content::text("ok"), ExitReason::Complete);
-        let (handle, sender) = DispatchHandle::channel(DispatchId::new("mock-effects"));
+        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
         tokio::spawn(async move {
             let _ = sender.send(DispatchEvent::Completed { output }).await;
         });

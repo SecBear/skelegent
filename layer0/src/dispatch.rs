@@ -36,7 +36,7 @@
 //!     async fn execute(&self, input: OperatorInput, _ctx: &DispatchContext, _emitter: &EffectEmitter) -> Result<OperatorOutput, OperatorError> {
 //!         // delegate to a sibling — goes through orchestrator middleware
 //!         let child_output = self.dispatcher
-//!             .dispatch(&OperatorId::new("summarizer"), child_input)
+//!             .dispatch(&ctx, child_input)
 //!             .await?
 //!             .collect()
 //!             .await
@@ -57,10 +57,11 @@
 //! depth. If you need it, add a [`DispatchMiddleware`](crate::middleware::DispatchMiddleware)
 //! that tracks call depth per session.
 
+use crate::dispatch_context::DispatchContext;
 use crate::effect::Effect;
 use crate::content::Content;
 use crate::error::OrchError;
-use crate::id::{DispatchId, OperatorId};
+use crate::id::DispatchId;
 use crate::operator::{OperatorInput, OperatorOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -80,12 +81,15 @@ use tokio::sync::{mpsc, watch};
 pub trait Dispatcher: Send + Sync {
     /// Start a dispatch and return a streaming handle.
     ///
+    /// The caller provides a [`DispatchContext`] carrying the dispatch ID,
+    /// target operator, and optional trace/parent context.
+    ///
     /// The handle emits [`DispatchEvent`]s as the dispatch progresses.
     /// Call [`DispatchHandle::collect`] to consume all events and return
     /// the terminal [`OperatorOutput`].
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, OrchError>;
 }

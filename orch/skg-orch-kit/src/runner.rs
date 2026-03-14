@@ -1,3 +1,5 @@
+use layer0::DispatchContext;
+use layer0::id::DispatchId;
 use layer0::middleware::{StoreStack, StoreWriteNext};
 
 use async_trait::async_trait;
@@ -297,9 +299,10 @@ impl<E: EffectInterpreter> OrchestratedRunner<E> {
             trace.events.push(ExecutionEvent::Dispatched {
                 operator: op_id.clone(),
             });
+            let ctx = DispatchContext::new(DispatchId::new(op_id.as_str()), op_id.clone());
             let output = self
                 .dispatcher
-                .dispatch(&op_id, op_input)
+                .dispatch(&ctx, op_input)
                 .await?
                 .collect()
                 .await?;

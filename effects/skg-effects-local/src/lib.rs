@@ -4,6 +4,7 @@
 use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::DispatchContext;
+use layer0::id::DispatchId;
 use layer0::dispatch::Dispatcher;
 use layer0::effect::{Effect, Scope};
 use layer0::error::{OrchError, StateError};
@@ -97,7 +98,7 @@ impl<S> EffectExecutor for LocalEffectExecutor<S>
 where
     S: StateStore + ?Sized + 'static,
 {
-    async fn execute(&self, effects: &[Effect], _ctx: &DispatchContext) -> Result<(), Error> {
+    async fn execute(&self, effects: &[Effect], ctx: &DispatchContext) -> Result<(), Error> {
         for effect in effects {
             match effect {
                 Effect::WriteMemory {
@@ -141,8 +142,9 @@ where
                     }
                 },
                 Effect::Delegate { operator, input } => {
+                    let child_ctx = ctx.child(DispatchId::new(operator.as_str()), operator.clone());
                     self.dispatcher
-                        .dispatch(operator, (*input.clone()).clone())
+                        .dispatch(&child_ctx, (*input.clone()).clone())
                         .await?
                         .collect()
                         .await?;
@@ -152,8 +154,9 @@ where
                     let mut input =
                         OperatorInput::new(Content::text(state.to_string()), TriggerType::Task);
                     input.metadata = json!({ "handoff": true });
+                    let child_ctx = ctx.child(DispatchId::new(operator.as_str()), operator.clone());
                     self.dispatcher
-                        .dispatch(operator, input)
+                        .dispatch(&child_ctx, input)
                         .await?
                         .collect()
                         .await?;

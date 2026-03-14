@@ -27,12 +27,12 @@ struct NoOpOrch;
 impl Dispatcher for NoOpOrch {
     async fn dispatch(
         &self,
-        _operator: &OperatorId,
+        ctx: &DispatchContext,
         _input: OperatorInput,
     ) -> Result<DispatchHandle, OrchError> {
         let output =
             OperatorOutput::new(layer0::content::Content::text("ok"), ExitReason::Complete);
-        let (handle, sender) = DispatchHandle::channel(DispatchId::new("noop"));
+        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
         tokio::spawn(async move {
             let _ = sender.send(DispatchEvent::Completed { output }).await;
         });

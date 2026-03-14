@@ -3,11 +3,16 @@ use layer0::dispatch::Dispatcher;
 use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::test_utils::EchoOperator;
+use layer0::{DispatchContext, DispatchId};
 use skg_orch_local::LocalOrch;
 use std::sync::Arc;
 
 fn simple_input(msg: &str) -> OperatorInput {
     OperatorInput::new(Content::text(msg), TriggerType::User)
+}
+
+fn test_ctx(name: &str) -> DispatchContext {
+    DispatchContext::new(DispatchId::new(name), OperatorId::new(name))
 }
 
 // --- Single dispatch ---
@@ -18,7 +23,7 @@ async fn dispatch_to_registered_agent() {
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
     let output = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("hello"))
+        .dispatch(&test_ctx("echo"), simple_input("hello"))
         .await
         .unwrap()
         .collect()
@@ -32,7 +37,7 @@ async fn dispatch_agent_not_found() {
     let orch = LocalOrch::new();
 
     let result = orch
-        .dispatch(&OperatorId::new("missing"), simple_input("fail"))
+        .dispatch(&test_ctx("missing"), simple_input("fail"))
         .await;
     assert!(result.is_err());
     assert!(
@@ -67,7 +72,7 @@ async fn dispatch_propagates_operator_error() {
     orch.register(OperatorId::new("fail"), Arc::new(FailingOperator));
 
     let result = orch
-        .dispatch(&OperatorId::new("fail"), simple_input("boom"))
+        .dispatch(&test_ctx("fail"), simple_input("boom"))
         .await
         .unwrap()
         .collect()
@@ -85,7 +90,7 @@ async fn usable_as_dyn_dispatcher() {
 
     let orch: Box<dyn Dispatcher> = Box::new(orch);
     let output = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("dyn"))
+        .dispatch(&test_ctx("echo"), simple_input("dyn"))
         .await
         .unwrap()
         .collect()
@@ -101,7 +106,7 @@ async fn usable_as_arc_dyn_dispatcher() {
 
     let orch: Arc<dyn Dispatcher> = Arc::new(orch);
     let output = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("arc"))
+        .dispatch(&test_ctx("echo"), simple_input("arc"))
         .await
         .unwrap()
         .collect()
@@ -148,7 +153,7 @@ async fn middleware_observer_fires_on_dispatch() {
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
     let _output = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("ping"))
+        .dispatch(&test_ctx("echo"), simple_input("ping"))
         .await
         .unwrap()
         .collect()
@@ -189,7 +194,7 @@ async fn middleware_guard_can_halt_dispatch() {
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
     let result = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("blocked"))
+        .dispatch(&test_ctx("echo"), simple_input("blocked"))
         .await;
     assert!(result.is_err());
     assert!(

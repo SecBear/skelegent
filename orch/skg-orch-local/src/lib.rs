@@ -11,7 +11,7 @@ use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher, EffectEmitter}
 use layer0::DispatchContext;
 use layer0::effect::SignalPayload;
 use layer0::error::OrchError;
-use layer0::id::{DispatchId, OperatorId, WorkflowId};
+use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{DispatchNext, DispatchStack};
 use layer0::operator::{Operator, OperatorInput};
 use std::collections::HashMap;
@@ -105,21 +105,20 @@ impl DispatchNext for OperatorDispatch<'_> {
 
 #[async_trait]
 impl Dispatcher for LocalOrch {
-    #[tracing::instrument(skip_all, fields(operator_id = %operator))]
+    #[tracing::instrument(skip_all, fields(operator_id = %ctx.operator_id))]
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, OrchError> {
         let terminal = OperatorDispatch {
             agents: &self.agents,
         };
 
-        let ctx = DispatchContext::new(DispatchId::new(operator.as_str()), operator.clone());
         if let Some(ref stack) = self.middleware {
-            stack.dispatch_with(&ctx, input, &terminal).await
+            stack.dispatch_with(ctx, input, &terminal).await
         } else {
-            terminal.dispatch(&ctx, input).await
+            terminal.dispatch(ctx, input).await
         }
     }
 }

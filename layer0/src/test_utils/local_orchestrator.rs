@@ -3,7 +3,7 @@
 use crate::dispatch::{DispatchEvent, DispatchHandle, DispatchSender, EffectEmitter};
 use crate::dispatch_context::DispatchContext;
 use crate::error::OrchError;
-use crate::id::{DispatchId, OperatorId};
+use crate::id::OperatorId;
 use crate::operator::{Operator, OperatorInput};
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -39,20 +39,18 @@ impl Default for LocalOrchestrator {
 impl crate::dispatch::Dispatcher for LocalOrchestrator {
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, OrchError> {
         let op = self
             .operators
-            .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?
+            .get(ctx.operator_id.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
             .clone();
 
-        let dispatch_id = DispatchId::new(format!("test-{}", uuid_v4()));
-        let ctx = DispatchContext::new(dispatch_id.clone(), operator.clone());
-        let (handle, sender) = DispatchHandle::channel(dispatch_id);
+        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
 
-        tokio::spawn(run_dispatch(op, input, ctx, sender));
+        tokio::spawn(run_dispatch(op, input, ctx.clone(), sender));
 
         Ok(handle)
     }
@@ -81,14 +79,4 @@ async fn run_dispatch(
                 .await;
         }
     }
-}
-
-/// Simple pseudo-UUID v4 for test dispatch IDs.
-fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{nanos:032x}")
 }
