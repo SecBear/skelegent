@@ -33,9 +33,16 @@ impl Default for BudgetGuardConfig {
 
 /// Budget guard — halts execution when any configured limit is exceeded.
 ///
-/// Designed to be used as a `Before` rule on inference operations.
+/// Use with `Rule::before::<InferBoundary>` (or `StreamInferBoundary`) to
+/// fire before each inference call. The `react_loop` fires boundary rules
+/// around provider calls, so `Before<InferBoundary>` is the canonical trigger.
+///
 /// When the guard fires and a limit is exceeded, it returns
 /// `EngineError::Halted` which stops the pipeline.
+///
+// TODO: `skelegent/skelegent/src/agent.rs` still uses `Trigger::BeforeAny`
+// for BudgetGuard — update to `Rule::before::<InferBoundary>` now that
+// react_loop fires boundary rules.
 pub struct BudgetGuard {
     /// Budget configuration.
     pub config: BudgetGuardConfig,

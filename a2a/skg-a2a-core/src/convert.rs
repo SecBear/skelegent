@@ -6,65 +6,12 @@
 //! blocks that don't exist in the A2A content model.
 
 use layer0::content::{Content, ContentBlock, ContentSource};
+use layer0::dispatch::Artifact;
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use serde_json::json;
 use skg_run_core::model::RunStatus;
 
 use crate::types::*;
-
-// ---------------------------------------------------------------------------
-// RunArtifact — A2A-specific bridge type
-// ---------------------------------------------------------------------------
-
-/// A skelegent-native representation of an artifact produced during a run.
-///
-/// This bridges between A2A wire-format [`A2aArtifact`] and skelegent's
-/// [`Content`] model. Each artifact carries an ID, content parts, and
-/// optional metadata.
-#[derive(Debug, Clone)]
-pub struct RunArtifact {
-    /// Unique artifact identifier.
-    pub id: String,
-    /// Content parts (each is a skelegent `Content` value).
-    pub parts: Vec<Content>,
-    /// Optional human-readable name.
-    pub name: Option<String>,
-    /// Optional description.
-    pub description: Option<String>,
-    /// Optional extension metadata.
-    pub metadata: Option<serde_json::Value>,
-}
-
-impl RunArtifact {
-    /// Create a new artifact with the given ID and parts.
-    pub fn new(id: String, parts: Vec<Content>) -> Self {
-        Self {
-            id,
-            parts,
-            name: None,
-            description: None,
-            metadata: None,
-        }
-    }
-
-    /// Set the artifact name.
-    pub fn with_name(mut self, name: String) -> Self {
-        self.name = Some(name);
-        self
-    }
-
-    /// Set the artifact description.
-    pub fn with_description(mut self, description: String) -> Self {
-        self.description = Some(description);
-        self
-    }
-
-    /// Set extension metadata.
-    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
-        self.metadata = Some(metadata);
-        self
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Part ↔ ContentBlock
@@ -303,33 +250,34 @@ pub fn run_status_to_task_state(status: RunStatus) -> TaskState {
 }
 
 // ---------------------------------------------------------------------------
-// A2aArtifact ↔ RunArtifact
+// A2aArtifact ↔ Artifact
 // ---------------------------------------------------------------------------
 
-/// Convert an A2A [`A2aArtifact`] into a skelegent [`RunArtifact`].
+/// Convert an A2A [`A2aArtifact`] into a layer0 [`Artifact`].
 ///
 /// Parts are grouped into a single [`Content`] value via [`parts_to_content`].
-pub fn a2a_artifact_to_run_artifact(artifact: &A2aArtifact) -> RunArtifact {
-    let mut ra = RunArtifact::new(
-        artifact.artifact_id.clone(),
-        vec![parts_to_content(&artifact.parts)],
-    );
+/// Streaming fields (`append`, `last_chunk`) default to `false` and `true`
+/// respectively since A2A has no streaming artifact semantics.
+pub fn a2a_artifact_to_artifact(artifact: &A2aArtifact) -> Artifact {
+    let parts = vec![parts_to_content(&artifact.parts)];
+    let mut a = Artifact::new(artifact.artifact_id.clone(), parts);
     if let Some(name) = &artifact.name {
-        ra = ra.with_name(name.clone());
+        a = a.with_name(name.clone());
     }
     if let Some(desc) = &artifact.description {
-        ra = ra.with_description(desc.clone());
+        a = a.with_description(desc.clone());
     }
     if let Some(meta) = &artifact.metadata {
-        ra = ra.with_metadata(meta.clone());
+        a = a.with_metadata(meta.clone());
     }
-    ra
+    a
 }
 
-/// Convert a skelegent [`RunArtifact`] into an A2A [`A2aArtifact`].
+/// Convert a layer0 [`Artifact`] into an A2A [`A2aArtifact`].
 ///
 /// Each `Content` in `parts` is flattened into A2A parts via [`content_to_parts`].
-pub fn run_artifact_to_a2a_artifact(artifact: &RunArtifact) -> A2aArtifact {
+/// The `append` and `last_chunk` fields are dropped (no A2A equivalent).
+pub fn artifact_to_a2a_artifact(artifact: &Artifact) -> A2aArtifact {
     let parts: Vec<Part> = artifact.parts.iter().flat_map(content_to_parts).collect();
     A2aArtifact {
         artifact_id: artifact.id.clone(),

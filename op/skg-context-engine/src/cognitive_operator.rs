@@ -280,17 +280,17 @@ mod tests {
                     max_duration: None,
                     max_tool_calls: None,
                 });
-                // BeforeAny fires before each context.run() call inside react_loop.
-                // InferBoundary triggers are not yet wired into react_loop.
-                vec![Rule::new("budget_guard", crate::rule::Trigger::BeforeAny, 100, guard)]
+                // Before<InferBoundary> fires before each inference call in react_loop.
+                vec![Rule::before::<crate::boundary::InferBoundary>(
+                    "budget_guard",
+                    100,
+                    guard,
+                )]
             });
 
-        let result = op
-            .execute(simple_input("hi"), &EffectEmitter::noop())
-            .await;
+        let result = op.execute(simple_input("hi"), &EffectEmitter::noop()).await;
 
-        // Budget guard halts before first inference, which surfaces as an error
-        // since inject_system/inject_message runs through context.run().
+        // Budget guard halts before first inference via Before<InferBoundary>.
         assert!(result.is_err());
     }
 }

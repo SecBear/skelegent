@@ -8,9 +8,13 @@ homepage.workspace = true
 description = "A2A protocol wire types and conversions for skelegent"
 
 [dependencies]
+async-trait = "0.1"
 layer0 = { path = "../../layer0", version = "0.4.1" }
 skg-run-core = { path = "../../orch/skg-run-core", version = "0.4.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

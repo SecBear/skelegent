@@ -267,7 +267,7 @@ impl TaskStatus {
 
 /// An artifact produced by an A2A task.
 ///
-/// Prefixed with `A2a` to avoid collision with `skg_run_core::RunArtifact`.
+/// Prefixed with `A2a` to avoid collision with `layer0::dispatch::Artifact`.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct A2aArtifact {

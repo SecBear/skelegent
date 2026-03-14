@@ -114,15 +114,18 @@ impl RunnerServiceImpl {
             .ok_or_else(|| CoreError::NotFound(format!("operator not found: {operator_id}")))
     }
 
-    /// Shared execute pipeline used by both gRPC and HTTP transports.
+    /// Execute an operator and return the structured output.
     ///
-    /// Takes raw `input_bytes` (JSON-encoded `OperatorInput`), dispatches
-    /// to the named operator, and returns serialized `OperatorOutput`.
-    pub async fn execute_core(
+    /// This is the transport-agnostic execution pipeline. After execution,
+    /// logs a warning if the output contains unhandled effects. The runner
+    /// is a deployment harness, **not** an orchestrator — effect interpretation
+    /// is the caller's responsibility. Effects are included in the response so
+    /// callers can inspect and act on them.
+    pub async fn execute_operator(
         &self,
         operator_id: &str,
         input_bytes: &[u8],
-    ) -> Result<Vec<u8>, CoreError> {
+    ) -> Result<layer0::OperatorOutput, CoreError> {
         let input = self.deserialize_input(input_bytes)?;
         let operator = self.resolve_operator(operator_id)?;
 
@@ -141,6 +144,28 @@ impl RunnerServiceImpl {
             error!("operator error: {op_err}");
             CoreError::Internal("operator execution failed".into())
         })?;
+
+        if output.has_unhandled_effects() {
+            warn!(
+                operator = operator_id,
+                effect_count = output.effects.len(),
+                "operator produced unhandled effects — the runner does not interpret effects; callers must handle them"
+            );
+        }
+
+        Ok(output)
+    }
+
+    /// Shared execute pipeline used by both gRPC and HTTP transports.
+    ///
+    /// Delegates to [`execute_operator`](Self::execute_operator) and serializes
+    /// the [`OperatorOutput`](layer0::OperatorOutput) to JSON bytes.
+    pub async fn execute_core(
+        &self,
+        operator_id: &str,
+        input_bytes: &[u8],
+    ) -> Result<Vec<u8>, CoreError> {
+        let output = self.execute_operator(operator_id, input_bytes).await?;
 
         serde_json::to_vec(&output).map_err(|e| {
             error!("failed to serialize OperatorOutput: {e}");

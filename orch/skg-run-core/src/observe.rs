@@ -2,8 +2,9 @@
 
 use crate::control::RunControlError;
 use crate::id::RunId;
-use crate::model::{RunArtifact, RunStatus};
+use crate::model::RunStatus;
 use async_trait::async_trait;
+use layer0::dispatch::Artifact;
 use serde::{Deserialize, Serialize};
 
 /// Event emitted when a durable run's observable state changes.
@@ -25,7 +26,7 @@ pub enum RunUpdate {
         /// The run that produced the artifact.
         run_id: RunId,
         /// The produced artifact.
-        artifact: RunArtifact,
+        artifact: Artifact,
     },
 }
 

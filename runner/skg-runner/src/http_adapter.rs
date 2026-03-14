@@ -4,20 +4,30 @@
 //! `RunnerServiceImpl` used by the gRPC path.
 //!
 //! Endpoints:
-//! - `GET  /health`       — Docker healthcheck
-//! - `POST /v1/execute`   — JSON execute (base64-encoded input/output)
+//! - `GET  /health`              — Docker healthcheck
+//! - `POST /v1/execute`          — JSON execute (base64-encoded input/output)
+//! - `POST /v1/execute/stream`   — SSE streaming variant
 //!
-//! TODO: `POST /v1/execute/stream` — SSE streaming variant
+//! # Effect interpretation
+//!
+//! The runner is a **deployment harness**, not an orchestrator.
+//! Operator effects (tool calls, state mutations, etc.) are captured and
+//! returned in the response body but **never interpreted** by the runner.
+//! Callers that receive effects in the response are responsible for
+//! deciding how and when to execute them.
 
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{CoreError, RunnerServiceImpl};
 
@@ -36,10 +46,21 @@ pub struct JsonExecuteRequest {
     pub session_key: String,
 }
 
+/// Response from `POST /v1/execute`.
+///
+/// Contains the full serialized `OperatorOutput` (base64-encoded) plus an
+/// explicit flag indicating whether the output contains unhandled effects.
+/// The runner does **not** interpret effects — callers must inspect
+/// `has_unhandled_effects` and the effects within the decoded output to
+/// decide what action to take.
 #[derive(Serialize)]
 pub struct JsonExecuteResponse {
-    /// Base64-encoded output bytes.
+    /// Base64-encoded `OperatorOutput` JSON bytes.
     pub output: String,
+    /// `true` when the output contains effects that were not handled by the
+    /// runner. Callers should decode `output` and inspect the `effects`
+    /// field to determine what action is required.
+    pub has_unhandled_effects: bool,
 }
 
 #[derive(Serialize)]
@@ -94,6 +115,10 @@ async fn health_handler() -> Json<JsonHealthResponse> {
     })
 }
 
+/// Execute an operator and return the full output.
+///
+/// Effects are included in the response but **not interpreted** by the runner.
+/// Callers must inspect `has_unhandled_effects` and handle effects externally.
 async fn execute_handler(
     State(runner): State<Arc<RunnerServiceImpl>>,
     Json(req): Json<JsonExecuteRequest>,
@@ -109,24 +134,120 @@ async fn execute_handler(
         .decode(&req.spec)
         .map_err(|e| CoreError::InvalidArgument(format!("invalid base64 in `spec`: {e}")))?;
 
-    let output_bytes = runner.execute_core(&req.operator, &input_bytes).await?;
+    let output = runner.execute_operator(&req.operator, &input_bytes).await?;
+    let has_unhandled = output.has_unhandled_effects();
+
+    let output_bytes = serde_json::to_vec(&output)
+        .map_err(|e| CoreError::Internal(format!("failed to serialize OperatorOutput: {e}")))?;
 
     Ok(Json(JsonExecuteResponse {
         output: BASE64_STANDARD.encode(&output_bytes),
+        has_unhandled_effects: has_unhandled,
     }))
+}
+
+/// SSE streaming execute endpoint.
+///
+/// Accepts the same input as `POST /v1/execute` but returns an SSE stream.
+/// The stream emits:
+/// - `event: output` — JSON-serialized `OperatorOutput` (the final result)
+/// - `event: done`   — signals completion (empty data)
+/// - `event: error`  — JSON `{"error": "..."}` on failure
+///
+/// **Note:** This is a "streaming envelope" — the operator itself runs to
+/// completion, then the output is streamed as a single event. True real-time
+/// streaming (where partial results arrive during execution) requires
+/// `EffectEmitter` integration.
+///
+/// # Effect interpretation
+///
+/// As with the non-streaming endpoint, effects are included in the response
+/// but **not interpreted** by the runner. Callers must handle effects.
+///
+// TODO: Integrate `EffectEmitter` callback to stream partial effects and
+// intermediate messages as they are produced during operator execution.
+async fn execute_stream_handler(
+    State(runner): State<Arc<RunnerServiceImpl>>,
+    Json(req): Json<JsonExecuteRequest>,
+) -> Result<impl IntoResponse, CoreError> {
+    runner.validate_session_key(&req.session_key)?;
+
+    let input_bytes = BASE64_STANDARD
+        .decode(&req.input)
+        .map_err(|e| CoreError::InvalidArgument(format!("invalid base64 in `input`: {e}")))?;
+
+    let _spec_bytes = BASE64_STANDARD
+        .decode(&req.spec)
+        .map_err(|e| CoreError::InvalidArgument(format!("invalid base64 in `spec`: {e}")))?;
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+
+    let operator_id = req.operator;
+    tokio::spawn(async move {
+        match runner.execute_operator(&operator_id, &input_bytes).await {
+            Ok(output) => {
+                let json = match serde_json::to_string(&output) {
+                    Ok(j) => j,
+                    Err(e) => {
+                        let err_json =
+                            serde_json::json!({ "error": format!("serialize failed: {e}") });
+                        let _ = tx
+                            .send(Ok(Event::default()
+                                .event("error")
+                                .data(err_json.to_string())))
+                            .await;
+                        return;
+                    }
+                };
+
+                // Send the full output as a single event.
+                if tx
+                    .send(Ok(Event::default().event("output").data(json)))
+                    .await
+                    .is_err()
+                {
+                    return; // client disconnected
+                }
+
+                // Signal completion.
+                let _ = tx.send(Ok(Event::default().event("done").data(""))).await;
+            }
+            Err(core_err) => {
+                let err_json = serde_json::json!({
+                    "error": core_err.message(),
+                    "code": match &core_err {
+                        CoreError::Unauthenticated(_) => "unauthenticated",
+                        CoreError::NotFound(_) => "not_found",
+                        CoreError::InvalidArgument(_) => "invalid_argument",
+                        CoreError::Internal(_) => "internal",
+                    },
+                });
+                let _ = tx
+                    .send(Ok(Event::default()
+                        .event("error")
+                        .data(err_json.to_string())))
+                    .await;
+            }
+        }
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
 }
 
 // ---------------------------------------------------------------------------
 // Router construction
 // ---------------------------------------------------------------------------
 
-/// Build the axum router with `/health` and `/v1/execute`.
+/// Build the axum router with `/health`, `/v1/execute`, and `/v1/execute/stream`.
 ///
-/// Body size is capped at 16 MiB.
+/// Body size is capped at 16 MiB. The streaming endpoint returns
+/// `Content-Type: text/event-stream` with `Cache-Control: no-cache`
+/// automatically via axum's [`Sse`] response type.
 pub fn router(runner: Arc<RunnerServiceImpl>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/v1/execute", post(execute_handler))
+        .route("/v1/execute/stream", post(execute_stream_handler))
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(runner)
 }

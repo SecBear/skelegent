@@ -14,6 +14,7 @@ pub mod id;
 pub mod kernel;
 pub mod lease;
 pub mod model;
+pub mod observe;
 pub mod store;
 pub mod timer;
 pub mod wait;
@@ -26,6 +27,7 @@ pub use id::{RunId, WaitPointId};
 pub use kernel::{KernelError, ResumeAction, RunEvent, RunKernel, RunTransition};
 pub use lease::{LeaseClaim, LeaseError, LeaseGrant, LeaseStore};
 pub use model::{RunOutcome, RunStatus, RunView};
+pub use observe::{RunObserver, RunSubscription, RunUpdate};
 pub use store::{
     BackendRunRef, PendingResume, PendingSignal, RunStore, RunStoreError, StoreRunRecord,
     WaitStore, WaitStoreError,

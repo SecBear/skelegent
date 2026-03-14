@@ -396,7 +396,7 @@ impl Context {
     }
 
     /// Fire rules that match `Before` for the given op type.
-    async fn fire_before_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
+    pub(crate) async fn fire_before_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         // Collect indices of matching rules to avoid borrow issues
         let indices: Vec<usize> = self
             .rules
@@ -452,7 +452,7 @@ impl Context {
     }
 
     /// Fire rules that match `After` for the given op type.
-    async fn fire_after_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
+    pub(crate) async fn fire_after_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         let indices: Vec<usize> = self
             .rules
             .iter()

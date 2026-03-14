@@ -8,6 +8,7 @@
 //! [`infer_stream_fallback()`](skg_turn::stream::infer_stream_fallback)
 //! to get a non-streaming fallback that still works with this function.
 
+use crate::boundary::StreamInferBoundary;
 use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
@@ -19,6 +20,7 @@ use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use skg_tool::{ToolCallContext, ToolRegistry};
 use skg_turn::infer::InferResponse;
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+use std::any::TypeId;
 
 /// Run the streaming ReAct loop.
 ///
@@ -53,12 +55,20 @@ pub async fn stream_react_loop<P: StreamProvider>(
         let compile_config = config.compile_config(tools, ctx);
         let request = build_stream_request(ctx, &compile_config);
 
+        // Fire Before<StreamInferBoundary> rules (e.g. budget guard)
+        ctx.fire_before_rules(TypeId::of::<StreamInferBoundary>())
+            .await?;
+
         // Phase 2: Stream inference
         let cb = std::sync::Arc::clone(&on_event);
         let response = provider
             .infer_stream(request, move |e| cb(e))
             .await
             .map_err(EngineError::Provider)?;
+
+        // Fire After<StreamInferBoundary> rules
+        ctx.fire_after_rules(TypeId::of::<StreamInferBoundary>())
+            .await?;
 
         // Phase 3: Append response to context (rules fire)
         ctx.run(AppendResponse::new(response.clone())).await?;

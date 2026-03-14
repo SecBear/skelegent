@@ -7,6 +7,7 @@
 //! `react_loop_structured()` extends this with structured output: the model
 //! returns validated JSON via a tool call or text response, with automatic
 //! retry on validation failure.
+use crate::boundary::InferBoundary;
 use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
@@ -23,6 +24,7 @@ use skg_tool::{ToolCallContext, ToolDyn, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
+use std::any::TypeId;
 use std::fmt;
 use std::sync::Arc;
 
@@ -184,7 +186,14 @@ pub async fn react_loop<P: Provider>(
         // Phase 1: Compile and infer (re-filter tools each turn)
         let compile_config = config.compile_config(tools, ctx);
         let compiled = ctx.compile(&compile_config);
+
+        // Fire Before<InferBoundary> rules (e.g. budget guard)
+        ctx.fire_before_rules(TypeId::of::<InferBoundary>()).await?;
+
         let result = compiled.infer(provider).await?;
+
+        // Fire After<InferBoundary> rules
+        ctx.fire_after_rules(TypeId::of::<InferBoundary>()).await?;
 
         // Phase 2: Append response to context (this is a context op — rules fire)
         ctx.run(AppendResponse::new(result.response.clone()))
@@ -314,7 +323,14 @@ pub async fn react_loop_structured<P: Provider>(
             compile_config.tools.push(schema.clone());
         }
         let compiled = ctx.compile(&compile_config);
+
+        // Fire Before<InferBoundary> rules (e.g. budget guard)
+        ctx.fire_before_rules(TypeId::of::<InferBoundary>()).await?;
+
         let result = compiled.infer(provider).await?;
+
+        // Fire After<InferBoundary> rules
+        ctx.fire_after_rules(TypeId::of::<InferBoundary>()).await?;
 
         // Phase 2: Append response to context (rules fire)
         ctx.run(AppendResponse::new(result.response.clone()))

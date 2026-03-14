@@ -1,9 +1,14 @@
 #![deny(missing_docs)]
-//! Security middleware for skelegent — redaction and exfiltration detection.
+//! Security middleware for skelegent — redaction, exfiltration detection, and authentication.
 //!
 //! Provides two [`DispatchMiddleware`] implementations:
 //! - [`RedactionMiddleware`]: scans tool output for secrets and replaces them with `[REDACTED]`
 //! - [`ExfilGuardMiddleware`]: detects exfiltration attempts in tool input and halts the dispatch
+//!
+//! Plus inbound authentication primitives (see [`auth`] module).
+
+pub mod auth;
+pub use auth::{AuthError, AuthGuard, AuthIdentity, StaticKeyValidator, TokenValidator};
 
 use async_trait::async_trait;
 use layer0::content::Content;

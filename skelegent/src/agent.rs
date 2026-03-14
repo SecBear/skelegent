@@ -213,53 +213,30 @@ mod tests {
         CognitiveOperator, CognitiveOperatorConfig,
         rules::{BudgetGuard, BudgetGuardConfig},
     };
-    use skg_turn::infer::{InferRequest, InferResponse};
-    use skg_turn::provider::{Provider, ProviderError};
-    use skg_turn::types::{StopReason, TokenUsage};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use skg_turn::infer::InferResponse;
+    use skg_turn::test_utils::{FunctionProvider, make_text_response};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    #[derive(Clone, Default)]
-    struct CountingProvider {
-        calls: Arc<AtomicUsize>,
-    }
-
-    impl CountingProvider {
-        fn call_count(&self) -> usize {
-            self.calls.load(Ordering::SeqCst)
-        }
-    }
-
-    impl Provider for CountingProvider {
-        fn infer(
-            &self,
-            _request: InferRequest,
-        ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send
-        {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            async {
-                Ok(InferResponse {
-                    content: Content::text("done"),
-                    tool_calls: vec![],
-                    stop_reason: StopReason::EndTurn,
-                    usage: TokenUsage::default(),
-                    model: "test".into(),
-                    cost: None,
-                    truncated: None,
-                })
-            }
-        }
+    /// Build a FunctionProvider that counts calls and returns a fixed text response.
+    fn counting_provider(text: &str) -> (impl skg_turn::provider::Provider, Arc<AtomicUsize>) {
+        let count = Arc::new(AtomicUsize::new(0));
+        let count_inner = count.clone();
+        let response = make_text_response(text);
+        let provider = FunctionProvider::new(move |_req| {
+            count_inner.fetch_add(1, Ordering::Relaxed);
+            Ok(response.clone())
+        });
+        (provider, count)
     }
 
     #[tokio::test]
     async fn built_agent_budget_exit_halts() {
-        let provider = CountingProvider::default();
+        let (provider, call_count) = counting_provider("unused");
 
         let op = CognitiveOperator::new(
             "test",
-            provider.clone(),
+            provider,
             ToolRegistry::new(),
             CognitiveOperatorConfig {
                 system_prompt: "system".into(),
@@ -287,15 +264,15 @@ mod tests {
 
         // Budget guard fires before first inference, surfacing as an error.
         assert!(result.is_err());
-        assert_eq!(provider.call_count(), 0);
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
     async fn built_agent_run_returns_complete() {
-        let provider = CountingProvider::default();
+        let (provider, call_count) = counting_provider("done");
         let op: Box<dyn Operator> = Box::new(CognitiveOperator::new(
             "test",
-            provider.clone(),
+            provider,
             ToolRegistry::new(),
             CognitiveOperatorConfig {
                 system_prompt: "You are helpful.".into(),
@@ -306,7 +283,7 @@ mod tests {
 
         let output = agent.run("Hello!").await.unwrap();
         assert_eq!(output.exit_reason, layer0::operator::ExitReason::Complete);
-        assert_eq!(provider.call_count(), 1);
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
 }
 
