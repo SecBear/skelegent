@@ -48,8 +48,8 @@ impl layer0::operator::Operator for FailingOperator {
         _input: OperatorInput,
         _emitter: &layer0::dispatch::EffectEmitter,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
-        Err(layer0::error::OperatorError::NonRetryable(
-            "always fails".into(),
+        Err(layer0::error::OperatorError::non_retryable(
+            "always fails",
         ))
     }
 }
@@ -117,7 +117,7 @@ impl layer0::operator::Operator for ReadEnvVarOperator {
         _emitter: &layer0::dispatch::EffectEmitter,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         let value = std::env::var(&self.var_name)
-            .map_err(|e| layer0::error::OperatorError::NonRetryable(e.to_string()))?;
+            .map_err(|e| layer0::error::OperatorError::non_retryable(e.to_string()))?;
         Ok(OperatorOutput::new(
             Content::text(value),
             layer0::operator::ExitReason::Complete,

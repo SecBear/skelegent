@@ -62,13 +62,13 @@ impl<P: Provider> Operator for MyOperator<P> {
         // Inject the user input
         ctx.inject_message(Message::new(Role::User, input.message))
             .await
-            .map_err(|e| OperatorError::NonRetryable(e.to_string()))?;
+            .map_err(OperatorError::context_assembly)?;
 
         // react_loop composes Context, CompileConfig, AppendResponse,
         // and ExecuteTool internally — you just hand it the primitives
         react_loop(&mut ctx, &self.provider, &self.tools, &self.tool_ctx, &self.config)
             .await
-            .map_err(|e| OperatorError::NonRetryable(e.to_string()))
+            .map_err(|e| OperatorError::non_retryable(e.to_string()))
     }
 }
 ```

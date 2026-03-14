@@ -419,7 +419,7 @@ mod tests {
             _input: OperatorInput,
             _emitter: &EffectEmitter,
         ) -> Result<OperatorOutput, OperatorError> {
-            Err(OperatorError::Model("deliberate failure".into()))
+            Err(OperatorError::model("deliberate failure"))
         }
     }
 

@@ -149,13 +149,13 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         if !self.config.system_prompt.is_empty() {
             ctx.inject_system(&self.config.system_prompt)
                 .await
-                .map_err(|e| OperatorError::ContextAssembly(e.to_string()))?;
+                .map_err(OperatorError::context_assembly)?;
         }
 
         // Inject user message
         ctx.inject_message(Message::new(Role::User, input.message))
             .await
-            .map_err(|e| OperatorError::ContextAssembly(e.to_string()))?;
+            .map_err(OperatorError::context_assembly)?;
 
         let config = self.react_loop_config();
 
@@ -179,17 +179,20 @@ pub fn map_engine_error(err: EngineError) -> OperatorError {
     match err {
         EngineError::Provider(err) => {
             if err.is_retryable() {
-                OperatorError::Retryable(err.to_string())
+                OperatorError::model_retryable(err)
             } else {
-                OperatorError::Model(err.to_string())
+                OperatorError::Model {
+                    source: Box::new(err),
+                    retryable: false,
+                }
             }
         }
         EngineError::Operator(err) => err,
         EngineError::Tool(err) => OperatorError::SubDispatch {
             operator: "tool".into(),
-            message: err.to_string(),
+            source: Box::new(err),
         },
-        EngineError::Halted { reason } => OperatorError::NonRetryable(reason),
+        EngineError::Halted { reason } => OperatorError::Halted { reason },
         EngineError::Custom(err) => OperatorError::Other(err),
     }
 }
@@ -252,7 +255,7 @@ mod tests {
         let result = op
             .execute(simple_input("test"), &EffectEmitter::noop())
             .await;
-        assert!(matches!(result, Err(OperatorError::Retryable(_))));
+        assert!(matches!(result, Err(OperatorError::Model { retryable: true, .. })));
     }
 
     #[tokio::test]

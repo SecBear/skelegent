@@ -115,9 +115,12 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         // Single model call
         let response = self.provider.infer(request).await.map_err(|e| {
             if e.is_retryable() {
-                OperatorError::Retryable(e.to_string())
+                OperatorError::model_retryable(e)
             } else {
-                OperatorError::Model(e.to_string())
+                OperatorError::Model {
+                    source: Box::new(e),
+                    retryable: false,
+                }
             }
         })?;
 
@@ -216,7 +219,7 @@ mod tests {
         let result = op
             .execute(simple_input("test"), &EffectEmitter::noop())
             .await;
-        assert!(matches!(result, Err(OperatorError::Retryable(_))));
+        assert!(matches!(result, Err(OperatorError::Model { retryable: true, .. })));
     }
 
     #[tokio::test]

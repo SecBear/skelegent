@@ -39,9 +39,10 @@ impl std::error::Error for EngineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Provider(e) => Some(e),
+            Self::Operator(e) => Some(e),
             Self::Tool(e) => Some(e),
             Self::Custom(e) => Some(e.as_ref()),
-            _ => None,
+            Self::Halted { .. } => None,
         }
     }
 }

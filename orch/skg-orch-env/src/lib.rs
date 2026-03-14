@@ -11,7 +11,7 @@
 use async_trait::async_trait;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::environment::{Environment, EnvironmentSpec};
-use layer0::error::{EnvError, OrchError};
+use layer0::error::OrchError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::OperatorInput;
 use std::collections::HashMap;
@@ -77,14 +77,6 @@ impl Default for EnvOrch {
     }
 }
 
-/// Map [`EnvError`] to [`OrchError`], preserving the inner [`OperatorError`]
-/// when the environment propagated one.
-fn env_err_to_orch(e: EnvError) -> OrchError {
-    match e {
-        EnvError::OperatorError(op_err) => OrchError::OperatorError(op_err),
-        other => OrchError::DispatchFailed(other.to_string()),
-    }
-}
 
 #[async_trait]
 impl Dispatcher for EnvOrch {
@@ -111,7 +103,7 @@ impl Dispatcher for EnvOrch {
                 Err(err) => {
                     let _ = sender
                         .send(DispatchEvent::Failed {
-                            error: env_err_to_orch(err),
+                            error: err.into(),
                         })
                         .await;
                 }

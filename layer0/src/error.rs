@@ -6,36 +6,108 @@ use thiserror::Error;
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum OperatorError {
-    /// An error from the model/LLM provider.
-    #[error("model error: {0}")]
-    Model(String),
+    /// Provider/model failure.
+    #[error("model error: {source}")]
+    Model {
+        /// The underlying provider error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+        /// Whether the caller should retry.
+        retryable: bool,
+    },
 
-    /// An error during sub-dispatch execution.
-    #[error("sub-dispatch error in {operator}: {message}")]
+    /// Sub-dispatch failure.
+    #[error("sub-dispatch error in {operator}: {source}")]
     SubDispatch {
-        /// Name of the operator that failed.
+        /// Which operator/tool failed.
         operator: String,
-        /// Error message.
-        message: String,
+        /// The underlying error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
 
     /// Context assembly failed before the model call.
-    #[error("context assembly failed: {0}")]
-    ContextAssembly(String),
+    #[error("context assembly: {source}")]
+    ContextAssembly {
+        /// The underlying error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     /// The operator failed but retrying might succeed.
     /// The orchestrator's retry policy decides.
-    #[error("retryable: {0}")]
-    Retryable(String),
+    #[error("retryable: {message}")]
+    Retryable {
+        /// Description.
+        message: String,
+        /// Optional underlying cause.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 
     /// The operator failed and retrying won't help.
     /// Budget exceeded, invalid input, safety refusal.
-    #[error("non-retryable: {0}")]
-    NonRetryable(String),
+    #[error("non-retryable: {message}")]
+    NonRetryable {
+        /// Description.
+        message: String,
+        /// Optional underlying cause.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
+    /// A rule or policy halted execution — distinct from a permanent failure.
+    #[error("halted: {reason}")]
+    Halted {
+        /// Why execution was halted.
+        reason: String,
+    },
 
     /// Catch-all. Include context.
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl OperatorError {
+    /// Non-retryable model error from a message.
+    pub fn model(msg: impl Into<String>) -> Self {
+        let s: String = msg.into();
+        Self::Model {
+            source: s.into(),
+            retryable: false,
+        }
+    }
+
+    /// Retryable model error from a source error.
+    pub fn model_retryable(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Model {
+            source: Box::new(source),
+            retryable: true,
+        }
+    }
+
+    /// Context assembly error from a source error.
+    pub fn context_assembly(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::ContextAssembly {
+            source: Box::new(source),
+        }
+    }
+
+    /// Simple retryable error from a message.
+    pub fn retryable(msg: impl Into<String>) -> Self {
+        Self::Retryable {
+            message: msg.into(),
+            source: None,
+        }
+    }
+
+    /// Simple non-retryable error from a message.
+    pub fn non_retryable(msg: impl Into<String>) -> Self {
+        Self::NonRetryable {
+            message: msg.into(),
+            source: None,
+        }
+    }
 }
 
 /// Orchestration errors.
@@ -62,9 +134,23 @@ pub enum OrchError {
     #[error("operator error: {0}")]
     OperatorError(#[from] OperatorError),
 
+    /// An environment error propagated through orchestration.
+    #[error("environment error: {0}")]
+    EnvironmentError(EnvError),
+
     /// Catch-all.
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<EnvError> for OrchError {
+    fn from(e: EnvError) -> Self {
+        match e {
+            // Preserve the inner OperatorError so callers can match on it directly.
+            EnvError::OperatorError(op) => OrchError::OperatorError(op),
+            other => OrchError::EnvironmentError(other),
+        }
+    }
 }
 
 /// State errors.

@@ -40,7 +40,7 @@
 //!             .await?
 //!             .collect()
 //!             .await
-//!             .map_err(|e| OperatorError::NonRetryable(e.to_string()))?;
+//!             .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
 //!         // ...
 //!     }
 //! }

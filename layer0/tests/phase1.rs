@@ -734,12 +734,12 @@ fn _takes_state_store<T: StateStore>(s: &T) {
 
 #[test]
 fn operator_error_display() {
-    let e = OperatorError::Model("rate limited".into());
+    let e = OperatorError::model("rate limited");
     assert_eq!(e.to_string(), "model error: rate limited");
 
     let e = OperatorError::SubDispatch {
         operator: "bash".into(),
-        message: "command failed".into(),
+        source: "command failed".to_string().into(),
     };
     assert_eq!(e.to_string(), "sub-dispatch error in bash: command failed");
 }
@@ -772,15 +772,15 @@ fn env_error_display() {
 #[test]
 fn operator_error_display_remaining_variants() {
     assert_eq!(
-        OperatorError::ContextAssembly("bad ctx".into()).to_string(),
-        "context assembly failed: bad ctx"
+        OperatorError::context_assembly(std::io::Error::new(std::io::ErrorKind::Other, "bad ctx")).to_string(),
+        "context assembly: bad ctx"
     );
     assert_eq!(
-        OperatorError::Retryable("timeout".into()).to_string(),
+        OperatorError::retryable("timeout").to_string(),
         "retryable: timeout"
     );
     assert_eq!(
-        OperatorError::NonRetryable("invalid".into()).to_string(),
+        OperatorError::non_retryable("invalid").to_string(),
         "non-retryable: invalid"
     );
     let boxed: Box<dyn std::error::Error + Send + Sync> = "inner error".into();
@@ -801,7 +801,7 @@ fn orch_error_display_remaining_variants() {
         OrchError::SignalFailed("no handler".into()).to_string(),
         "signal delivery failed: no handler"
     );
-    let inner = OperatorError::Model("provider down".into());
+    let inner = OperatorError::model("provider down");
     assert_eq!(
         OrchError::OperatorError(inner).to_string(),
         "operator error: model error: provider down"
@@ -838,7 +838,7 @@ fn env_error_display_remaining_variants() {
         EnvError::ResourceExceeded("OOM".into()).to_string(),
         "resource limit exceeded: OOM"
     );
-    let inner = OperatorError::Model("provider down".into());
+    let inner = OperatorError::model("provider down");
     assert_eq!(
         EnvError::OperatorError(inner).to_string(),
         "operator error: model error: provider down"

@@ -58,7 +58,7 @@ impl Operator for ToolOperator {
     ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("null");
         let tool_input: serde_json::Value = serde_json::from_str(text)
-            .map_err(|e| OperatorError::NonRetryable(format!("invalid tool input JSON: {e}")))?;
+            .map_err(|e| OperatorError::non_retryable(format!("invalid tool input JSON: {e}")))?;
 
         let ctx = ToolCallContext::new(OperatorId::new("agent"));
         match self.tool.call(tool_input, &ctx).await {
@@ -74,7 +74,7 @@ impl Operator for ToolOperator {
             }
             Err(err) => Err(OperatorError::SubDispatch {
                 operator: self.tool.name().to_string(),
-                message: err.to_string(),
+                source: Box::new(err),
             }),
         }
     }
@@ -256,11 +256,12 @@ mod tests {
             .expect_err("should fail");
 
         match err {
-            OperatorError::SubDispatch { operator, message } => {
+            OperatorError::SubDispatch { operator, source } => {
                 assert_eq!(operator, "fail");
+                let msg = source.to_string();
                 assert!(
-                    message.contains("always fails"),
-                    "unexpected message: {message}"
+                    msg.contains("always fails"),
+                    "unexpected message: {msg}"
                 );
             }
             other => panic!("expected SubDispatch, got {other:?}"),
