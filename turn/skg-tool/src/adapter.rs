@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use layer0::dispatch::EffectEmitter;
 use layer0::operator::Operator;
 use layer0::{
     Content, DurationMs, ExitReason, OperatorError, OperatorId, OperatorInput, OperatorOutput,
@@ -50,7 +51,11 @@ impl Operator for ToolOperator {
     ///
     /// `input.message` must be valid JSON text representing the tool's input.
     /// Any parse failure is surfaced as `OperatorError::NonRetryable`.
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        input: OperatorInput,
+        _emitter: &EffectEmitter,
+    ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("null");
         let tool_input: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| OperatorError::NonRetryable(format!("invalid tool input JSON: {e}")))?;
@@ -114,7 +119,7 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
         let (handle, sender) =
             layer0::DispatchHandle::channel(layer0::DispatchId::new("tool-registry"));
         tokio::spawn(async move {
-            match operator.execute(input).await {
+            match operator.execute(input, &EffectEmitter::noop()).await {
                 Ok(output) => {
                     let _ = sender
                         .send(layer0::DispatchEvent::Completed { output })
@@ -220,7 +225,10 @@ mod tests {
         let op = ToolOperator::new(tool);
 
         let input = make_input(r#"{"msg": "hello"}"#);
-        let output = op.execute(input).await.expect("should succeed");
+        let output = op
+            .execute(input, &EffectEmitter::noop())
+            .await
+            .expect("should succeed");
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
 
@@ -242,7 +250,10 @@ mod tests {
         let op = ToolOperator::new(tool);
 
         let input = make_input("{}");
-        let err = op.execute(input).await.expect_err("should fail");
+        let err = op
+            .execute(input, &EffectEmitter::noop())
+            .await
+            .expect_err("should fail");
 
         match err {
             OperatorError::SubDispatch { operator, message } => {

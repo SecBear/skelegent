@@ -65,7 +65,7 @@
 //!
 //! #[async_trait]
 //! impl<P: Provider> Operator for MyOperator<P> {
-//!     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+//!     async fn execute(&self, input: OperatorInput, _emitter: &EffectEmitter) -> Result<OperatorOutput, OperatorError> {
 //!         let mut ctx = Context::new();
 //!         ctx.inject_message(Message::new(Role::User, input.message))
 //!             .await
@@ -78,6 +78,8 @@
 //! ```
 
 pub mod assembly;
+pub mod boundary;
+pub mod cognitive_operator;
 pub mod compile;
 pub mod context;
 pub mod error;
@@ -91,6 +93,8 @@ pub mod stream;
 pub mod stream_react;
 
 // Re-exports
+pub use boundary::{InferBoundary, StreamInferBoundary};
+pub use cognitive_operator::{CognitiveOperator, CognitiveOperatorConfig, map_engine_error};
 pub use compile::{CompileConfig, CompiledContext, InferResult};
 pub use context::{Context, Extensions, TurnMetrics};
 pub use error::EngineError;

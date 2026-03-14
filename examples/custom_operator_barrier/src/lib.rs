@@ -13,6 +13,7 @@
 //! ```rust
 //! use std::sync::Arc;
 //! use layer0::content::{Content, ContentBlock};
+//! use layer0::dispatch::EffectEmitter;
 //! use layer0::operator::{Operator, OperatorInput, TriggerType, ExitReason};
 //! use skg_tool::{ToolRegistry, ToolDyn, ToolError};
 //! use serde_json::{json, Value};
@@ -43,7 +44,7 @@
 //!     TriggerType::Task,
 //! );
 //!
-//! let out = op.execute(input).await.unwrap();
+//! let out = op.execute(input, &EffectEmitter::noop()).await.unwrap();
 //! assert_eq!(out.exit_reason, ExitReason::Complete);
 //! if let Content::Blocks(blocks) = out.message {
 //!     let results = blocks.iter().filter(|b| matches!(b, ContentBlock::ToolResult{..})).count();
@@ -54,6 +55,7 @@
 
 use async_trait::async_trait;
 use layer0::content::{Content, ContentBlock};
+use layer0::dispatch::EffectEmitter;
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::error::OperatorError;
@@ -74,7 +76,11 @@ impl BarrierOperator {
 
 #[async_trait]
 impl Operator for BarrierOperator {
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        input: OperatorInput,
+        _emitter: &EffectEmitter,
+    ) -> Result<OperatorOutput, OperatorError> {
         let mut out_blocks: Vec<ContentBlock> = Vec::new();
         let mut batch: Vec<(String, String, serde_json::Value)> = Vec::new();
         let mut metadata = layer0::operator::OperatorMetadata::default();
@@ -239,7 +245,7 @@ mod tests {
             layer0::operator::TriggerType::Task,
         );
 
-        let out = op.execute(input).await.unwrap();
+        let out = op.execute(input, &EffectEmitter::noop()).await.unwrap();
         match out.message {
             Content::Blocks(blocks) => {
                 // Expect 4 tool results + 2 steering texts (after each flush)

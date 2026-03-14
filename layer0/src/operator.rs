@@ -1,6 +1,7 @@
 //! The Operator protocol — what one operator does per cycle.
 
 use crate::context::Message;
+use crate::dispatch::EffectEmitter;
 use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -245,6 +246,25 @@ impl OperatorOutput {
             effects: vec![],
         }
     }
+
+    /// Check whether this output contains effects that need an interpreter.
+    ///
+    /// Returns `true` if [`effects`](Self::effects) is non-empty. Callers that
+    /// consume `OperatorOutput` directly (without an `EffectInterpreter` or
+    /// `OrchestratedRunner`) should check this and decide whether the unhandled
+    /// effects are acceptable or a bug.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let output = op.execute(input, &EffectEmitter::noop()).await?;
+    /// if output.has_unhandled_effects() {
+    ///     tracing::warn!("effects will not be executed: {:?}", output.effects);
+    /// }
+    /// ```
+    pub fn has_unhandled_effects(&self) -> bool {
+        !self.effects.is_empty()
+    }
 }
 
 impl SubDispatchRecord {
@@ -333,10 +353,18 @@ pub trait Operator: Send + Sync {
     /// The operator MUST NOT write to external state directly — it
     /// declares writes as Effects in the output.
     ///
+    /// The `emitter` parameter streams observable events (progress,
+    /// artifacts) to the dispatch caller in real-time. Operators that
+    /// don't stream can ignore it.
+    ///
     /// Operators that compose (invoke siblings) hold `Arc<dyn Dispatcher>`
     /// as a field via constructor injection. The execute signature stays
     /// clean — non-composing operators never see dispatch infrastructure.
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError>;
+    async fn execute(
+        &self,
+        input: OperatorInput,
+        emitter: &EffectEmitter,
+    ) -> Result<OperatorOutput, OperatorError>;
 }
 
 #[cfg(test)]

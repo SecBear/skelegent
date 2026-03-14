@@ -11,12 +11,16 @@
 //! ```
 
 use layer0::content::Content;
-use layer0::context::Role;
+use layer0::dispatch::EffectEmitter;
 use layer0::error::OperatorError;
-use skg_context_engine::{
-    AssemblyExt, Context, ReactLoopConfig, react_loop, rule::Trigger, rules::BudgetGuard,
-};
+use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
 use skg_tool::ToolRegistry;
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
+use skg_turn::provider::Provider;
 
 /// Create an agent builder with the given model identifier.
 ///
@@ -101,52 +105,22 @@ impl AgentBuilder {
 
 /// A fully constructed agent ready to run.
 pub struct BuiltAgent {
-    model: String,
-    system_prompt: String,
-    tools: ToolRegistry,
-    max_turns: u32,
-    max_tokens: u32,
-    provider: ProviderKind,
+    operator: OperatorBox,
 }
 
 impl BuiltAgent {
     /// Run the agent with a user message.
-    pub async fn run(
-        &self,
-        message: &str,
-    ) -> Result<layer0::operator::OperatorOutput, OperatorError> {
-        // Create context with budget guard rule
-        let guard = BudgetGuard::with_config(skg_context_engine::rules::BudgetGuardConfig {
-            max_cost: None,
-            max_turns: Some(self.max_turns),
-            max_duration: None,
-            max_tool_calls: None,
-        });
-        let rule =
-            skg_context_engine::rule::Rule::new("budget_guard", Trigger::BeforeAny, 100, guard);
-        let mut ctx = Context::with_rules(vec![rule]);
-
-        // Inject system prompt and user message
-        ctx.inject_system(&self.system_prompt)
-            .await
-            .map_err(|_| OperatorError::InferenceError("Failed to inject system prompt".into()))?;
-        let user_msg = layer0::context::Message::new(Role::User, Content::text(message));
-        ctx.inject_message(user_msg)
-            .await
-            .map_err(|_| OperatorError::InferenceError("Failed to inject user message".into()))?;
-
-        // Run the react loop
-        let config = ReactLoopConfig {
-            system_prompt: self.system_prompt.clone(),
-            model: Some(self.model.clone()),
-            max_tokens: Some(self.max_tokens),
-            temperature: None,
-            tool_filter: None,
-        };
-
-        self.provider
-            .react_loop(&mut ctx, &self.tools, &config)
-            .await
+    pub async fn run(&self, message: &str) -> Result<OperatorOutput, OperatorError> {
+        let input = OperatorInput::new(Content::text(message), TriggerType::User);
+        let output = self.operator.execute(input, &EffectEmitter::noop()).await?;
+        if output.has_unhandled_effects() {
+            eprintln!(
+                "warning: OperatorOutput contains {} effect(s) that will not be executed. \
+                 Use an EffectInterpreter or OrchestratedRunner to process effects.",
+                output.effects.len(),
+            );
+        }
+        Ok(output)
     }
 }
 
@@ -182,45 +156,161 @@ impl std::fmt::Display for AgentBuildError {
 
 impl std::error::Error for AgentBuildError {}
 
-/// Enum to hold different provider types (since Provider is RPITIT and not object-safe).
-enum ProviderKind {
-    #[cfg(feature = "provider-anthropic")]
-    Anthropic(skg_provider_anthropic::AnthropicProvider),
-    #[cfg(feature = "provider-openai")]
-    OpenAI(skg_provider_openai::OpenAIProvider),
-    #[cfg(feature = "provider-ollama")]
-    Ollama(skg_provider_ollama::OllamaProvider),
+/// Type-erased operator box — wraps `CognitiveOperator<P>` for any provider.
+///
+/// This exists because `Provider` is RPITIT (not object-safe), so we can't
+/// use `Box<dyn Operator>` directly through the provider enum. Instead,
+/// we construct the concrete `CognitiveOperator<P>` during `build()` and
+/// erase it behind `Box<dyn Operator>`.
+type OperatorBox = Box<dyn Operator>;
+
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
+/// Build a `CognitiveOperator` from resolved provider and config.
+fn build_cognitive_operator<P: Provider + 'static>(
+    provider: P,
+    system_prompt: String,
+    tools: ToolRegistry,
+    max_turns: u32,
+    max_tokens: u32,
+) -> Box<dyn Operator> {
+    use skg_context_engine::{
+        CognitiveOperator, CognitiveOperatorConfig, InferBoundary, Rule,
+        rules::{BudgetGuard, BudgetGuardConfig},
+    };
+
+    let op = CognitiveOperator::new(
+        "agent",
+        provider,
+        tools,
+        CognitiveOperatorConfig {
+            system_prompt,
+            model: None, // model already selected by provider
+            max_tokens: Some(max_tokens),
+            ..Default::default()
+        },
+    )
+    .with_rules(move || {
+        let guard = BudgetGuard::with_config(BudgetGuardConfig {
+            max_cost: None,
+            max_turns: Some(max_turns),
+            max_duration: None,
+            max_tool_calls: None,
+        });
+        vec![Rule::before::<InferBoundary>("budget_guard", 100, guard)]
+    });
+    Box::new(op)
 }
 
-impl ProviderKind {
-    /// Call react_loop with the appropriate provider.
-    async fn react_loop(
-        &self,
-        ctx: &mut Context,
-        tools: &ToolRegistry,
-        config: &ReactLoopConfig,
-    ) -> Result<layer0::operator::OperatorOutput, OperatorError> {
-        match self {
-            #[cfg(feature = "provider-anthropic")]
-            Self::Anthropic(provider) => {
-                skg_context_engine::react_loop(ctx, provider, tools, config)
-                    .await
-                    .map_err(|e| {
-                        OperatorError::InferenceError(format!("Context engine error: {e}"))
-                    })
-            }
-            #[cfg(feature = "provider-openai")]
-            Self::OpenAI(provider) => skg_context_engine::react_loop(ctx, provider, tools, config)
-                .await
-                .map_err(|e| OperatorError::InferenceError(format!("Context engine error: {e}"))),
-            #[cfg(feature = "provider-ollama")]
-            Self::Ollama(provider) => skg_context_engine::react_loop(ctx, provider, tools, config)
-                .await
-                .map_err(|e| OperatorError::InferenceError(format!("Context engine error: {e}"))),
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skg_context_engine::{
+        CognitiveOperator, CognitiveOperatorConfig, InferBoundary, Rule,
+        rules::{BudgetGuard, BudgetGuardConfig},
+    };
+    use skg_turn::infer::{InferRequest, InferResponse};
+    use skg_turn::provider::{Provider, ProviderError};
+    use skg_turn::types::{StopReason, TokenUsage};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone, Default)]
+    struct CountingProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CountingProvider {
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
         }
+    }
+
+    impl Provider for CountingProvider {
+        fn infer(
+            &self,
+            _request: InferRequest,
+        ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send
+        {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            async {
+                Ok(InferResponse {
+                    content: Content::text("done"),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    usage: TokenUsage::default(),
+                    model: "test".into(),
+                    cost: None,
+                    truncated: None,
+                })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn built_agent_budget_exit_returns_structured_output() {
+        let provider = CountingProvider::default();
+
+        let op = CognitiveOperator::new(
+            "test",
+            provider.clone(),
+            ToolRegistry::new(),
+            CognitiveOperatorConfig {
+                system_prompt: "system".into(),
+                ..Default::default()
+            },
+        )
+        .with_rules(|| {
+            let guard = BudgetGuard::with_config(BudgetGuardConfig {
+                max_cost: None,
+                max_turns: Some(0),
+                max_duration: None,
+                max_tool_calls: None,
+            });
+            vec![Rule::before::<InferBoundary>("budget_guard", 100, guard)]
+        });
+
+        let input = OperatorInput::new(Content::text("hi"), TriggerType::User);
+        let output = op
+            .execute(input, &EffectEmitter::noop())
+            .await
+            .expect("budget exits should return operator output");
+
+        assert_eq!(output.exit_reason, layer0::operator::ExitReason::MaxTurns);
+        assert_eq!(output.message.as_text(), Some(""));
+        assert_eq!(provider.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn built_agent_run_returns_complete() {
+        let provider = CountingProvider::default();
+        let op: Box<dyn Operator> = Box::new(CognitiveOperator::new(
+            "test",
+            provider.clone(),
+            ToolRegistry::new(),
+            CognitiveOperatorConfig {
+                system_prompt: "You are helpful.".into(),
+                ..Default::default()
+            },
+        ));
+        let agent = BuiltAgent { operator: op };
+
+        let output = agent.run("Hello!").await.unwrap();
+        assert_eq!(output.exit_reason, layer0::operator::ExitReason::Complete);
+        assert_eq!(provider.call_count(), 1);
     }
 }
 
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
 fn resolve_model(
     model: &str,
     system_prompt: String,
@@ -228,7 +318,9 @@ fn resolve_model(
     max_turns: u32,
     max_tokens: u32,
 ) -> Result<BuiltAgent, AgentBuildError> {
-    let provider = if model.starts_with("claude-") || model.starts_with("anthropic:") {
+    let operator: Box<dyn Operator> = if model.starts_with("claude-")
+        || model.starts_with("anthropic:")
+    {
         #[cfg(feature = "provider-anthropic")]
         {
             let api_key =
@@ -236,7 +328,7 @@ fn resolve_model(
                     env_var: "ANTHROPIC_API_KEY",
                 })?;
             let provider = skg_provider_anthropic::AnthropicProvider::new(api_key);
-            ProviderKind::Anthropic(provider)
+            build_cognitive_operator(provider, system_prompt, tools, max_turns, max_tokens)
         }
         #[cfg(not(feature = "provider-anthropic"))]
         {
@@ -256,7 +348,7 @@ fn resolve_model(
                     env_var: "OPENAI_API_KEY",
                 })?;
             let provider = skg_provider_openai::OpenAIProvider::new(api_key);
-            ProviderKind::OpenAI(provider)
+            build_cognitive_operator(provider, system_prompt, tools, max_turns, max_tokens)
         }
         #[cfg(not(feature = "provider-openai"))]
         {
@@ -268,7 +360,7 @@ fn resolve_model(
         #[cfg(feature = "provider-ollama")]
         {
             let provider = skg_provider_ollama::OllamaProvider::new();
-            ProviderKind::Ollama(provider)
+            build_cognitive_operator(provider, system_prompt, tools, max_turns, max_tokens)
         }
         #[cfg(not(feature = "provider-ollama"))]
         {
@@ -280,12 +372,5 @@ fn resolve_model(
         return Err(AgentBuildError::UnknownModel(model.to_string()));
     };
 
-    Ok(BuiltAgent {
-        model: model.to_string(),
-        system_prompt,
-        tools,
-        max_turns,
-        max_tokens,
-        provider,
-    })
+    Ok(BuiltAgent { operator })
 }

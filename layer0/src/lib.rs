@@ -69,7 +69,9 @@ pub mod test_utils;
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
 pub use context::{Message, MessageMeta, Role};
-pub use dispatch::{Artifact, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher};
+pub use dispatch::{
+    Artifact, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher, EffectEmitter,
+};
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};

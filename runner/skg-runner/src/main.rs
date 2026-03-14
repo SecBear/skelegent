@@ -11,6 +11,7 @@
 mod http_adapter;
 mod registry;
 
+use layer0::dispatch::EffectEmitter;
 use std::sync::Arc;
 
 use tokio::signal;
@@ -126,7 +127,10 @@ impl RunnerServiceImpl {
         let operator = self.resolve_operator(operator_id)?;
 
         // Spawn in a task to catch panics from operator implementations.
-        let handle = tokio::task::spawn(async move { operator.execute(input).await });
+        let handle =
+            tokio::task::spawn(
+                async move { operator.execute(input, &EffectEmitter::noop()).await },
+            );
 
         let result = handle.await.map_err(|join_err| {
             error!("operator panicked: {join_err}");
@@ -189,7 +193,11 @@ impl Runner for RunnerServiceImpl {
             }
 
             // Execute the operator, catching panics via the spawned task boundary.
-            let result = tokio::task::spawn(async move { operator.execute(input).await }).await;
+            let result =
+                tokio::task::spawn(
+                    async move { operator.execute(input, &EffectEmitter::noop()).await },
+                )
+                .await;
 
             match result {
                 Ok(Ok(output)) => {

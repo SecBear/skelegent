@@ -7,7 +7,7 @@
 //! minimal `query` are implemented via an in-memory, per-workflow signal journal.
 
 use async_trait::async_trait;
-use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher, EffectEmitter};
 use layer0::effect::SignalPayload;
 use layer0::error::OrchError;
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
@@ -82,8 +82,9 @@ impl DispatchNext for OperatorDispatch<'_> {
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?
             .clone();
         let (handle, sender) = DispatchHandle::channel(DispatchId::new(operator.as_str()));
+        let emitter = EffectEmitter::new(sender.clone());
         tokio::spawn(async move {
-            match op.execute(input).await {
+            match op.execute(input, &emitter).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }

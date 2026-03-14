@@ -11,6 +11,7 @@
 use layer0::OperatorId;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
+use layer0::dispatch::EffectEmitter;
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
 use skg_context_engine::{Context, ReactLoopConfig, react_loop};
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
@@ -84,7 +85,10 @@ async fn anthropic_single_shot() {
     let op = SingleShotOperator::new(provider, config);
 
     let output = op
-        .execute(simple_input("Say hello in exactly 3 words."))
+        .execute(
+            simple_input("Say hello in exactly 3 words."),
+            &EffectEmitter::noop(),
+        )
         .await
         .expect("Anthropic SingleShotOperator should succeed");
 
@@ -204,7 +208,10 @@ async fn openai_single_shot() {
     let op = SingleShotOperator::new(provider, config);
 
     let output = op
-        .execute(simple_input("Say hello in exactly 3 words."))
+        .execute(
+            simple_input("Say hello in exactly 3 words."),
+            &EffectEmitter::noop(),
+        )
         .await
         .expect("OpenAI SingleShotOperator should succeed");
 

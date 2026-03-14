@@ -33,7 +33,7 @@
 //! }
 //!
 //! impl Operator for CoordinatorOp {
-//!     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+//!     async fn execute(&self, input: OperatorInput, _emitter: &EffectEmitter) -> Result<OperatorOutput, OperatorError> {
 //!         // delegate to a sibling — goes through orchestrator middleware
 //!         let child_output = self.dispatcher
 //!             .dispatch(&OperatorId::new("summarizer"), child_input)
@@ -346,6 +346,15 @@ pub struct DispatchSender {
     cancel_rx: watch::Receiver<bool>,
 }
 
+impl Clone for DispatchSender {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            cancel_rx: self.cancel_rx.clone(),
+        }
+    }
+}
+
 impl DispatchSender {
     /// Send an event to the dispatch handle.
     ///
@@ -368,7 +377,7 @@ impl DispatchSender {
     ///
     /// ```rust,ignore
     /// tokio::select! {
-    ///     result = operator.execute(input) => { /* handle result */ }
+    ///     result = operator.execute(input, &emitter) => { /* handle result */ }
     ///     _ = sender.cancelled() => { /* handle cancellation */ }
     /// }
     /// ```
@@ -388,6 +397,14 @@ impl DispatchSender {
             }
         }
     }
+
+    /// Clone the cancellation receiver.
+    ///
+    /// Used by [`EffectEmitter`] to observe cancellation without
+    /// requiring `&mut self`.
+    pub(crate) fn cancel_rx_clone(&self) -> watch::Receiver<bool> {
+        self.cancel_rx.clone()
+    }
 }
 
 // Manual Debug impl.
@@ -395,6 +412,124 @@ impl std::fmt::Debug for DispatchSender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DispatchSender")
             .field("is_cancelled", &self.is_cancelled())
+            .finish_non_exhaustive()
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// EFFECT EMITTER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Channel for streaming observable events during operator execution.
+///
+/// Operators receive this as a parameter to [`Operator::execute`] and call
+/// its methods to emit progress updates, artifacts, and other observable
+/// events in real-time. These events are forwarded to the dispatch
+/// caller's [`DispatchHandle`].
+///
+/// For operators that don't stream: ignore the parameter.
+///
+/// # Design
+///
+/// This is the Rust equivalent of Python's `StreamWriter` (LangGraph)
+/// or `yield` in an async generator (ADK, Autogen). The operator
+/// declares intermediate observable events via the emitter; the
+/// terminal result comes from the function return value. These are
+/// genuinely different categories — intermediate observations vs.
+/// final output — so two mechanisms is correct modeling.
+///
+/// The emitter wraps an `Option<DispatchSender>`: `None` when no
+/// consumer is listening (tests, batch callers). Emission methods
+/// become no-ops in that case — zero overhead.
+pub struct EffectEmitter {
+    sender: Option<DispatchSender>,
+}
+
+impl EffectEmitter {
+    /// Create an emitter that forwards events to a dispatch handle.
+    pub fn new(sender: DispatchSender) -> Self {
+        Self {
+            sender: Some(sender),
+        }
+    }
+
+    /// Create a no-op emitter that discards all events.
+    ///
+    /// Use in tests or when no streaming consumer exists.
+    pub fn noop() -> Self {
+        Self { sender: None }
+    }
+
+    /// Emit an intermediate progress event (reasoning step, partial output).
+    ///
+    /// No-op if no consumer is listening.
+    pub async fn progress(&self, content: Content) {
+        if let Some(ref sender) = self.sender {
+            let _ = sender.send(DispatchEvent::Progress { content }).await;
+        }
+    }
+
+    /// Emit an intermediate artifact produced during execution.
+    ///
+    /// No-op if no consumer is listening.
+    pub async fn artifact(&self, artifact: Artifact) {
+        let _ = self
+            .emit(DispatchEvent::ArtifactProduced { artifact })
+            .await;
+    }
+
+    /// Emit a raw [`DispatchEvent`].
+    ///
+    /// Prefer the typed methods ([`progress`](Self::progress),
+    /// [`artifact`](Self::artifact)) for common cases. Use this for
+    /// custom or future event types.
+    ///
+    /// Returns `Ok(())` if sent or no consumer, `Err` if the
+    /// consumer dropped the handle.
+    pub async fn emit(&self, event: DispatchEvent) -> Result<(), ()> {
+        if let Some(ref sender) = self.sender {
+            sender.send(event).await.map_err(|_| ())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Check whether the dispatch caller has requested cancellation.
+    ///
+    /// Operators should poll this periodically during long-running
+    /// work and exit early when cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        self.sender.as_ref().is_some_and(|s| s.is_cancelled())
+    }
+
+    /// Wait until the dispatch caller requests cancellation.
+    ///
+    /// Useful in `tokio::select!` to race cancellation against work.
+    /// Returns immediately if no consumer exists (no-op emitter).
+    pub async fn cancelled(&self) {
+        if let Some(ref sender) = self.sender {
+            // Clone the cancel_rx to get a mutable receiver without
+            // requiring &mut self.
+            let mut rx = sender.cancel_rx_clone();
+            if *rx.borrow() {
+                return;
+            }
+            loop {
+                if rx.changed().await.is_err() {
+                    return;
+                }
+                if *rx.borrow() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for EffectEmitter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EffectEmitter")
+            .field("active", &self.sender.is_some())
             .finish_non_exhaustive()
     }
 }

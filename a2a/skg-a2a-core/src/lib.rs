@@ -34,4 +34,3 @@ pub use types::{
     A2aArtifact, A2aMessage, A2aRole, A2aTask, Part, PartContent, SendMessageRequest,
     SendMessageResponse, StreamResponse, SubscribeToTaskRequest, TaskState, TaskStatus,
 };
-
