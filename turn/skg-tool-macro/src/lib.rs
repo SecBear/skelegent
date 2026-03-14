@@ -100,13 +100,13 @@ fn extract_option_inner(ty: &Type) -> Option<&Type> {
     None
 }
 
-/// Return `true` if `ty` is `&ToolCallContext` (any qualifying path ending in `ToolCallContext`).
-fn is_tool_call_context_ref(ty: &Type) -> bool {
+/// Return `true` if `ty` is `&DispatchContext` (any qualifying path ending in `DispatchContext`).
+fn is_dispatch_context_ref(ty: &Type) -> bool {
     if let Type::Reference(r) = ty
         && let Type::Path(tp) = r.elem.as_ref()
         && let Some(last) = tp.path.segments.last()
     {
-        return last.ident == "ToolCallContext";
+        return last.ident == "DispatchContext";
     }
     false
 }
@@ -162,7 +162,7 @@ struct ParamInfo {
     ty: Type,
     /// True if the parameter type is `Option<_>` (not included in `required`).
     is_optional: bool,
-    /// True if the parameter is `&ToolCallContext` (not included in schema, passed through).
+    /// True if the parameter is `&DispatchContext` (not included in schema, passed through).
     is_ctx: bool,
 }
 
@@ -183,7 +183,7 @@ struct ParamInfo {
 ///
 /// # Parameter handling
 ///
-/// - Parameters of type `&ToolCallContext` are excluded from the JSON schema and
+/// - Parameters of type `&DispatchContext` are excluded from the JSON schema and
 ///   passed through to the underlying function via the `call()` context argument.
 /// - `Option<T>` parameters are included in the schema but omitted from `required`.
 /// - All other parameters are required in the schema.
@@ -226,7 +226,7 @@ pub fn skg_tool(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 };
                 let ty = *pat_ty.ty.clone();
-                let is_ctx = is_tool_call_context_ref(&ty);
+                let is_ctx = is_dispatch_context_ref(&ty);
                 let is_optional = extract_option_inner(&ty).is_some();
                 params.push(ParamInfo {
                     ident,
@@ -277,7 +277,7 @@ pub fn skg_tool(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { _ctx }
     };
 
-    // When the original function takes `&ToolCallContext`, the `call()` implementation
+    // When the original function takes `&DispatchContext`, the `call()` implementation
     // must clone `ctx` into an owned value before the `async move` block.
     // The trait's `'_` lifetime on the return type ties to `&self`, not to `ctx`,
     // so capturing the raw `ctx` reference in the async block causes a lifetime conflict.
@@ -356,12 +356,12 @@ pub fn skg_tool(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn call(
                 &self,
                 input: ::serde_json::Value,
-                #ctx_param_name: &::skg_tool::ToolCallContext,
+                #ctx_param_name: &::layer0::DispatchContext,
             ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = Result<::serde_json::Value, ::skg_tool::ToolError>> + Send + '_>>
             {
                 // When ctx is needed by the original function, clone it into an owned
                 // value so the returned future has no lifetime dependency on the
-                // `ctx: &ToolCallContext` borrow (whose lifetime is not reflected in
+                // `ctx: &DispatchContext` borrow (whose lifetime is not reflected in
                 // the trait's return-type `'_`).
                 #ctx_clone_stmt
                 Box::pin(async move {

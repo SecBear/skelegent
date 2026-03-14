@@ -8,7 +8,7 @@
 //! All tests require live API keys and are `#[ignore]` by default.
 //! They verify that OperatorOutput structure is consistent across providers.
 
-use layer0::OperatorId;
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::dispatch::EffectEmitter;
@@ -18,7 +18,7 @@ use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_provider_anthropic::AnthropicProvider;
 use skg_provider_ollama::OllamaProvider;
 use skg_provider_openai::OpenAIProvider;
-use skg_tool::{ToolCallContext, ToolRegistry};
+use skg_tool::ToolRegistry;
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use std::sync::{Arc, Mutex};
 
@@ -57,7 +57,7 @@ async fn anthropic_react_simple_prompt() {
     .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+    let dispatch_ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("claude-haiku-4-5-20251001".into()),
@@ -66,7 +66,7 @@ async fn anthropic_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
         .await
         .expect("react_loop should succeed");
 
@@ -87,6 +87,7 @@ async fn anthropic_single_shot() {
     let output = op
         .execute(
             simple_input("Say hello in exactly 3 words."),
+            &DispatchContext::new(DispatchId::new("test"), OperatorId::from("test")),
             &EffectEmitter::noop(),
         )
         .await
@@ -180,7 +181,7 @@ async fn openai_react_simple_prompt() {
     .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+    let dispatch_ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("gpt-4o-mini".into()),
@@ -189,7 +190,7 @@ async fn openai_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
         .await
         .expect("react_loop should succeed");
 
@@ -210,6 +211,7 @@ async fn openai_single_shot() {
     let output = op
         .execute(
             simple_input("Say hello in exactly 3 words."),
+            &DispatchContext::new(DispatchId::new("test"), OperatorId::from("test")),
             &EffectEmitter::noop(),
         )
         .await
@@ -289,7 +291,7 @@ async fn ollama_react_simple_prompt() {
     .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+    let dispatch_ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("llama3.2:1b".into()),
@@ -298,7 +300,7 @@ async fn ollama_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
         .await
         .expect("react_loop should succeed");
 

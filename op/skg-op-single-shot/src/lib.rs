@@ -7,6 +7,7 @@
 //! extraction, and other single-inference tasks.
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::dispatch::EffectEmitter;
@@ -88,6 +89,7 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
     async fn execute(
         &self,
         input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let start = Instant::now();
@@ -154,6 +156,11 @@ mod tests {
     use skg_turn::test_utils::{TestProvider, error_provider_rate_limited, make_text_response};
     use skg_turn::types::{StopReason, TokenUsage};
     use std::sync::Arc;
+    use layer0::id::{DispatchId, OperatorId};
+
+    fn test_ctx() -> DispatchContext {
+        DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
+    }
 
     // -- Helpers --
 
@@ -173,7 +180,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("Hi"), &EffectEmitter::noop())
+            .execute(simple_input("Hi"), &test_ctx(), &EffectEmitter::noop())
             .await
             .unwrap();
 
@@ -187,7 +194,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("Query"), &EffectEmitter::noop())
+            .execute(simple_input("Query"), &test_ctx(), &EffectEmitter::noop())
             .await
             .unwrap();
 
@@ -199,7 +206,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
         let op = make_op(provider);
 
-        op.execute(simple_input("Test"), &EffectEmitter::noop())
+        op.execute(simple_input("Test"), &test_ctx(), &EffectEmitter::noop())
             .await
             .unwrap();
 
@@ -217,7 +224,7 @@ mod tests {
         let op = SingleShotOperator::new(provider, SingleShotConfig::default());
 
         let result = op
-            .execute(simple_input("test"), &EffectEmitter::noop())
+            .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
             .await;
         assert!(matches!(result, Err(OperatorError::Model { retryable: true, .. })));
     }
@@ -242,7 +249,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("test"), &EffectEmitter::noop())
+            .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
             .await
             .unwrap();
 
@@ -259,7 +266,8 @@ mod tests {
             SingleShotConfig::default(),
         ));
 
-        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &EffectEmitter::noop())
+        let ctx = test_ctx();
+        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &ctx, &EffectEmitter::noop())
             .await
             .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);

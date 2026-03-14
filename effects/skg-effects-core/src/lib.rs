@@ -3,6 +3,7 @@
 
 use async_trait::async_trait;
 use layer0::effect::Effect;
+use layer0::DispatchContext;
 use layer0::error::{OrchError, StateError};
 use layer0::id::WorkflowId;
 use serde::{Deserialize, Serialize};
@@ -37,7 +38,8 @@ pub enum UnknownEffectPolicy {
 pub trait EffectExecutor: Send + Sync {
     /// Execute a list of effects in order. Implementations must preserve
     /// the provided order and short-circuit on the first error.
-    async fn execute(&self, effects: &[Effect]) -> Result<(), Error>;
+    /// `ctx` carries dispatch correlation, identity, and tracing metadata.
+    async fn execute(&self, effects: &[Effect], ctx: &DispatchContext) -> Result<(), Error>;
 }
 
 // ── Capability traits ────────────────────────────────────────────────────────

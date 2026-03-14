@@ -17,6 +17,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
 
+use layer0::DispatchContext;
 use layer0::id::OperatorId;
 
 /// Context available to tools during execution.
@@ -89,7 +90,7 @@ pub trait ToolDynStreaming: Send + Sync + 'static + ToolDyn {
     fn call_streaming<'a>(
         &'a self,
         input: serde_json::Value,
-        ctx: &'a ToolCallContext,
+        ctx: &'a DispatchContext,
         on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
     ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>>;
 }
@@ -111,7 +112,7 @@ pub trait ToolDyn: Send + Sync {
     fn call(
         &self,
         input: serde_json::Value,
-        ctx: &ToolCallContext,
+        ctx: &DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>;
 
     /// If this tool also supports streaming, return a reference to its streaming interface.
@@ -179,7 +180,7 @@ impl ToolDyn for AliasedTool {
     fn call(
         &self,
         input: serde_json::Value,
-        ctx: &ToolCallContext,
+        ctx: &DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         self.inner.call(input, ctx)
     }
@@ -259,6 +260,7 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::DispatchId;
     use serde_json::json;
 
     fn _assert_send_sync<T: Send + Sync>() {}
@@ -299,7 +301,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -321,7 +323,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Err(ToolError::ExecutionFailed("always fails".into())) })
@@ -359,7 +361,7 @@ mod tests {
         let result = tool
             .call(
                 json!({"msg": "hello"}),
-                &ToolCallContext::new(OperatorId::new("test")),
+                &DispatchContext::new(DispatchId::new("test"), OperatorId::new("test")),
             )
             .await
             .unwrap();
@@ -377,7 +379,7 @@ mod tests {
         let result = tool
             .call(
                 json!({"msg": "hi"}),
-                &ToolCallContext::new(OperatorId::new("test")),
+                &DispatchContext::new(DispatchId::new("test"), OperatorId::new("test")),
             )
             .await
             .unwrap();
@@ -391,7 +393,7 @@ mod tests {
 
         let tool = reg.get("fail").unwrap();
         let result = tool
-            .call(json!({}), &ToolCallContext::new(OperatorId::new("test")))
+            .call(json!({}), &DispatchContext::new(DispatchId::new("test"), OperatorId::new("test")))
             .await;
         assert!(result.is_err());
     }
@@ -421,7 +423,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Ok(serde_json::json!({"status":"done"})) })
@@ -434,7 +436,7 @@ mod tests {
         fn call_streaming<'a>(
             &'a self,
             _input: serde_json::Value,
-            _ctx: &'a ToolCallContext,
+            _ctx: &'a DispatchContext,
             on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
         ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>> {
             Box::pin(async move {
@@ -461,7 +463,7 @@ mod tests {
             c2.fetch_add(1, Ordering::SeqCst);
             s2.lock().unwrap().push(c.to_string());
         });
-        let ctx = ToolCallContext::new(OperatorId::new("test"));
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let res = tool
             .call_streaming(serde_json::json!({}), &ctx, on_chunk)
             .await;

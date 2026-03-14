@@ -25,7 +25,7 @@
 //!     fn name(&self) -> &str { "echo" }
 //!     fn description(&self) -> &str { "echoes input" }
 //!     fn input_schema(&self) -> Value { json!({"type": "object"}) }
-//!     fn call(&self, input: Value, _ctx: &skg_tool::ToolCallContext) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
+//!     fn call(&self, input: Value, _ctx: &layer0::DispatchContext) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
 //!         Box::pin(async move { Ok(json!({"echo": input})) })
 //!     }
 //! }
@@ -44,7 +44,8 @@
 //!     TriggerType::Task,
 //! );
 //!
-//! let out = op.execute(input, &EffectEmitter::noop()).await.unwrap();
+//! let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("example"), layer0::id::OperatorId::new("barrier"));
+//! let out = op.execute(input, &ctx, &EffectEmitter::noop()).await.unwrap();
 //! assert_eq!(out.exit_reason, ExitReason::Complete);
 //! if let Content::Blocks(blocks) = out.message {
 //!     let results = blocks.iter().filter(|b| matches!(b, ContentBlock::ToolResult{..})).count();
@@ -56,12 +57,13 @@
 use async_trait::async_trait;
 use layer0::content::{Content, ContentBlock};
 use layer0::dispatch::EffectEmitter;
+use layer0::id::{DispatchId, OperatorId};
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::error::OperatorError;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, SubDispatchRecord};
+use layer0::DispatchContext;
 use skg_tool::ToolRegistry;
-
 /// A minimal operator that batches tool calls between barriers.
 pub struct BarrierOperator {
     tools: ToolRegistry,
@@ -79,6 +81,7 @@ impl Operator for BarrierOperator {
     async fn execute(
         &self,
         input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut out_blocks: Vec<ContentBlock> = Vec::new();
@@ -100,7 +103,7 @@ impl Operator for BarrierOperator {
                 let start = std::time::Instant::now();
                 if let Some(tool) = tools.get(&name) {
                     let ctx =
-                        skg_tool::ToolCallContext::new(layer0::id::OperatorId::new("barrier"));
+                        DispatchContext::new(DispatchId::new("barrier"), OperatorId::new("barrier"));
                     match tool.call(params, &ctx).await {
                         Ok(val) => {
                             let content = val.to_string();
@@ -207,7 +210,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
-            _ctx: &skg_tool::ToolCallContext,
+            _ctx: &layer0::DispatchContext,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {
@@ -245,7 +248,8 @@ mod tests {
             layer0::operator::TriggerType::Task,
         );
 
-        let out = op.execute(input, &EffectEmitter::noop()).await.unwrap();
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("barrier"));
+        let out = op.execute(input, &ctx, &EffectEmitter::noop()).await.unwrap();
         match out.message {
             Content::Blocks(blocks) => {
                 // Expect 4 tool results + 2 steering texts (after each flush)

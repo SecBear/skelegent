@@ -7,12 +7,17 @@ use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
 use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
 use layer0::state::{Lifetime, StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
+use layer0::DispatchContext;
 use serde_json::json;
 use skg_effects_core::EffectExecutor;
 use skg_effects_core::Signalable;
 use skg_effects_local::LocalEffectExecutor;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+fn test_ctx() -> DispatchContext {
+    DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
+}
 
 // ── Minimal no-op dispatcher + signaler ─────────────────────────────────────
 
@@ -138,7 +143,7 @@ async fn halt_hook_prevents_memory_write() {
         content_kind: None,
         salience: None,
         ttl: None,
-    }])
+    }], &test_ctx())
     .await
     .expect("halt is not an error — execute() succeeds");
 
@@ -166,7 +171,7 @@ async fn no_hooks_writes_normally() {
         content_kind: None,
         salience: None,
         ttl: None,
-    }])
+    }], &test_ctx())
     .await
     .expect("execute ok");
 
@@ -198,7 +203,7 @@ async fn observer_hook_sees_key_and_value() {
         content_kind: None,
         salience: None,
         ttl: None,
-    }])
+    }], &test_ctx())
     .await
     .expect("execute ok");
 
@@ -248,7 +253,7 @@ async fn modify_hook_replaces_value() {
         content_kind: None,
         salience: None,
         ttl: None,
-    }])
+    }], &test_ctx())
     .await
     .expect("execute ok");
 
@@ -309,7 +314,7 @@ async fn lifetime_guardrail_blocks_transient_write() {
         content_kind: None,
         salience: None,
         ttl: None,
-    }])
+    }], &test_ctx())
     .await
     .expect("halt is not an error");
 
@@ -329,7 +334,7 @@ async fn lifetime_guardrail_blocks_transient_write() {
         content_kind: None,
         salience: None,
         ttl: None,
-    }])
+    }], &test_ctx())
     .await
     .expect("execute ok");
 

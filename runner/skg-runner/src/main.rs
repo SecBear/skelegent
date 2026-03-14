@@ -12,6 +12,7 @@ mod http_adapter;
 mod registry;
 
 use layer0::dispatch::EffectEmitter;
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use std::sync::Arc;
 
 use tokio::signal;
@@ -130,9 +131,13 @@ impl RunnerServiceImpl {
         let operator = self.resolve_operator(operator_id)?;
 
         // Spawn in a task to catch panics from operator implementations.
+        let op_id = operator_id.to_owned();
         let handle =
             tokio::task::spawn(
-                async move { operator.execute(input, &EffectEmitter::noop()).await },
+                async move {
+                    let ctx = DispatchContext::new(DispatchId::new("runner"), OperatorId::new(op_id));
+                    operator.execute(input, &ctx, &EffectEmitter::noop()).await
+                },
             );
 
         let result = handle.await.map_err(|join_err| {
@@ -205,8 +210,8 @@ impl Runner for RunnerServiceImpl {
         self.validate_session_key(&req.session_key)?;
         let input = self.deserialize_input(&req.input)?;
         let operator = self.resolve_operator(&req.operator)?;
-
         let (tx, rx) = tokio::sync::mpsc::channel(32);
+        let sse_op_id = req.operator.clone();
 
         tokio::task::spawn(async move {
             // Log that execution has started.
@@ -220,7 +225,10 @@ impl Runner for RunnerServiceImpl {
             // Execute the operator, catching panics via the spawned task boundary.
             let result =
                 tokio::task::spawn(
-                    async move { operator.execute(input, &EffectEmitter::noop()).await },
+                    async move {
+                        let ctx = DispatchContext::new(DispatchId::new("runner-sse"), OperatorId::new(sse_op_id));
+                        operator.execute(input, &ctx, &EffectEmitter::noop()).await
+                    },
                 )
                 .await;
 

@@ -2,6 +2,7 @@
 
 use crate::context::Message;
 use crate::dispatch::EffectEmitter;
+use crate::dispatch_context::DispatchContext;
 use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -257,7 +258,7 @@ impl OperatorOutput {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let output = op.execute(input, &EffectEmitter::noop()).await?;
+    /// let output = op.execute(input, &ctx, &EffectEmitter::noop()).await?
     /// if output.has_unhandled_effects() {
     ///     tracing::warn!("effects will not be executed: {:?}", output.effects);
     /// }
@@ -353,6 +354,9 @@ pub trait Operator: Send + Sync {
     /// The operator MUST NOT write to external state directly — it
     /// declares writes as Effects in the output.
     ///
+    /// The `ctx` parameter carries dispatch context including identity,
+    /// tracing, operator ID, and typed extensions.
+    ///
     /// The `emitter` parameter streams observable events (progress,
     /// artifacts) to the dispatch caller in real-time. Operators that
     /// don't stream can ignore it.
@@ -363,6 +367,7 @@ pub trait Operator: Send + Sync {
     async fn execute(
         &self,
         input: OperatorInput,
+        ctx: &DispatchContext,
         emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError>;
 }

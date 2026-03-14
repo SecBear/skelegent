@@ -51,6 +51,7 @@
 
 pub mod content;
 pub mod context;
+pub mod dispatch_context;
 pub mod dispatch;
 pub mod duration;
 pub mod effect;
@@ -72,6 +73,7 @@ pub use context::{Message, MessageMeta, Role};
 pub use dispatch::{
     Artifact, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher, EffectEmitter,
 };
+pub use dispatch_context::{AuthIdentity, DispatchContext, Extensions, TraceContext};
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};

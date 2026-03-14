@@ -52,16 +52,18 @@ impl ToolDyn for OperatorToolAdapter {
     fn call(
         &self,
         input: serde_json::Value,
-        _ctx: &skg_tool::ToolCallContext,
+        _ctx: &layer0::DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         let operator = Arc::clone(&self.operator);
+        let name = self.metadata.name.clone();
         Box::pin(async move {
             let json_str = serde_json::to_string(&input)
                 .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
             let op_input =
                 layer0::OperatorInput::new(layer0::Content::text(json_str), TriggerType::Task);
+            let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("mcp-tool"), layer0::id::OperatorId::new(&name));
             let output = operator
-                .execute(op_input, &layer0::dispatch::EffectEmitter::noop())
+                .execute(op_input, &ctx, &layer0::dispatch::EffectEmitter::noop())
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
             let text = output.message.as_text().unwrap_or("null").to_owned();
@@ -265,7 +267,7 @@ impl ServerHandler for McpServerHandler {
         match tool
             .call(
                 input,
-                &skg_tool::ToolCallContext::new(layer0::OperatorId::new("mcp-server")),
+                &layer0::DispatchContext::new(layer0::id::DispatchId::new("mcp-server"), layer0::OperatorId::new("mcp-server")),
             )
             .await
         {
@@ -417,7 +419,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
-            _ctx: &skg_tool::ToolCallContext,
+            _ctx: &layer0::DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -439,7 +441,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &skg_tool::ToolCallContext,
+            _ctx: &layer0::DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Err(ToolError::ExecutionFailed("deliberate failure".into())) })
@@ -614,7 +616,7 @@ mod tests {
         registry.register(Arc::new(TestTool { tool_name: "echo" }));
 
         let tool = registry.get("echo").unwrap();
-        let ctx = skg_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
+        let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::OperatorId::new("test"));
         let result = tool.call(json!({"msg": "hello"}), &ctx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), json!({"echoed": {"msg": "hello"}}));
@@ -626,7 +628,7 @@ mod tests {
         registry.register(Arc::new(FailingTool));
 
         let tool = registry.get("fail_tool").unwrap();
-        let ctx = skg_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
+        let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::OperatorId::new("test"));
         let result = tool.call(json!({}), &ctx).await;
         assert!(result.is_err());
     }
@@ -700,6 +702,7 @@ mod tests {
             async fn execute(
                 &self,
                 input: OperatorInput,
+                _ctx: &layer0::DispatchContext,
                 _emitter: &layer0::dispatch::EffectEmitter,
             ) -> Result<OperatorOutput, OperatorError> {
                 Ok(OperatorOutput::new(input.message, ExitReason::Complete))
@@ -736,6 +739,7 @@ mod tests {
             async fn execute(
                 &self,
                 _input: OperatorInput,
+                _ctx: &layer0::DispatchContext,
                 _emitter: &layer0::dispatch::EffectEmitter,
             ) -> Result<OperatorOutput, OperatorError> {
                 let text = self.response.to_string();
@@ -761,7 +765,7 @@ mod tests {
         assert_eq!(adapter.input_schema(), schema);
 
         // call roundtrip: input is serialized → operator echoes JSON string → parsed back
-        let ctx = skg_tool::ToolCallContext::new(layer0::OperatorId::new("test"));
+        let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::OperatorId::new("test"));
         let result = adapter.call(json!({"query": "hello"}), &ctx).await.unwrap();
         assert_eq!(result, json!({"result": "ok"}));
     }

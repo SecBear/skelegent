@@ -52,6 +52,7 @@ impl layer0::operator::Operator for FailingOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
+        _ctx: &layer0::DispatchContext,
         _emitter: &layer0::dispatch::EffectEmitter,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         Err(layer0::error::OperatorError::non_retryable(
@@ -116,6 +117,7 @@ async fn middleware_observer_fires_on_dispatch() {
     use async_trait::async_trait;
     use layer0::error::OrchError;
     use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
+    use layer0::DispatchContext;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct CountMiddleware {
@@ -126,12 +128,12 @@ async fn middleware_observer_fires_on_dispatch() {
     impl DispatchMiddleware for CountMiddleware {
         async fn dispatch(
             &self,
-            operator: &OperatorId,
+            ctx: &DispatchContext,
             input: OperatorInput,
             next: &dyn DispatchNext,
         ) -> Result<layer0::dispatch::DispatchHandle, OrchError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            next.dispatch(operator, input).await
+            next.dispatch(ctx, input).await
         }
     }
 
@@ -145,7 +147,7 @@ async fn middleware_observer_fires_on_dispatch() {
     let mut orch = LocalOrch::new().with_middleware(stack);
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
 
-    let output = orch
+    let _output = orch
         .dispatch(&OperatorId::new("echo"), simple_input("ping"))
         .await
         .unwrap()
@@ -165,6 +167,7 @@ async fn middleware_guard_can_halt_dispatch() {
     use async_trait::async_trait;
     use layer0::error::OrchError;
     use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
+    use layer0::DispatchContext;
 
     struct DenyAll;
 
@@ -172,7 +175,7 @@ async fn middleware_guard_can_halt_dispatch() {
     impl DispatchMiddleware for DenyAll {
         async fn dispatch(
             &self,
-            _operator: &OperatorId,
+            _ctx: &DispatchContext,
             _input: OperatorInput,
             _next: &dyn DispatchNext,
         ) -> Result<layer0::dispatch::DispatchHandle, OrchError> {

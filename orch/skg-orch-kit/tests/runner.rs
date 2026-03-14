@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher, EffectEmitter};
+use layer0::DispatchContext;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
@@ -48,9 +49,10 @@ impl Dispatcher for SimpleOrch {
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?
             .clone();
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("simple-orch"));
+        let ctx = DispatchContext::new(DispatchId::new("simple-orch"), operator.clone());
         tokio::spawn(async move {
             let emitter = EffectEmitter::new(sender.clone());
-            match op.execute(input, &emitter).await {
+            match op.execute(input, &ctx, &emitter).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
@@ -145,6 +147,7 @@ impl Operator for WriterOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
@@ -173,6 +176,7 @@ impl Operator for DelegateOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("delegating"), ExitReason::Complete);
@@ -194,6 +198,7 @@ impl Operator for ChildOperator {
     async fn execute(
         &self,
         input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         assert_eq!(input.message.as_text().unwrap_or_default(), "child task");
@@ -211,6 +216,7 @@ impl Operator for HandoffOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
@@ -229,6 +235,7 @@ impl Operator for HandoffTargetOperator {
     async fn execute(
         &self,
         input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         // LocalEffectInterpreter serializes the JSON state to a string and puts it in message text.
@@ -248,6 +255,7 @@ impl Operator for FullPipelineRootOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
@@ -409,6 +417,7 @@ async fn runner_has_safety_bound_for_infinite_followups() {
         async fn execute(
             &self,
             _input: OperatorInput,
+            _ctx: &DispatchContext,
             _emitter: &EffectEmitter,
         ) -> Result<OperatorOutput, OperatorError> {
             let mut output = OperatorOutput::new(Content::text("loop"), ExitReason::Complete);

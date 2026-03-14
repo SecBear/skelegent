@@ -1,6 +1,7 @@
 //! LocalOrchestrator — in-process orchestrator with a HashMap of operators.
 
 use crate::dispatch::{DispatchEvent, DispatchHandle, DispatchSender, EffectEmitter};
+use crate::dispatch_context::DispatchContext;
 use crate::error::OrchError;
 use crate::id::{DispatchId, OperatorId};
 use crate::operator::{Operator, OperatorInput};
@@ -48,21 +49,27 @@ impl crate::dispatch::Dispatcher for LocalOrchestrator {
             .clone();
 
         let dispatch_id = DispatchId::new(format!("test-{}", uuid_v4()));
+        let ctx = DispatchContext::new(dispatch_id.clone(), operator.clone());
         let (handle, sender) = DispatchHandle::channel(dispatch_id);
 
-        tokio::spawn(run_dispatch(op, input, sender));
+        tokio::spawn(run_dispatch(op, input, ctx, sender));
 
         Ok(handle)
     }
 }
 
 /// Run an operator and send events through the dispatch channel.
-async fn run_dispatch(op: Arc<dyn Operator>, input: OperatorInput, sender: DispatchSender) {
+async fn run_dispatch(
+    op: Arc<dyn Operator>,
+    input: OperatorInput,
+    ctx: DispatchContext,
+    sender: DispatchSender,
+) {
     if sender.is_cancelled() {
         return;
     }
     let emitter = EffectEmitter::new(sender.clone());
-    match op.execute(input, &emitter).await {
+    match op.execute(input, &ctx, &emitter).await {
         Ok(output) => {
             // Emit progress/artifact effects as events before the terminal event.
             for effect in &output.effects {

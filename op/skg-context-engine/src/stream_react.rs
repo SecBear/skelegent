@@ -17,7 +17,8 @@ use crate::ops::tool::ExecuteTool;
 use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error};
 use layer0::duration::DurationMs;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
-use skg_tool::{ToolCallContext, ToolRegistry};
+use layer0::DispatchContext;
+use skg_tool::ToolRegistry;
 use skg_turn::infer::InferResponse;
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use std::any::TypeId;
@@ -34,7 +35,7 @@ use std::any::TypeId;
 ///
 /// ```ignore
 /// let output = stream_react_loop(
-///     &mut ctx, &provider, &tools, &tool_ctx, &config,
+///     &mut ctx, &provider, &tools, &dispatch_ctx, &config,
 ///     |event| match event {
 ///         StreamEvent::TextDelta(text) => print!("{text}"),
 ///         _ => {}
@@ -45,7 +46,7 @@ pub async fn stream_react_loop<P: StreamProvider>(
     ctx: &mut Context,
     provider: &P,
     tools: &ToolRegistry,
-    tool_ctx: &ToolCallContext,
+    dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
     on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
 ) -> Result<OperatorOutput, EngineError> {
@@ -95,7 +96,7 @@ pub async fn stream_react_loop<P: StreamProvider>(
                 .run(ExecuteTool::new(
                     call.clone(),
                     tools.clone(),
-                    tool_ctx.clone(),
+                    dispatch_ctx.clone(),
                 ))
                 .await
             {
@@ -137,7 +138,8 @@ mod tests {
     use layer0::context::{Message, Role};
     use layer0::id::OperatorId;
     use serde_json::json;
-    use skg_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
+    use layer0::{DispatchContext, DispatchId};
+    use skg_tool::{ToolDyn, ToolError, ToolRegistry};
     use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest, infer_stream_fallback};
     use skg_turn::test_utils::TestProvider;
     use std::pin::Pin;
@@ -206,7 +208,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<
             Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {
@@ -225,7 +227,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
         let events_clone = Arc::clone(&events);
@@ -234,7 +236,7 @@ mod tests {
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             move |event| {
                 let label = match &event {
@@ -271,13 +273,13 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let output = stream_react_loop(
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             |_| {},
         )

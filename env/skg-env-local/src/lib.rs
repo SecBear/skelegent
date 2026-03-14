@@ -12,6 +12,8 @@
 
 use async_trait::async_trait;
 use layer0::dispatch::EffectEmitter;
+use layer0::DispatchContext;
+use layer0::id::DispatchId;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
@@ -213,9 +215,10 @@ impl Environment for LocalEnv {
         let correlation = CorrelationContext::from_metadata(&input.metadata);
         let cleanup = self.resolve_and_inject(spec, &correlation).await?;
 
+        let ctx = DispatchContext::new(DispatchId::new("env-local"), layer0::id::OperatorId::new("local-env"));
         let result = self
             .op
-            .execute(input, &EffectEmitter::noop())
+            .execute(input, &ctx, &EffectEmitter::noop())
             .await
             .map_err(EnvError::OperatorError);
         drop(cleanup);
@@ -404,6 +407,7 @@ mod tests {
         async fn execute(
             &self,
             input: OperatorInput,
+            _ctx: &DispatchContext,
             _emitter: &EffectEmitter,
         ) -> Result<OperatorOutput, OperatorError> {
             Ok(OperatorOutput::new(input.message, ExitReason::Complete))
@@ -417,6 +421,7 @@ mod tests {
         async fn execute(
             &self,
             _input: OperatorInput,
+            _ctx: &DispatchContext,
             _emitter: &EffectEmitter,
         ) -> Result<OperatorOutput, OperatorError> {
             Err(OperatorError::model("deliberate failure"))

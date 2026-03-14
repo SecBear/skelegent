@@ -1,6 +1,7 @@
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::{Effect, Scope, SignalPayload};
+use layer0::DispatchContext;
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, OperatorInput, OperatorOutput, TriggerType};
 use layer0::state::StateStore;
@@ -75,6 +76,8 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
         Some(orch as Arc<dyn Signalable>),
     );
 
+    let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+
     // Write then read outside executor.
     exec.execute(&[Effect::WriteMemory {
         scope: Scope::Global,
@@ -85,7 +88,7 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
         content_kind: None,
         salience: None,
         ttl: None,
-    }])
+    }], &ctx)
     .await
     .expect("write ok");
     let got: Option<serde_json::Value> = state.read(&Scope::Global, "k1").await.expect("read ok");
@@ -95,7 +98,7 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
     exec.execute(&[Effect::DeleteMemory {
         scope: Scope::Global,
         key: "missing".into(),
-    }])
+    }], &ctx)
     .await
     .expect("delete missing ok");
 
@@ -103,7 +106,7 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
     exec.execute(&[Effect::DeleteMemory {
         scope: Scope::Global,
         key: "k1".into(),
-    }])
+    }], &ctx)
     .await
     .expect("delete ok");
     let got: Option<serde_json::Value> = state.read(&Scope::Global, "k1").await.expect("read ok");
@@ -120,6 +123,7 @@ async fn delegate_handoff_and_signal_call_orchestrator_in_order() {
         Some(orch.clone() as Arc<dyn Signalable>),
     );
 
+    let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
     let effects = vec![
         Effect::Delegate {
             operator: OperatorId::new("child"),
@@ -138,7 +142,7 @@ async fn delegate_handoff_and_signal_call_orchestrator_in_order() {
         },
     ];
 
-    exec.execute(&effects).await.expect("effects ok");
+    exec.execute(&effects, &ctx).await.expect("effects ok");
 
     // Verify dispatch order preserved: delegate then handoff
     let dispatches = orch.recorded_dispatches().await;
@@ -177,6 +181,7 @@ async fn preserves_effect_order_across_memory_and_orch_calls() {
         Some(orch.clone() as Arc<dyn Signalable>),
     );
 
+    let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
     // Delete then Write ensures final value exists only if order preserved.
     let effects = vec![
         Effect::DeleteMemory {
@@ -203,7 +208,7 @@ async fn preserves_effect_order_across_memory_and_orch_calls() {
         },
     ];
 
-    exec.execute(&effects).await.expect("effects ok");
+    exec.execute(&effects, &ctx).await.expect("effects ok");
 
     // Memory reflects order: write at end means value present
     let got: Option<serde_json::Value> = state.read(&Scope::Global, "k_order").await.unwrap();

@@ -33,7 +33,7 @@
 //! }
 //!
 //! impl Operator for CoordinatorOp {
-//!     async fn execute(&self, input: OperatorInput, _emitter: &EffectEmitter) -> Result<OperatorOutput, OperatorError> {
+//!     async fn execute(&self, input: OperatorInput, _ctx: &DispatchContext, _emitter: &EffectEmitter) -> Result<OperatorOutput, OperatorError> {
 //!         // delegate to a sibling — goes through orchestrator middleware
 //!         let child_output = self.dispatcher
 //!             .dispatch(&OperatorId::new("summarizer"), child_input)
@@ -377,7 +377,7 @@ impl DispatchSender {
     ///
     /// ```rust,ignore
     /// tokio::select! {
-    ///     result = operator.execute(input, &emitter) => { /* handle result */ }
+    ///     result = operator.execute(input, &ctx, &emitter) => { /* handle result */ }
     ///     _ = sender.cancelled() => { /* handle cancellation */ }
     /// }
     /// ```

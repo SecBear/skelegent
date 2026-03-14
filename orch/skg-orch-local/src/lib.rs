@@ -8,6 +8,7 @@
 
 use async_trait::async_trait;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher, EffectEmitter};
+use layer0::DispatchContext;
 use layer0::effect::SignalPayload;
 use layer0::error::OrchError;
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
@@ -73,18 +74,19 @@ struct OperatorDispatch<'a> {
 impl DispatchNext for OperatorDispatch<'_> {
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, OrchError> {
         let op = self
             .agents
-            .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?
+            .get(ctx.operator_id.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
             .clone();
-        let (handle, sender) = DispatchHandle::channel(DispatchId::new(operator.as_str()));
+        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
         let emitter = EffectEmitter::new(sender.clone());
+        let ctx = ctx.clone();
         tokio::spawn(async move {
-            match op.execute(input, &emitter).await {
+            match op.execute(input, &ctx, &emitter).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
@@ -113,10 +115,11 @@ impl Dispatcher for LocalOrch {
             agents: &self.agents,
         };
 
+        let ctx = DispatchContext::new(DispatchId::new(operator.as_str()), operator.clone());
         if let Some(ref stack) = self.middleware {
-            stack.dispatch_with(operator, input, &terminal).await
+            stack.dispatch_with(&ctx, input, &terminal).await
         } else {
-            terminal.dispatch(operator, input).await
+            terminal.dispatch(&ctx, input).await
         }
     }
 }

@@ -7,6 +7,7 @@
 use layer0::content::Content;
 use layer0::dispatch::EffectEmitter;
 use layer0::operator::{Operator, OperatorInput, TriggerType};
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use skg_auth_omp::OmpAuthProvider;
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_provider_anthropic::AnthropicProvider;
@@ -35,7 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // 4. Execute and print.
-    let output = op.execute(input, &EffectEmitter::noop()).await?;
+    let ctx = DispatchContext::new(DispatchId::new("hello"), OperatorId::new("single-shot"));
+    let output = op.execute(input, &ctx, &EffectEmitter::noop()).await?;
     println!(
         "Response: {}",
         output.message.as_text().unwrap_or("(no text)")

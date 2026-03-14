@@ -13,7 +13,9 @@
 use layer0::content::Content;
 use layer0::dispatch::EffectEmitter;
 use layer0::error::OperatorError;
+use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::DispatchContext;
 use skg_tool::ToolRegistry;
 #[cfg(any(
     feature = "provider-anthropic",
@@ -112,7 +114,8 @@ impl BuiltAgent {
     /// Run the agent with a user message.
     pub async fn run(&self, message: &str) -> Result<OperatorOutput, OperatorError> {
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
-        let output = self.operator.execute(input, &EffectEmitter::noop()).await?;
+        let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
+        let output = self.operator.execute(input, &ctx, &EffectEmitter::noop()).await?;
         if output.has_unhandled_effects() {
             eprintln!(
                 "warning: OperatorOutput contains {} effect(s) that will not be executed. \
@@ -260,7 +263,8 @@ mod tests {
         });
 
         let input = OperatorInput::new(Content::text("hi"), TriggerType::User);
-        let result = op.execute(input, &EffectEmitter::noop()).await;
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+        let result = op.execute(input, &ctx, &EffectEmitter::noop()).await;
 
         // Budget guard fires before first inference, surfacing as an error.
         assert!(result.is_err());

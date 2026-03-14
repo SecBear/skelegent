@@ -17,7 +17,8 @@ use layer0::dispatch::EffectEmitter;
 use layer0::error::OperatorError;
 use layer0::id::OperatorId;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
-use skg_tool::{ToolCallContext, ToolRegistry};
+use layer0::{DispatchContext, DispatchId};
+use skg_tool::ToolRegistry;
 use skg_turn::provider::Provider;
 use std::sync::Arc;
 
@@ -77,7 +78,7 @@ impl Default for CognitiveOperatorConfig {
 pub struct CognitiveOperator<P: Provider> {
     provider: P,
     tools: ToolRegistry,
-    tool_ctx: ToolCallContext,
+    operator_id: OperatorId,
     config: CognitiveOperatorConfig,
     /// Factory for rules injected into each execution context.
     rule_factory: Option<RuleFactory>,
@@ -86,8 +87,8 @@ pub struct CognitiveOperator<P: Provider> {
 impl<P: Provider> CognitiveOperator<P> {
     /// Create a new cognitive operator.
     ///
-    /// `operator_id` is used for `ToolCallContext` — it identifies this operator
-    /// in dispatch traces and tool call metadata.
+    /// `operator_id` identifies this operator in dispatch traces and tool
+    /// call metadata.
     pub fn new(
         operator_id: impl Into<OperatorId>,
         provider: P,
@@ -97,7 +98,7 @@ impl<P: Provider> CognitiveOperator<P> {
         Self {
             provider,
             tools,
-            tool_ctx: ToolCallContext::new(operator_id.into()),
+            operator_id: operator_id.into(),
             config,
             rule_factory: None,
         }
@@ -141,6 +142,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
     async fn execute(
         &self,
         input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut ctx = self.create_context();
@@ -159,11 +161,23 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
 
         let config = self.react_loop_config();
 
+        // Construct a DispatchContext for this execution.
+        // When Operator::execute receives &DispatchContext from the
+        // dispatcher (Phase 3), this construction moves to the caller.
+        let dispatch_ctx = DispatchContext::new(
+            DispatchId::new(format!(
+                "cogop-{}-{}",
+                self.operator_id,
+                ctx.metrics.turns_completed
+            )),
+            self.operator_id.clone(),
+        );
+
         react_loop(
             &mut ctx,
             &self.provider,
             &self.tools,
-            &self.tool_ctx,
+            &dispatch_ctx,
             &config,
         )
         .await
@@ -204,6 +218,10 @@ mod tests {
     use layer0::operator::{ExitReason, TriggerType};
     use skg_turn::test_utils::{TestProvider, make_text_response};
 
+    fn test_ctx() -> DispatchContext {
+        DispatchContext::new(DispatchId::new("test"), OperatorId::new("test-op"))
+    }
+
     fn simple_input(text: &str) -> OperatorInput {
         OperatorInput::new(Content::text(text), TriggerType::User)
     }
@@ -226,7 +244,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("Hi"), &EffectEmitter::noop())
+            .execute(simple_input("Hi"), &test_ctx(), &EffectEmitter::noop())
             .await
             .unwrap();
 
@@ -240,7 +258,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("Query"), &EffectEmitter::noop())
+            .execute(simple_input("Query"), &test_ctx(), &EffectEmitter::noop())
             .await
             .unwrap();
 
@@ -253,7 +271,7 @@ mod tests {
         let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config());
 
         let result = op
-            .execute(simple_input("test"), &EffectEmitter::noop())
+            .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
             .await;
         assert!(matches!(result, Err(OperatorError::Model { retryable: true, .. })));
     }
@@ -263,7 +281,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op: std::sync::Arc<dyn Operator> = std::sync::Arc::new(make_op(provider));
 
-        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &EffectEmitter::noop())
+        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &test_ctx(), &EffectEmitter::noop())
             .await
             .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
@@ -291,7 +309,7 @@ mod tests {
                 )]
             });
 
-        let result = op.execute(simple_input("hi"), &EffectEmitter::noop()).await;
+        let result = op.execute(simple_input("hi"), &test_ctx(), &EffectEmitter::noop()).await;
 
         // Budget guard halts before first inference via Before<InferBoundary>.
         assert!(result.is_err());

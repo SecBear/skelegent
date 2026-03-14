@@ -4,7 +4,8 @@ use crate::context::Context;
 use crate::error::EngineError;
 use crate::op::ContextOp;
 use async_trait::async_trait;
-use skg_tool::{ToolCallContext, ToolRegistry};
+use layer0::DispatchContext;
+use skg_tool::ToolRegistry;
 use skg_turn::infer::ToolCall;
 
 /// Convert a tool result JSON value to a string for the model.
@@ -30,17 +31,17 @@ pub struct ExecuteTool {
     pub call: ToolCall,
     /// The tool registry to dispatch against.
     pub registry: ToolRegistry,
-    /// The tool call context for dependency injection.
-    pub tool_ctx: ToolCallContext,
+    /// The dispatch context for tool execution.
+    pub dispatch_ctx: DispatchContext,
 }
 
 impl ExecuteTool {
     /// Create a new tool dispatch operation.
-    pub fn new(call: ToolCall, registry: ToolRegistry, tool_ctx: ToolCallContext) -> Self {
+    pub fn new(call: ToolCall, registry: ToolRegistry, dispatch_ctx: DispatchContext) -> Self {
         Self {
             call,
             registry,
-            tool_ctx,
+            dispatch_ctx,
         }
     }
 }
@@ -58,7 +59,7 @@ impl ContextOp for ExecuteTool {
                 reason: format!("unknown tool: {}", self.call.name),
             })?;
 
-        let result_json = tool.call(self.call.input.clone(), &self.tool_ctx).await?;
+        let result_json = tool.call(self.call.input.clone(), &self.dispatch_ctx).await?;
 
         // Update metrics
         ctx.metrics.tool_calls_total += 1;

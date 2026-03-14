@@ -9,10 +9,10 @@
 //! because Provider is RPITIT, not object-safe.
 
 use crate::dispatch::DispatchHandle;
+use crate::dispatch_context::DispatchContext;
 use crate::effect::Scope;
 use crate::environment::EnvironmentSpec;
 use crate::error::{EnvError, OrchError, StateError};
-use crate::id::OperatorId;
 use crate::operator::{OperatorInput, OperatorOutput};
 use crate::state::StoreOptions;
 use async_trait::async_trait;
@@ -31,7 +31,7 @@ pub trait DispatchNext: Send + Sync {
     /// Forward the dispatch to the next layer.
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, OrchError>;
 }
@@ -41,12 +41,15 @@ pub trait DispatchNext: Send + Sync {
 /// Code before `next.dispatch()` = pre-processing (input mutation, logging).
 /// Code after `next.dispatch()` = post-processing (output mutation, metrics).
 /// Not calling `next.dispatch()` = short-circuit (guardrail halt, cached response).
+///
+/// The `ctx` parameter carries dispatch correlation, identity, tracing, and
+/// typed extensions. The operator being invoked is `ctx.operator_id`.
 #[async_trait]
 pub trait DispatchMiddleware: Send + Sync {
     /// Intercept a dispatch call.
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
     ) -> Result<DispatchHandle, OrchError>;
@@ -169,19 +172,19 @@ impl DispatchStack {
     /// Dispatch through the middleware chain, ending at `terminal`.
     pub async fn dispatch_with(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
         terminal: &dyn DispatchNext,
     ) -> Result<DispatchHandle, OrchError> {
         if self.layers.is_empty() {
-            return terminal.dispatch(operator, input).await;
+            return terminal.dispatch(ctx, input).await;
         }
         let chain = DispatchChain {
             layers: &self.layers,
             index: 0,
             terminal,
         };
-        chain.dispatch(operator, input).await
+        chain.dispatch(ctx, input).await
     }
 }
 
@@ -224,11 +227,11 @@ struct DispatchChain<'a> {
 impl DispatchNext for DispatchChain<'_> {
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, OrchError> {
         if self.index >= self.layers.len() {
-            return self.terminal.dispatch(operator, input).await;
+            return self.terminal.dispatch(ctx, input).await;
         }
         let next = DispatchChain {
             layers: self.layers,
@@ -236,7 +239,7 @@ impl DispatchNext for DispatchChain<'_> {
             terminal: self.terminal,
         };
         self.layers[self.index]
-            .dispatch(operator, input, &next)
+            .dispatch(ctx, input, &next)
             .await
     }
 }
@@ -501,7 +504,7 @@ impl ExecNext for ExecChain<'_> {
 mod tests {
     use super::*;
     use crate::dispatch::{DispatchEvent, DispatchHandle};
-    use crate::id::DispatchId;
+    use crate::id::{DispatchId, OperatorId};
 
     /// Helper: create a DispatchHandle that immediately completes with the given output.
     fn immediate_handle(output: OperatorOutput) -> DispatchHandle {
@@ -520,12 +523,12 @@ mod tests {
         impl DispatchMiddleware for TagMiddleware {
             async fn dispatch(
                 &self,
-                operator: &OperatorId,
+                _ctx: &DispatchContext,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
             ) -> Result<DispatchHandle, OrchError> {
                 input.metadata = serde_json::json!({"tagged": true});
-                next.dispatch(operator, input).await
+                next.dispatch(_ctx, input).await
             }
         }
 
@@ -584,12 +587,12 @@ mod tests {
         impl DispatchMiddleware for CountObserver {
             async fn dispatch(
                 &self,
-                operator: &OperatorId,
+                ctx: &DispatchContext,
                 input: OperatorInput,
                 next: &dyn DispatchNext,
             ) -> Result<DispatchHandle, OrchError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                next.dispatch(operator, input).await
+                next.dispatch(ctx, input).await
             }
         }
 
@@ -599,7 +602,7 @@ mod tests {
         impl DispatchMiddleware for HaltGuard {
             async fn dispatch(
                 &self,
-                _operator: &OperatorId,
+                _ctx: &DispatchContext,
                 _input: OperatorInput,
                 _next: &dyn DispatchNext,
             ) -> Result<DispatchHandle, OrchError> {
@@ -618,7 +621,7 @@ mod tests {
         impl DispatchNext for EchoTerminal {
             async fn dispatch(
                 &self,
-                _operator: &OperatorId,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
             ) -> Result<DispatchHandle, OrchError> {
                 Ok(immediate_handle(OperatorOutput::new(
@@ -632,8 +635,9 @@ mod tests {
             crate::content::Content::text("test"),
             crate::operator::TriggerType::User,
         );
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("a"));
         let result = stack
-            .dispatch_with(&OperatorId::from("a"), input, &EchoTerminal)
+            .dispatch_with(&ctx, input, &EchoTerminal)
             .await;
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -647,12 +651,12 @@ mod tests {
         impl DispatchMiddleware for Uppercaser {
             async fn dispatch(
                 &self,
-                operator: &OperatorId,
+                ctx: &DispatchContext,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
             ) -> Result<DispatchHandle, OrchError> {
                 input.metadata = serde_json::json!({"transformed": true});
-                next.dispatch(operator, input).await
+                next.dispatch(ctx, input).await
             }
         }
 
@@ -662,7 +666,7 @@ mod tests {
         impl DispatchNext for EchoTerminal {
             async fn dispatch(
                 &self,
-                _operator: &OperatorId,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
             ) -> Result<DispatchHandle, OrchError> {
                 Ok(immediate_handle(OperatorOutput::new(
@@ -680,8 +684,9 @@ mod tests {
             crate::content::Content::text("hello"),
             crate::operator::TriggerType::User,
         );
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("a"));
         let result = stack
-            .dispatch_with(&OperatorId::from("a"), input, &EchoTerminal)
+            .dispatch_with(&ctx, input, &EchoTerminal)
             .await;
         assert!(result.is_ok());
     }

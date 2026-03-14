@@ -772,7 +772,7 @@ fn env_error_display() {
 #[test]
 fn operator_error_display_remaining_variants() {
     assert_eq!(
-        OperatorError::context_assembly(std::io::Error::new(std::io::ErrorKind::Other, "bad ctx")).to_string(),
+        OperatorError::context_assembly(std::io::Error::other("bad ctx")).to_string(),
         "context assembly: bad ctx"
     );
     assert_eq!(

@@ -59,7 +59,7 @@
 //! struct MyOperator<P: Provider> {
 //!     provider: P,
 //!     tools: ToolRegistry,
-//!     tool_ctx: ToolCallContext,
+//!     operator_id: OperatorId,
 //!     config: ReactLoopConfig,
 //! }
 //!
@@ -70,7 +70,8 @@
 //!         ctx.inject_message(Message::new(Role::User, input.message))
 //!             .await
 //!             .map_err(OperatorError::context_assembly)?;
-//!         react_loop(&mut ctx, &self.provider, &self.tools, &self.tool_ctx, &self.config)
+//!         let dispatch_ctx = DispatchContext::new(DispatchId::new("my-op"), self.operator_id.clone());
+//!         react_loop(&mut ctx, &self.provider, &self.tools, &dispatch_ctx, &self.config)
 //!             .await
 //!             .map_err(|e| OperatorError::non_retryable(e.to_string()))
 //!     }

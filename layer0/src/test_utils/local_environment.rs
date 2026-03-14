@@ -1,8 +1,10 @@
 //! LocalEnvironment — no isolation, just passthrough to the operator.
 
 use crate::dispatch::EffectEmitter;
+use crate::dispatch_context::DispatchContext;
 use crate::environment::EnvironmentSpec;
 use crate::error::EnvError;
+use crate::id::{DispatchId, OperatorId};
 use crate::operator::{Operator, OperatorInput, OperatorOutput};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -28,8 +30,12 @@ impl crate::environment::Environment for LocalEnvironment {
         input: OperatorInput,
         _spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
+        let ctx = DispatchContext::new(
+            DispatchId::new("local-env"),
+            OperatorId::new("local"),
+        );
         self.operator
-            .execute(input, &EffectEmitter::noop())
+            .execute(input, &ctx, &EffectEmitter::noop())
             .await
             .map_err(EnvError::OperatorError)
     }

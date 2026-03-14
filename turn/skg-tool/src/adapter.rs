@@ -11,11 +11,11 @@ use async_trait::async_trait;
 use layer0::dispatch::EffectEmitter;
 use layer0::operator::Operator;
 use layer0::{
-    Content, DurationMs, ExitReason, OperatorError, OperatorId, OperatorInput, OperatorOutput,
-    OrchError, SubDispatchRecord, ToolMetadata,
+    Content, DispatchContext, DispatchId, DurationMs, ExitReason, OperatorError, OperatorId,
+    OperatorInput, OperatorOutput, OrchError, SubDispatchRecord, ToolMetadata,
 };
 
-use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolRegistry};
+use crate::{ToolConcurrencyHint, ToolDyn, ToolRegistry};
 
 /// Wraps an `Arc<dyn ToolDyn>` as an `Operator`, bridging the tool abstraction
 /// to the operator protocol. This allows existing tools to participate in
@@ -54,13 +54,14 @@ impl Operator for ToolOperator {
     async fn execute(
         &self,
         input: OperatorInput,
+        _ctx: &DispatchContext,
         _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("null");
         let tool_input: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| OperatorError::non_retryable(format!("invalid tool input JSON: {e}")))?;
 
-        let ctx = ToolCallContext::new(OperatorId::new("agent"));
+        let ctx = DispatchContext::new(DispatchId::new("tool-call"), OperatorId::new("agent"));
         match self.tool.call(tool_input, &ctx).await {
             Ok(result) => {
                 let mut output =
@@ -115,11 +116,13 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
             .get(operator.as_str())
             .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
 
+        let operator_id = operator.clone();
         let operator = ToolOperator::new(Arc::clone(tool));
         let (handle, sender) =
             layer0::DispatchHandle::channel(layer0::DispatchId::new("tool-registry"));
         tokio::spawn(async move {
-            match operator.execute(input, &EffectEmitter::noop()).await {
+            let ctx = DispatchContext::new(layer0::DispatchId::new("tool-registry"), operator_id);
+            match operator.execute(input, &ctx, &EffectEmitter::noop()).await {
                 Ok(output) => {
                     let _ = sender
                         .send(layer0::DispatchEvent::Completed { output })
@@ -141,10 +144,11 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
+    use crate::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
     use layer0::operator::TriggerType;
     use layer0::{
-        Content, Dispatcher, ExitReason, OperatorError, OperatorId, OperatorInput, OrchError,
+        Content, DispatchId, Dispatcher, ExitReason, OperatorError, OperatorId, OperatorInput,
+        OrchError,
     };
     use serde_json::json;
     use std::future::Future;
@@ -168,7 +172,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -193,7 +197,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Err(ToolError::ExecutionFailed("always fails".into())) })
@@ -225,8 +229,9 @@ mod tests {
         let op = ToolOperator::new(tool);
 
         let input = make_input(r#"{"msg": "hello"}"#);
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let output = op
-            .execute(input, &EffectEmitter::noop())
+            .execute(input, &ctx, &EffectEmitter::noop())
             .await
             .expect("should succeed");
 
@@ -250,8 +255,9 @@ mod tests {
         let op = ToolOperator::new(tool);
 
         let input = make_input("{}");
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let err = op
-            .execute(input, &EffectEmitter::noop())
+            .execute(input, &ctx, &EffectEmitter::noop())
             .await
             .expect_err("should fail");
 
