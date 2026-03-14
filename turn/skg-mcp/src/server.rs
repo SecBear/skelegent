@@ -52,16 +52,21 @@ impl ToolDyn for OperatorToolAdapter {
     fn call(
         &self,
         input: serde_json::Value,
-        _ctx: &layer0::DispatchContext,
+        ctx: &layer0::DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         let operator = Arc::clone(&self.operator);
         let name = self.metadata.name.clone();
+        let ctx = ctx.clone();
         Box::pin(async move {
             let json_str = serde_json::to_string(&input)
                 .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
             let op_input =
                 layer0::OperatorInput::new(layer0::Content::text(json_str), TriggerType::Task);
-            let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("mcp-tool"), layer0::id::OperatorId::new(&name));
+            // Inherit the caller's trace/identity context rather than creating a blank one.
+            let ctx = layer0::DispatchContext::new(
+                layer0::id::DispatchId::new(format!("mcp-tool-{name}")),
+                layer0::id::OperatorId::new(&name),
+            ).with_trace(ctx.trace.child_span());
             let output = operator
                 .execute(op_input, &ctx, &layer0::dispatch::EffectEmitter::noop())
                 .await
@@ -71,6 +76,24 @@ impl ToolDyn for OperatorToolAdapter {
                 .map_err(|e| ToolError::ExecutionFailed(format!("output parse error: {e}")))
         })
     }
+}
+
+/// Parse a W3C `traceparent` header value into a [`TraceContext`].
+///
+/// Format: `{version}-{trace_id}-{span_id}-{trace_flags}`
+/// Returns `None` if the format is invalid.
+fn parse_traceparent(value: &str) -> Option<layer0::TraceContext> {
+    let parts: Vec<&str> = value.split('-').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let trace_flags = u8::from_str_radix(parts[3], 16).ok()?;
+    Some(layer0::TraceContext {
+        trace_id: parts[1].to_owned(),
+        span_id: parts[2].to_owned(),
+        trace_flags,
+        trace_state: None,
+    })
 }
 
 /// MCP server that exposes tools from a [`ToolRegistry`].
@@ -264,13 +287,30 @@ impl ServerHandler for McpServerHandler {
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
-        match tool
-            .call(
-                input,
-                &layer0::DispatchContext::new(layer0::id::DispatchId::new("mcp-server"), layer0::OperatorId::new("mcp-server")),
-            )
-            .await
-        {
+        // Build a DispatchContext with tool-specific identity and optional trace.
+        let trace = request
+            .meta
+            .as_ref()
+            .and_then(|m| m.0.get("traceparent"))
+            .and_then(|v| v.as_str())
+            .and_then(parse_traceparent);
+
+        let name_owned = tool_name.to_owned();
+        let mut ctx = layer0::DispatchContext::new(
+            layer0::id::DispatchId::new(format!("mcp-{name_owned}")),
+            layer0::OperatorId::new(&name_owned),
+        );
+        if let Some(t) = trace {
+            ctx = ctx.with_trace(t);
+        }
+
+        tracing::debug!(
+            tool = %name_owned,
+            traceparent = ?ctx.trace.as_traceparent(),
+            "MCP server call_tool"
+        );
+
+        match tool.call(input, &ctx).await {
             Ok(result) => {
                 let text =
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
@@ -768,5 +808,27 @@ mod tests {
         let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::OperatorId::new("test"));
         let result = adapter.call(json!({"query": "hello"}), &ctx).await.unwrap();
         assert_eq!(result, json!({"result": "ok"}));
+    }
+
+    #[test]
+    fn parse_traceparent_valid() {
+        let tc = super::parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").unwrap();
+        assert_eq!(tc.trace_id, "0af7651916cd43dd8448eb211c80319c");
+        assert_eq!(tc.span_id, "b7ad6b7169203331");
+        assert_eq!(tc.trace_flags, 1);
+        assert!(tc.trace_state.is_none());
+    }
+
+    #[test]
+    fn parse_traceparent_invalid() {
+        assert!(super::parse_traceparent("not-valid").is_none());
+        assert!(super::parse_traceparent("").is_none());
+        assert!(super::parse_traceparent("00-abc").is_none());
+    }
+
+    #[test]
+    fn parse_traceparent_unsampled() {
+        let tc = super::parse_traceparent("00-aaaa-bbbb-00").unwrap();
+        assert_eq!(tc.trace_flags, 0);
     }
 }
