@@ -165,6 +165,14 @@ pub struct OperatorOutput {
 
     /// Side-effects the operator wants executed.
     ///
+    /// **Preferred path:** call [`EffectEmitter::effect`](crate::dispatch::EffectEmitter::effect)
+    /// during execution. The dispatch handle's [`collect`](crate::dispatch::DispatchHandle::collect)
+    /// method gathers emitted effects into this field automatically.
+    ///
+    /// **Legacy path:** operators may still populate this field directly.
+    /// When no [`DispatchEvent::EffectEmitted`](crate::dispatch::DispatchEvent::EffectEmitted)
+    /// events are received, `collect()` preserves whatever the operator placed here.
+    ///
     /// CRITICAL DESIGN DECISION: The operator declares effects but does
     /// not execute them. The calling layer (orchestrator, lifecycle
     /// coordinator) decides when and how to execute them. This is

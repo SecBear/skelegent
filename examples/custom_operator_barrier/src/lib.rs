@@ -82,7 +82,7 @@ impl Operator for BarrierOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        _emitter: &EffectEmitter,
+        emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut out_blocks: Vec<ContentBlock> = Vec::new();
         let mut batch: Vec<(String, String, serde_json::Value)> = Vec::new();
@@ -179,12 +179,12 @@ impl Operator for BarrierOperator {
 
         let mut output = OperatorOutput::new(Content::Blocks(out_blocks), ExitReason::Complete);
         output.metadata = metadata;
-        // Demonstrate effect declaration boundary (no-op here)
-        output.effects.push(Effect::Log {
+        // Demonstrate effect declaration boundary
+        emitter.effect(Effect::Log {
             level: layer0::effect::LogLevel::Info,
             message: "barrier operator executed".into(),
             data: None,
-        });
+        }).await;
         Ok(output)
     }
 }
@@ -268,6 +268,6 @@ mod tests {
             _ => panic!("expected blocks"),
         }
         assert_eq!(out.exit_reason, ExitReason::Complete);
-        assert_eq!(out.effects.len(), 1);
+        assert!(out.effects.is_empty(), "effects now go through emitter, not output.effects");
     }
 }

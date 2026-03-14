@@ -57,6 +57,7 @@
 //! depth. If you need it, add a [`DispatchMiddleware`](crate::middleware::DispatchMiddleware)
 //! that tracks call depth per session.
 
+use crate::effect::Effect;
 use crate::content::Content;
 use crate::error::OrchError;
 use crate::id::{DispatchId, OperatorId};
@@ -117,6 +118,16 @@ pub enum DispatchEvent {
     ArtifactProduced {
         /// The artifact produced.
         artifact: Artifact,
+    },
+
+    /// An effect was emitted during operator execution.
+    ///
+    /// Emitted when an operator calls [`EffectEmitter::effect`].
+    /// The [`DispatchHandle::collect`] method gathers these into
+    /// [`OperatorOutput::effects`].
+    EffectEmitted {
+        /// The effect that was emitted.
+        effect: Effect,
     },
 
     /// Dispatch completed with final output.
@@ -298,23 +309,34 @@ impl DispatchHandle {
     pub async fn collect(mut self) -> Result<OperatorOutput, OrchError> {
         let mut terminal_output = None;
         let mut terminal_error = None;
+        let mut collected_effects = Vec::new();
 
         while let Some(event) = self.rx.recv().await {
             match event {
+                DispatchEvent::EffectEmitted { effect } => {
+                    collected_effects.push(effect);
+                }
                 DispatchEvent::Completed { output } => {
                     terminal_output = Some(output);
                 }
                 DispatchEvent::Failed { error } => {
                     terminal_error = Some(error);
                 }
-                // Intermediate events are discarded by collect().
+                // Intermediate events (Progress, ArtifactProduced) are
+                // discarded by collect().
                 _ => {}
             }
         }
 
         if let Some(error) = terminal_error {
             Err(error)
-        } else if let Some(output) = terminal_output {
+        } else if let Some(mut output) = terminal_output {
+            // Effects emitted via the channel take priority.
+            // Legacy operators that set output.effects directly
+            // still work when no EffectEmitted events are received.
+            if !collected_effects.is_empty() {
+                output.effects = collected_effects;
+            }
             Ok(output)
         } else {
             Err(OrchError::DispatchFailed(
@@ -476,6 +498,19 @@ impl EffectEmitter {
         let _ = self
             .emit(DispatchEvent::ArtifactProduced { artifact })
             .await;
+    }
+
+    /// Emit an effect through the dispatch channel.
+    ///
+    /// This is the primary way operators declare effects during execution.
+    /// The dispatch handle's [`collect`](DispatchHandle::collect) method
+    /// gathers emitted effects into [`OperatorOutput::effects`].
+    ///
+    /// No-op if no consumer is listening.
+    pub async fn effect(&self, effect: Effect) {
+        if let Some(ref sender) = self.sender {
+            let _ = sender.send(DispatchEvent::EffectEmitted { effect }).await;
+        }
     }
 
     /// Emit a raw [`DispatchEvent`].

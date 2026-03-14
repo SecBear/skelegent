@@ -71,26 +71,6 @@ async fn run_dispatch(
     let emitter = EffectEmitter::new(sender.clone());
     match op.execute(input, &ctx, &emitter).await {
         Ok(output) => {
-            // Emit progress/artifact effects as events before the terminal event.
-            for effect in &output.effects {
-                match effect {
-                    crate::effect::Effect::Progress { content } => {
-                        let _ = sender
-                            .send(DispatchEvent::Progress {
-                                content: content.clone(),
-                            })
-                            .await;
-                    }
-                    crate::effect::Effect::Artifact { artifact } => {
-                        let _ = sender
-                            .send(DispatchEvent::ArtifactProduced {
-                                artifact: artifact.clone(),
-                            })
-                            .await;
-                    }
-                    _ => {}
-                }
-            }
             let _ = sender.send(DispatchEvent::Completed { output }).await;
         }
         Err(op_err) => {

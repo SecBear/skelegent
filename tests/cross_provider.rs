@@ -66,7 +66,7 @@ async fn anthropic_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config, &EffectEmitter::noop())
         .await
         .expect("react_loop should succeed");
 
@@ -190,7 +190,7 @@ async fn openai_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config, &EffectEmitter::noop())
         .await
         .expect("react_loop should succeed");
 
@@ -300,7 +300,7 @@ async fn ollama_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config, &EffectEmitter::noop())
         .await
         .expect("react_loop should succeed");
 

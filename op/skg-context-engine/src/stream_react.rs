@@ -15,6 +15,7 @@ use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
 use crate::ops::tool::ExecuteTool;
 use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error};
+use layer0::dispatch::EffectEmitter;
 use layer0::duration::DurationMs;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use layer0::DispatchContext;
@@ -49,6 +50,7 @@ pub async fn stream_react_loop<P: StreamProvider>(
     dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
     on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
+    emitter: &EffectEmitter,
 ) -> Result<OperatorOutput, EngineError> {
     let on_event = std::sync::Arc::new(on_event);
     loop {
@@ -86,7 +88,9 @@ pub async fn stream_react_loop<P: StreamProvider>(
         let approval_effects = check_approval(&tool_calls, tools);
 
         if !approval_effects.is_empty() {
-            ctx.extend_effects(approval_effects);
+            for effect in &approval_effects {
+                emitter.effect(effect.clone()).await;
+            }
             return Ok(make_output(response, ExitReason::AwaitingApproval, ctx));
         }
 
@@ -120,7 +124,7 @@ fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> Oper
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = ctx.effects().to_vec();
+    output.effects = vec![];
     output
 }
 
@@ -246,6 +250,7 @@ mod tests {
                 };
                 events_clone.lock().unwrap().push(label);
             },
+            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -282,6 +287,7 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             |_| {},
+            &EffectEmitter::noop(),
         )
         .await
         .unwrap();

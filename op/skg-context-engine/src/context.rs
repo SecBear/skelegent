@@ -1,6 +1,6 @@
 //! The [`Context`] runtime — first-class mutable substrate for agentic systems.
 //!
-//! Context carries messages, typed extensions, effects, metrics, and rules.
+//! Context carries messages, typed extensions, metrics, and rules.
 //! Every mutation goes through [`Context::run()`], which fires applicable rules.
 
 use crate::error::EngineError;
@@ -9,7 +9,6 @@ use crate::rule::Rule;
 use crate::stream::{ContextEvent, ContextMutation};
 
 use layer0::context::Message;
-use layer0::effect::Effect;
 use rust_decimal::Decimal;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -118,8 +117,7 @@ impl TurnMetrics {
 /// The mutable substrate for agentic systems.
 ///
 /// Context carries everything an agent needs: the message buffer, typed
-/// extensions for cross-component state, declared effects, accumulated
-/// metrics, and reactive rules.
+/// extensions for cross-component state, accumulated
 ///
 /// Every operation goes through [`Context::run()`], which dispatches the
 /// operation and fires applicable rules before and after. This is how
@@ -136,11 +134,6 @@ pub struct Context {
     messages: Vec<Message>,
     /// Typed arbitrary state for cross-component communication.
     pub extensions: Extensions,
-    /// Declared effects (write_memory, delegate, signal, etc.).
-    ///
-    /// Access via [`effects()`](Self::effects) for reads and [`push_effect`](Self::push_effect)
-    /// or [`extend_effects`](Self::extend_effects) for writes.
-    effects: Vec<Effect>,
     /// Accumulated metrics for this operator invocation.
     pub metrics: TurnMetrics,
     /// Reactive rules. Sorted by priority (highest first).
@@ -161,7 +154,6 @@ impl Context {
         Self {
             messages: Vec::new(),
             extensions: Extensions::new(),
-            effects: Vec::new(),
             metrics: TurnMetrics::new(),
             rules: Vec::new(),
             in_rule: false,
@@ -217,10 +209,6 @@ impl Context {
         &self.messages
     }
 
-    /// The declared effects (read-only).
-    pub fn effects(&self) -> &[Effect] {
-        &self.effects
-    }
 
     // ── Mutation methods (emit to observation stream) ──────────────
 
@@ -278,14 +266,6 @@ impl Context {
         });
     }
 
-    /// Declare an effect.
-    ///
-    /// Emits [`ContextMutation::EffectDeclared`] to the observation stream.
-    pub fn push_effect(&mut self, effect: Effect) {
-        self.effects.push(effect.clone());
-        self.emit(ContextMutation::EffectDeclared(effect));
-    }
-
     /// Append multiple messages. Each emits [`ContextMutation::MessagePushed`].
     pub fn extend_messages(&mut self, msgs: impl IntoIterator<Item = Message>) {
         for msg in msgs {
@@ -293,12 +273,6 @@ impl Context {
         }
     }
 
-    /// Declare multiple effects. Each emits [`ContextMutation::EffectDeclared`].
-    pub fn extend_effects(&mut self, effects: impl IntoIterator<Item = Effect>) {
-        for effect in effects {
-            self.push_effect(effect);
-        }
-    }
 
     /// Emit a context event to the observation stream.
     ///
@@ -721,36 +695,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn push_effect_emits_event() {
-        use layer0::effect::{Effect, Scope};
-
-        let (tx, mut rx) = broadcast::channel(16);
-        let mut ctx = Context::new();
-        ctx.with_stream(tx);
-
-        let effect = Effect::WriteMemory {
-            scope: Scope::Global,
-            key: "k".into(),
-            value: serde_json::json!("v"),
-            tier: None,
-            lifetime: None,
-            content_kind: None,
-            salience: None,
-            ttl: None,
-        };
-        ctx.push_effect(effect);
-
-        assert_eq!(ctx.effects().len(), 1);
-
-        let event = rx.try_recv().unwrap();
-        match event.mutation {
-            ContextMutation::EffectDeclared(Effect::WriteMemory { key, .. }) => {
-                assert_eq!(key, "k");
-            }
-            other => panic!("expected EffectDeclared(WriteMemory), got {other:?}"),
-        }
-    }
 
     #[tokio::test]
     async fn no_stream_sender_means_no_cost() {
