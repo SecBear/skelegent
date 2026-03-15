@@ -86,8 +86,8 @@ pub use middleware::{
     StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,
 };
 pub use operator::{
-    ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMetadata, OperatorOutput,
-    SubDispatchRecord, ToolMetadata,
+    ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMeta, OperatorMetadata,
+    OperatorOutput, SubDispatchRecord, ToolMetadata,
 };
 pub use secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 pub use state::{

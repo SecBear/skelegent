@@ -380,6 +380,35 @@ pub trait Operator: Send + Sync {
     ) -> Result<OperatorOutput, OperatorError>;
 }
 
+/// Optional metadata about an operator's capabilities and requirements.
+///
+/// Operators that implement this trait can be introspected by discovery
+/// systems (MCP servers, A2A agent cards, auto-documentation).
+///
+/// This trait is separate from [`Operator`] to avoid burdening simple
+/// implementations with metadata they don't need.
+pub trait OperatorMeta: Send + Sync {
+    /// Human-readable name for this operator.
+    fn name(&self) -> &str;
+
+    /// Description of what this operator does.
+    fn description(&self) -> &str {
+        ""
+    }
+
+    /// JSON Schema describing the expected input format.
+    /// Returns `None` if the operator accepts arbitrary input.
+    fn input_schema(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// JSON Schema describing the output format.
+    /// Returns `None` if the output format is not fixed.
+    fn output_schema(&self) -> Option<serde_json::Value> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +442,71 @@ mod tests {
         assert_eq!(back.name, "code_exec");
         assert_eq!(back.description, "Execute code in a sandbox");
         assert!(!back.parallel_safe);
+    }
+
+    #[tokio::test]
+    async fn operator_with_meta() {
+        use crate::content::Content;
+        use crate::dispatch::EffectEmitter;
+        use crate::dispatch_context::DispatchContext;
+        use crate::error::OperatorError;
+        use crate::id::{DispatchId, OperatorId};
+
+        struct Echo;
+
+        #[async_trait]
+        impl Operator for Echo {
+            async fn execute(
+                &self,
+                input: OperatorInput,
+                _ctx: &DispatchContext,
+                _emitter: &EffectEmitter,
+            ) -> Result<OperatorOutput, OperatorError> {
+                Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+            }
+        }
+
+        impl OperatorMeta for Echo {
+            fn name(&self) -> &str {
+                "echo"
+            }
+
+            fn description(&self) -> &str {
+                "Echoes input back unchanged"
+            }
+
+            fn input_schema(&self) -> Option<serde_json::Value> {
+                Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "text": { "type": "string" }
+                    }
+                }))
+            }
+        }
+
+        let echo = Echo;
+
+        // Verify OperatorMeta
+        assert_eq!(echo.name(), "echo");
+        assert_eq!(echo.description(), "Echoes input back unchanged");
+        assert!(echo.input_schema().is_some());
+        assert!(echo.output_schema().is_none()); // default
+
+        // Verify it still works as an Operator
+        let input = OperatorInput::new(
+            Content::text("hello"),
+            TriggerType::User,
+        );
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+        let emitter = EffectEmitter::noop();
+        let output = echo.execute(input, &ctx, &emitter).await.unwrap();
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+
+        // Both traits as trait objects
+        fn accepts_meta(_m: &dyn OperatorMeta) {}
+        fn accepts_operator(_o: &dyn Operator) {}
+        accepts_meta(&echo);
+        accepts_operator(&echo);
     }
 }

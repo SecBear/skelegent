@@ -1,0 +1,18 @@
+[package]
+name = "skg-hook-retry"
+version = "0.4.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Retry middleware for skelegent — configurable backoff and deadline-aware dispatch retries"
+
+[dependencies]
+layer0 = { path = "../../layer0", version = "0.4.1" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+layer0 = { path = "../../layer0", version = "0.4.1", features = ["test-utils"] }
+tokio = { version = "1", features = ["macros", "rt"] }
