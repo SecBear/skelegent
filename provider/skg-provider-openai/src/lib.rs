@@ -10,6 +10,7 @@ use layer0::content::{Content, ContentBlock};
 use layer0::context;
 use rust_decimal::Decimal;
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
+use skg_turn::embedding::{EmbedRequest, EmbedResponse, Embedding};
 use skg_turn::provider::{Provider, ProviderError};
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use skg_turn::types::*;
@@ -504,6 +505,95 @@ impl Provider for OpenAIProvider {
         }
         .instrument(span)
     }
+
+    #[allow(clippy::manual_async_fn)] // matches infer() RPITIT pattern
+    fn embed(
+        &self,
+        request: EmbedRequest,
+    ) -> impl std::future::Future<Output = Result<EmbedResponse, ProviderError>> + Send {
+        async move {
+            let api_key = self.resolve_api_key()?;
+            let model = request
+                .model
+                .unwrap_or_else(|| "text-embedding-3-small".into());
+
+            // Derive embedding URL from the configured base URL.
+            let embed_url = self.api_url.replace("/chat/completions", "/embeddings");
+
+            let wire_request = types::OpenAIEmbeddingRequest {
+                model: model.clone(),
+                input: request.texts,
+                dimensions: request.dimensions,
+            };
+
+            let mut http_req = self
+                .client
+                .post(&embed_url)
+                .bearer_auth(&api_key)
+                .json(&wire_request);
+
+            if let Some(ref org) = self.org_id {
+                http_req = http_req.header("OpenAI-Organization", org);
+            }
+
+            let response = http_req.send().await.map_err(|e| {
+                ProviderError::TransientError {
+                    message: format!("embedding request failed: {e}"),
+                    status: None,
+                }
+            })?;
+
+            let status = response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                return Err(ProviderError::RateLimited { retry_after });
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                let body = response.text().await.unwrap_or_default();
+                return Err(ProviderError::AuthFailed(format!(
+                    "HTTP {status}: {body}"
+                )));
+            }
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                return Err(map_error_response(status, &body));
+            }
+
+            let wire_resp: types::OpenAIEmbeddingResponse =
+                response.json().await.map_err(|e| {
+                    ProviderError::InvalidResponse(format!(
+                        "embedding response parse failed: {e}"
+                    ))
+                })?;
+
+            let embeddings = wire_resp
+                .data
+                .into_iter()
+                .map(|d| Embedding {
+                    vector: d.embedding,
+                })
+                .collect();
+
+            let usage = TokenUsage {
+                input_tokens: wire_resp.usage.prompt_tokens,
+                output_tokens: 0,
+                ..Default::default()
+            };
+
+            Ok(EmbedResponse {
+                embeddings,
+                model: wire_resp.model,
+                usage,
+            })
+        }
+    }
 }
 
 impl StreamProvider for OpenAIProvider {
@@ -908,6 +998,24 @@ mod tests {
         let err = map_error_response(status, body);
         assert!(matches!(err, ProviderError::ContentBlocked { .. }));
         assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn embed_default_model_is_text_embedding_3_small() {
+        // EmbedRequest::new sets model to None; embed() should default
+        // to "text-embedding-3-small".
+        let req = EmbedRequest::new(vec!["test".into()]);
+        assert!(req.model.is_none());
+    }
+
+    #[test]
+    fn embed_url_derived_from_api_url() {
+        let provider = OpenAIProvider::new("test-key")
+            .with_url("https://proxy.example.com/v1/chat/completions");
+        // The embed implementation replaces /chat/completions with /embeddings.
+        let expected = "https://proxy.example.com/v1/embeddings";
+        let actual = provider.api_url.replace("/chat/completions", "/embeddings");
+        assert_eq!(actual, expected);
     }
 }
 

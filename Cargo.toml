@@ -79,3 +79,4 @@ async-trait = "0.1"
 serde_json = "1"
 rust_decimal = { version = "1", features = ["serde-str"] }
 tempfile = "3"
+reqwest = { version = "0.12", features = ["json"] }

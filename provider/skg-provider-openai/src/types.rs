@@ -258,3 +258,47 @@ pub struct OpenAIStreamFunction {
     #[serde(default)]
     pub arguments: Option<String>,
 }
+
+
+/// OpenAI embeddings API request.
+#[derive(Debug, Serialize)]
+pub(crate) struct OpenAIEmbeddingRequest {
+    /// Model identifier (e.g. "text-embedding-3-small").
+    pub model: String,
+    /// Texts to embed.
+    pub input: Vec<String>,
+    /// Optional output dimensions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<usize>,
+}
+
+/// OpenAI embeddings API response.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OpenAIEmbeddingResponse {
+    /// Embedding data entries.
+    pub data: Vec<OpenAIEmbeddingData>,
+    /// Model that produced the embeddings.
+    pub model: String,
+    /// Token usage.
+    pub usage: OpenAIEmbeddingUsage,
+}
+
+/// A single embedding entry in the response.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OpenAIEmbeddingData {
+    /// The embedding vector.
+    pub embedding: Vec<f32>,
+    /// Index of this embedding in the input list.
+    #[allow(dead_code)]
+    pub index: usize,
+}
+
+/// Token usage for an embedding request.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OpenAIEmbeddingUsage {
+    /// Tokens used for the prompt/input.
+    pub prompt_tokens: u64,
+    /// Total tokens used.
+    #[allow(dead_code)]
+    pub total_tokens: u64,
+}
