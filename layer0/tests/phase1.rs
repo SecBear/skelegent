@@ -1607,3 +1607,114 @@ fn effect_unlink_memory_round_trip() {
 // The new methods use no generics and no Self in return position — safe.
 fn _assert_state_store_still_object_safe(_: &dyn StateStore) {}
 fn _assert_state_reader_still_object_safe(_: &dyn StateReader) {}
+
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CollectedDispatch / collect_all
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[tokio::test]
+async fn collect_all_preserves_intermediate_events() {
+    let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-collect-all"));
+
+    let send_task = tokio::spawn(async move {
+        sender
+            .send(DispatchEvent::Progress {
+                content: Content::text("thinking..."),
+            })
+            .await
+            .unwrap();
+        sender
+            .send(DispatchEvent::EffectEmitted {
+                effect: Effect::Progress {
+                    content: Content::text("progress-effect"),
+                },
+            })
+            .await
+            .unwrap();
+        sender
+            .send(DispatchEvent::Completed {
+                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+            })
+            .await
+            .unwrap();
+        // Drop sender to close the channel.
+    });
+
+    let result = handle.collect_all().await.unwrap();
+    send_task.await.unwrap();
+
+    // Both Progress and EffectEmitted should be in events.
+    assert_eq!(result.events.len(), 2);
+    assert!(matches!(result.events[0], DispatchEvent::Progress { .. }));
+    assert!(matches!(result.events[1], DispatchEvent::EffectEmitted { .. }));
+
+    // Effects should also be populated in output.
+    assert_eq!(result.output.effects.len(), 1);
+    assert_eq!(result.output.message, Content::text("done"));
+}
+
+#[tokio::test]
+async fn collect_discards_progress_but_collect_all_preserves_it() {
+    // collect() discards Progress events.
+    let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-collect-discard"));
+    let send_task = tokio::spawn(async move {
+        sender
+            .send(DispatchEvent::Progress {
+                content: Content::text("step 1"),
+            })
+            .await
+            .unwrap();
+        sender
+            .send(DispatchEvent::Completed {
+                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+            })
+            .await
+            .unwrap();
+    });
+
+    let output = handle.collect().await.unwrap();
+    send_task.await.unwrap();
+    // collect() gives no way to observe the Progress event.
+    assert_eq!(output.message, Content::text("done"));
+    assert!(output.effects.is_empty());
+}
+
+#[tokio::test]
+async fn collect_all_empty_events_on_immediate_complete() {
+    let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-empty"));
+    tokio::spawn(async move {
+        sender
+            .send(DispatchEvent::Completed {
+                output: OperatorOutput::new(Content::text("ok"), ExitReason::Complete),
+            })
+            .await
+            .unwrap();
+    });
+
+    let result = handle.collect_all().await.unwrap();
+    assert!(result.events.is_empty());
+    assert_eq!(result.output.message, Content::text("ok"));
+}
+
+#[tokio::test]
+async fn collect_all_returns_error_on_failure() {
+    let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-fail"));
+    tokio::spawn(async move {
+        sender
+            .send(DispatchEvent::Progress {
+                content: Content::text("working..."),
+            })
+            .await
+            .unwrap();
+        sender
+            .send(DispatchEvent::Failed {
+                error: OrchError::DispatchFailed("boom".into()),
+            })
+            .await
+            .unwrap();
+    });
+
+    let err = handle.collect_all().await.unwrap_err();
+    assert!(matches!(err, OrchError::DispatchFailed(_)));
+}

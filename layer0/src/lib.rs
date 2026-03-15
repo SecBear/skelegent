@@ -71,7 +71,8 @@ pub mod test_utils;
 pub use content::{Content, ContentBlock};
 pub use context::{Message, MessageMeta, Role};
 pub use dispatch::{
-    Artifact, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher, EffectEmitter,
+    Artifact, CollectedDispatch, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher,
+    EffectEmitter,
 };
 pub use dispatch_context::{AuthIdentity, DispatchContext, Extensions, TraceContext};
 pub use duration::DurationMs;

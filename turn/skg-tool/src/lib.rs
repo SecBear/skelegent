@@ -34,9 +34,64 @@ pub enum ToolError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// Transient failure (network timeout, temporary unavailability).
+    /// Callers should retry.
+    #[error("transient error: {0}")]
+    Transient(String),
+
+    /// Rate limited by the upstream service.
+    #[error("rate limited: {message}")]
+    RateLimited {
+        /// Suggested wait time before retry.
+        retry_after: Option<std::time::Duration>,
+        /// Human-readable message.
+        message: String,
+    },
+
     /// Catch-all for other errors.
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl ToolError {
+    /// Whether this error is retryable.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Transient(_) | Self::RateLimited { .. })
+    }
+}
+
+/// Policy governing whether a tool invocation requires human approval.
+#[non_exhaustive]
+#[derive(Clone)]
+pub enum ApprovalPolicy {
+    /// Never requires approval.
+    None,
+    /// Always requires approval before execution.
+    Always,
+    /// Requires approval based on the tool input.
+    /// The function receives the tool input and returns true if approval is needed.
+    Conditional(Arc<dyn Fn(&serde_json::Value) -> bool + Send + Sync>),
+}
+
+impl std::fmt::Debug for ApprovalPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Always => write!(f, "Always"),
+            Self::Conditional(_) => write!(f, "Conditional(...)"),
+        }
+    }
+}
+
+impl ApprovalPolicy {
+    /// Check whether approval is required for the given input.
+    pub fn requires_approval(&self, input: &serde_json::Value) -> bool {
+        match self {
+            Self::None => false,
+            Self::Always => true,
+            Self::Conditional(f) => f(input),
+        }
+    }
 }
 
 /// Concurrency hint for tool scheduling.
@@ -87,15 +142,16 @@ pub trait ToolDyn: Send + Sync {
         None
     }
 
-    /// Whether this tool requires human approval before execution.
+    /// The approval policy for this tool.
     ///
-    /// When `true`, the ReAct loop will emit [`Effect::ToolApprovalRequired`]
-    /// and exit with [`ExitReason::AwaitingApproval`] instead of executing
-    /// the tool directly. The calling layer decides how to handle approval.
+    /// When the policy requires approval, the ReAct loop will emit
+    /// [`Effect::ToolApprovalRequired`] and exit with
+    /// [`ExitReason::AwaitingApproval`] instead of executing the tool
+    /// directly. The calling layer decides how to handle approval.
     ///
-    /// Default is `false` — tools execute immediately.
-    fn requires_approval(&self) -> bool {
-        false
+    /// Default is [`ApprovalPolicy::None`] — tools execute immediately.
+    fn approval_policy(&self) -> ApprovalPolicy {
+        ApprovalPolicy::None
     }
 
     /// Optional concurrency hint used by planners/deciders.
@@ -151,8 +207,8 @@ impl ToolDyn for AliasedTool {
         self.inner.call(input, ctx)
     }
 
-    fn requires_approval(&self) -> bool {
-        self.inner.requires_approval()
+    fn approval_policy(&self) -> ApprovalPolicy {
+        self.inner.approval_policy()
     }
 
     fn concurrency_hint(&self) -> ToolConcurrencyHint {

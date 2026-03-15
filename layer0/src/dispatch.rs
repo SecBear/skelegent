@@ -234,6 +234,28 @@ impl Artifact {
     }
 }
 
+/// Result of collecting all dispatch events, preserving intermediate events.
+///
+/// Unlike [`DispatchHandle::collect`], which discards intermediate events,
+/// [`DispatchHandle::collect_all`] returns this struct containing both the
+/// final [`OperatorOutput`] and the full ordered list of intermediate events.
+pub struct CollectedDispatch {
+    /// Final operator output.
+    pub output: OperatorOutput,
+    /// All intermediate events received before the terminal event, in order.
+    /// Includes `Progress`, `ArtifactProduced`, and `EffectEmitted` events.
+    pub events: Vec<DispatchEvent>,
+}
+
+impl std::fmt::Debug for CollectedDispatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CollectedDispatch")
+            .field("output", &self.output)
+            .field("events_count", &self.events.len())
+            .finish()
+    }
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // DISPATCH HANDLE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -347,6 +369,59 @@ impl DispatchHandle {
                 "dispatch ended without terminal event".into(),
             ))
         }
+    }
+
+    /// Consume all events, preserving intermediate events alongside the final output.
+    ///
+    /// Unlike [`collect`](Self::collect), this method retains all `Progress`,
+    /// `ArtifactProduced`, and `EffectEmitted` events in the order they were received.
+    ///
+    /// `EffectEmitted` events appear in both the `events` vec and `output.effects`,
+    /// consistent with how [`collect`](Self::collect) populates `output.effects`.
+    pub async fn collect_all(mut self) -> Result<CollectedDispatch, OrchError> {
+        let mut events = Vec::new();
+        let mut terminal_output = None;
+        let mut terminal_error = None;
+
+        while let Some(event) = self.rx.recv().await {
+            match event {
+                DispatchEvent::Completed { output } => {
+                    terminal_output = Some(output);
+                }
+                DispatchEvent::Failed { error } => {
+                    terminal_error = Some(error);
+                }
+                // All intermediate events are preserved.
+                other => {
+                    events.push(other);
+                }
+            }
+        }
+
+        if let Some(error) = terminal_error {
+            return Err(error);
+        }
+
+        let Some(mut output) = terminal_output else {
+            return Err(OrchError::DispatchFailed(
+                "dispatch ended without terminal event".into(),
+            ));
+        };
+
+        // Populate output.effects from EffectEmitted events, same as collect().
+        let collected_effects: Vec<Effect> = events
+            .iter()
+            .filter_map(|e| match e {
+                DispatchEvent::EffectEmitted { effect } => Some(effect.clone()),
+                _ => None,
+            })
+            .collect();
+
+        if !collected_effects.is_empty() {
+            output.effects = collected_effects;
+        }
+
+        Ok(CollectedDispatch { output, events })
     }
 }
 

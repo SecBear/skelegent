@@ -64,6 +64,10 @@ pub struct DispatchContext {
     /// Caller identity. `None` for unauthenticated dispatches.
     pub identity: Option<AuthIdentity>,
 
+    /// Optional deadline for this dispatch. If set, dispatchers should
+    /// attempt to complete before this instant.
+    deadline: Option<tokio::time::Instant>,
+
     /// Typed extension map for cross-cutting concerns.
     extensions: Extensions,
 }
@@ -80,6 +84,7 @@ impl DispatchContext {
             operator_id,
             trace: TraceContext::default(),
             identity: None,
+            deadline: None,
             extensions: Extensions::new(),
         }
     }
@@ -95,6 +100,7 @@ impl DispatchContext {
             operator_id,
             trace: self.trace.child_span(),
             identity: self.identity.clone(),
+            deadline: self.deadline,
             extensions: self.extensions.clone(),
         }
     }
@@ -109,6 +115,40 @@ impl DispatchContext {
     pub fn with_identity(mut self, identity: AuthIdentity) -> Self {
         self.identity = Some(identity);
         self
+    }
+
+    /// Set a deadline on this context.
+    pub fn with_deadline(mut self, deadline: tokio::time::Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+
+    /// Set a timeout (converted to deadline from now).
+    pub fn with_timeout(mut self, duration: std::time::Duration) -> Self {
+        self.deadline = Some(tokio::time::Instant::now() + duration);
+        self
+    }
+
+    /// Get the deadline, if any.
+    pub fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.deadline
+    }
+
+    /// Get remaining time until deadline, or `None` if no deadline set.
+    ///
+    /// Returns `Duration::ZERO` if the deadline has already passed.
+    pub fn remaining(&self) -> Option<std::time::Duration> {
+        self.deadline.map(|d| {
+            let now = tokio::time::Instant::now();
+            if d > now { d - now } else { std::time::Duration::ZERO }
+        })
+    }
+
+    /// Check if the deadline has passed.
+    ///
+    /// Returns `false` if no deadline is set.
+    pub fn is_expired(&self) -> bool {
+        self.deadline.is_some_and(|d| tokio::time::Instant::now() >= d)
     }
 
     /// Read-only access to extensions.
@@ -130,6 +170,7 @@ impl fmt::Debug for DispatchContext {
             .field("operator_id", &self.operator_id)
             .field("trace", &self.trace)
             .field("identity", &self.identity)
+            .field("deadline", &self.deadline)
             .field("extensions", &self.extensions)
             .finish()
     }
@@ -514,5 +555,56 @@ mod tests {
         let ctx = DispatchContext::new(DispatchId::new("d-debug"), OperatorId::new("op-debug"));
         let debug = format!("{ctx:?}");
         assert!(debug.contains("d-debug"));
+    }
+
+    #[test]
+    fn with_timeout_creates_future_deadline() {
+        let ctx = DispatchContext::new(DispatchId::new("d-1"), OperatorId::new("op-1"))
+            .with_timeout(std::time::Duration::from_secs(10));
+        assert!(ctx.deadline().is_some());
+        assert!(ctx.deadline().unwrap() > tokio::time::Instant::now());
+    }
+
+    #[test]
+    fn remaining_returns_some_when_deadline_set() {
+        let ctx = DispatchContext::new(DispatchId::new("d-2"), OperatorId::new("op-2"))
+            .with_timeout(std::time::Duration::from_secs(60));
+        let remaining = ctx.remaining();
+        assert!(remaining.is_some());
+        assert!(remaining.unwrap() > std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn is_expired_false_for_future_deadline() {
+        let ctx = DispatchContext::new(DispatchId::new("d-3"), OperatorId::new("op-3"))
+            .with_timeout(std::time::Duration::from_secs(60));
+        assert!(!ctx.is_expired());
+    }
+
+    #[test]
+    fn child_inherits_parent_deadline() {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let parent = DispatchContext::new(DispatchId::new("d-parent"), OperatorId::new("op-p"))
+            .with_deadline(deadline);
+        let child = parent.child(DispatchId::new("d-child"), OperatorId::new("op-c"));
+        assert_eq!(child.deadline(), Some(deadline));
+    }
+
+    #[test]
+    fn no_deadline_remaining_returns_none() {
+        let ctx = DispatchContext::new(DispatchId::new("d-4"), OperatorId::new("op-4"));
+        assert!(ctx.deadline().is_none());
+        assert!(ctx.remaining().is_none());
+        assert!(!ctx.is_expired());
+    }
+
+    #[test]
+    fn expired_deadline_remaining_returns_zero() {
+        // A deadline in the past.
+        let deadline = tokio::time::Instant::now() - std::time::Duration::from_millis(1);
+        let ctx = DispatchContext::new(DispatchId::new("d-5"), OperatorId::new("op-5"))
+            .with_deadline(deadline);
+        assert!(ctx.is_expired());
+        assert_eq!(ctx.remaining(), Some(std::time::Duration::ZERO));
     }
 }

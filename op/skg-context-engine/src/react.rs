@@ -126,8 +126,8 @@ pub fn check_exit(stop_reason: &StopReason) -> ExitReason {
 /// Check which tool calls require approval and return the corresponding effects.
 ///
 /// Returns a vec of `Effect::ToolApprovalRequired` for each tool call where
-/// `tool.requires_approval()` is true. Returns an empty vec if no tools
-/// require approval.
+/// `tool.approval_policy().requires_approval(&input)` is true. Returns an empty
+/// vec if no tools require approval.
 ///
 /// This is the decision point for human-in-the-loop approval. The caller
 /// decides what to do with the effects (emit them, filter them, etc.).
@@ -137,7 +137,7 @@ pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<E
         .filter(|call| {
             registry
                 .get(&call.name)
-                .is_some_and(|t| t.requires_approval())
+                .is_some_and(|t| t.approval_policy().requires_approval(&call.input))
         })
         .map(|call| Effect::ToolApprovalRequired {
             tool_name: call.name.clone(),
@@ -947,8 +947,8 @@ mod tests {
         > {
             Box::pin(async { Ok(json!("should not reach here")) })
         }
-        fn requires_approval(&self) -> bool {
-            true
+        fn approval_policy(&self) -> skg_tool::ApprovalPolicy {
+            skg_tool::ApprovalPolicy::Always
         }
     }
 
@@ -1018,7 +1018,7 @@ mod tests {
         .await
         .unwrap();
 
-        // Normal completion — requires_approval defaults to false
+        // Normal completion — approval_policy defaults to ApprovalPolicy::None
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert!(output.effects.is_empty());
     }
