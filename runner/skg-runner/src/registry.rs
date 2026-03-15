@@ -31,6 +31,10 @@ pub struct OperatorRegistryBuilder {
 
 impl OperatorRegistryBuilder {
     /// Register an operator into the builder.
+    ///
+    /// Not called by the default binary (ships with an empty registry),
+    /// but downstream embedders use this to compile operators in.
+    #[allow(dead_code)]
     pub fn register(mut self, id: OperatorId, op: Arc<dyn Operator>) -> Self {
         self.operators.insert(id, op);
         self
@@ -47,6 +51,25 @@ impl OperatorRegistryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use layer0::{
+        Content, DispatchContext, EffectEmitter, ExitReason, OperatorError, OperatorInput,
+        OperatorOutput,
+    };
+
+    struct NoOp;
+
+    #[async_trait]
+    impl layer0::Operator for NoOp {
+        async fn execute(
+            &self,
+            _input: OperatorInput,
+            _ctx: &DispatchContext,
+            _emitter: &EffectEmitter,
+        ) -> Result<OperatorOutput, OperatorError> {
+            Ok(OperatorOutput::new(Content::text("ok"), ExitReason::Complete))
+        }
+    }
 
     #[test]
     fn empty_registry_returns_none() {
@@ -55,8 +78,11 @@ mod tests {
     }
 
     #[test]
-    fn builder_produces_empty_registry() {
-        let reg = OperatorRegistry::builder().build();
-        assert!(reg.get("anything").is_none());
+    fn register_and_lookup() {
+        let reg = OperatorRegistry::builder()
+            .register(OperatorId::new("test-op"), Arc::new(NoOp))
+            .build();
+        assert!(reg.get("test-op").is_some());
+        assert!(reg.get("other").is_none());
     }
 }
