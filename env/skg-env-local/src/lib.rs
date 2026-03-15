@@ -11,11 +11,11 @@
 //! no remote execution boundaries, no network policy enforcement.
 
 use async_trait::async_trait;
-use layer0::dispatch::EffectEmitter;
 use layer0::DispatchContext;
-use layer0::id::DispatchId;
+use layer0::dispatch::EffectEmitter;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
+use layer0::id::DispatchId;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
 use layer0::secret::{SecretAccessEvent, SecretAccessOutcome};
 use skg_secret::{SecretError, SecretLease, SecretResolver};
@@ -215,7 +215,10 @@ impl Environment for LocalEnv {
         let correlation = CorrelationContext::from_metadata(&input.metadata);
         let cleanup = self.resolve_and_inject(spec, &correlation).await?;
 
-        let ctx = DispatchContext::new(DispatchId::new("env-local"), layer0::id::OperatorId::new("local-env"));
+        let ctx = DispatchContext::new(
+            DispatchId::new("env-local"),
+            layer0::id::OperatorId::new("local-env"),
+        );
         let result = self
             .op
             .execute(input, &ctx, &EffectEmitter::noop())

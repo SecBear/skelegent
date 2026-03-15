@@ -388,18 +388,12 @@ mod tests {
 
     #[test]
     fn context_new_and_child() {
-        let root = DispatchContext::new(
-            DispatchId::new("d-001"),
-            OperatorId::new("summarizer"),
-        );
+        let root = DispatchContext::new(DispatchId::new("d-001"), OperatorId::new("summarizer"));
         assert_eq!(root.dispatch_id.as_str(), "d-001");
         assert!(root.parent_id.is_none());
         assert!(root.identity.is_none());
 
-        let child = root.child(
-            DispatchId::new("d-002"),
-            OperatorId::new("sub-summarizer"),
-        );
+        let child = root.child(DispatchId::new("d-002"), OperatorId::new("sub-summarizer"));
         assert_eq!(child.dispatch_id.as_str(), "d-002");
         assert_eq!(child.parent_id.as_ref().unwrap().as_str(), "d-001");
         assert_eq!(child.operator_id.as_str(), "sub-summarizer");
@@ -407,11 +401,8 @@ mod tests {
 
     #[test]
     fn context_with_identity() {
-        let ctx = DispatchContext::new(
-            DispatchId::new("d-001"),
-            OperatorId::new("op"),
-        )
-        .with_identity(AuthIdentity::new("user-123"));
+        let ctx = DispatchContext::new(DispatchId::new("d-001"), OperatorId::new("op"))
+            .with_identity(AuthIdentity::new("user-123"));
 
         let id = ctx.identity.as_ref().unwrap();
         assert_eq!(id.subject, "user-123");
@@ -420,14 +411,9 @@ mod tests {
 
     #[test]
     fn context_with_trace() {
-        let ctx = DispatchContext::new(
-            DispatchId::new("d-001"),
-            OperatorId::new("op"),
-        )
-        .with_trace(TraceContext::new(
-            "0af7651916cd43dd8448eb211c80319c",
-            "b7ad6b7169203331",
-        ));
+        let ctx = DispatchContext::new(DispatchId::new("d-001"), OperatorId::new("op")).with_trace(
+            TraceContext::new("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331"),
+        );
 
         assert_eq!(ctx.trace.trace_id, "0af7651916cd43dd8448eb211c80319c");
         assert_eq!(ctx.trace.span_id, "b7ad6b7169203331");
@@ -525,10 +511,7 @@ mod tests {
 
     #[test]
     fn dispatch_context_debug_does_not_panic() {
-        let ctx = DispatchContext::new(
-            DispatchId::new("d-debug"),
-            OperatorId::new("op-debug"),
-        );
+        let ctx = DispatchContext::new(DispatchId::new("d-debug"), OperatorId::new("op-debug"));
         let debug = format!("{ctx:?}");
         assert!(debug.contains("d-debug"));
     }

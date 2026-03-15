@@ -259,7 +259,7 @@ impl OperatorOutput {
     /// Check whether this output contains effects that need an interpreter.
     ///
     /// Returns `true` if [`effects`](Self::effects) is non-empty. Callers that
-    /// consume `OperatorOutput` directly (without an `EffectInterpreter` or
+    /// consume `OperatorOutput` directly (without an `EffectHandler` or
     /// `OrchestratedRunner`) should check this and decide whether the unhandled
     /// effects are acceptable or a bug.
     ///

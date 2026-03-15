@@ -209,7 +209,6 @@ impl Context {
         &self.messages
     }
 
-
     // ── Mutation methods (emit to observation stream) ──────────────
 
     /// Append a message to the context.
@@ -272,7 +271,6 @@ impl Context {
             self.push_message(msg);
         }
     }
-
 
     /// Emit a context event to the observation stream.
     ///
@@ -694,7 +692,6 @@ mod tests {
             other => panic!("expected MessagesSet, got {other:?}"),
         }
     }
-
 
     #[tokio::test]
     async fn no_stream_sender_means_no_cost() {

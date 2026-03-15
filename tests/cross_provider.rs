@@ -8,11 +8,11 @@
 //! All tests require live API keys and are `#[ignore]` by default.
 //! They verify that OperatorOutput structure is consistent across providers.
 
-use layer0::{DispatchContext, DispatchId, OperatorId};
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::dispatch::EffectEmitter;
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use skg_context_engine::{Context, ReactLoopConfig, react_loop};
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_provider_anthropic::AnthropicProvider;
@@ -66,9 +66,16 @@ async fn anthropic_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config, &EffectEmitter::noop())
-        .await
-        .expect("react_loop should succeed");
+    let output = react_loop(
+        &mut ctx,
+        &provider,
+        &tools,
+        &dispatch_ctx,
+        &config,
+        &EffectEmitter::noop(),
+    )
+    .await
+    .expect("react_loop should succeed");
 
     let text = output.message.as_text().unwrap_or("");
     println!("Anthropic react_loop response: {text}");
@@ -190,9 +197,16 @@ async fn openai_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config, &EffectEmitter::noop())
-        .await
-        .expect("react_loop should succeed");
+    let output = react_loop(
+        &mut ctx,
+        &provider,
+        &tools,
+        &dispatch_ctx,
+        &config,
+        &EffectEmitter::noop(),
+    )
+    .await
+    .expect("react_loop should succeed");
 
     let text = output.message.as_text().unwrap_or("");
     println!("OpenAI react_loop response: {text}");
@@ -300,9 +314,16 @@ async fn ollama_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config, &EffectEmitter::noop())
-        .await
-        .expect("react_loop should succeed");
+    let output = react_loop(
+        &mut ctx,
+        &provider,
+        &tools,
+        &dispatch_ctx,
+        &config,
+        &EffectEmitter::noop(),
+    )
+    .await
+    .expect("react_loop should succeed");
 
     let text = output.message.as_text().unwrap_or("");
     println!("Ollama react_loop response: {text}");

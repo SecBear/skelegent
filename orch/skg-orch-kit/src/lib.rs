@@ -14,10 +14,7 @@ mod kit;
 mod runner;
 
 pub use kit::Kit;
-pub use runner::{
-    EffectInterpreter, ExecutionEvent, ExecutionTrace, KitError, LocalEffectInterpreter,
-    OrchestratedRunner,
-};
+pub use runner::{ExecutionEvent, ExecutionTrace, KitError, OrchestratedRunner};
 
 pub mod effects;
 pub use skg_effects_core as effects_core;

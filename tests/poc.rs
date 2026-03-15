@@ -15,10 +15,10 @@ use layer0::dispatch::Dispatcher;
 use layer0::dispatch::EffectEmitter;
 use layer0::effect::Scope;
 use layer0::id::OperatorId;
-use layer0::{DispatchContext, DispatchId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
 use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
+use layer0::{DispatchContext, DispatchId};
 use rust_decimal::Decimal;
 use skg_context_engine::{CognitiveOperator, CognitiveOperatorConfig};
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
@@ -134,8 +134,14 @@ async fn provider_swap_same_config_different_backend() {
     let input_b = simple_input("Greet me");
 
     let ctx = test_ctx();
-    let output_a = op_a.execute(input_a, &ctx, &EffectEmitter::noop()).await.unwrap();
-    let output_b = op_b.execute(input_b, &ctx, &EffectEmitter::noop()).await.unwrap();
+    let output_a = op_a
+        .execute(input_a, &ctx, &EffectEmitter::noop())
+        .await
+        .unwrap();
+    let output_b = op_b
+        .execute(input_b, &ctx, &EffectEmitter::noop())
+        .await
+        .unwrap();
 
     // Both produce OperatorOutput with the same structure
     assert_eq!(output_a.exit_reason, ExitReason::Complete);
@@ -369,7 +375,10 @@ async fn operator_swap_echo_operator() {
     let echo: Arc<dyn Operator> = Arc::new(EchoOperator);
 
     let input = simple_input("This exact text should come back");
-    let output = echo.execute(input, &test_ctx(), &EffectEmitter::noop()).await.unwrap();
+    let output = echo
+        .execute(input, &test_ctx(), &EffectEmitter::noop())
+        .await
+        .unwrap();
 
     assert_eq!(output.exit_reason, ExitReason::Complete);
     assert_eq!(
@@ -469,7 +478,13 @@ async fn multi_agent_parallel_dispatch() {
 
     let mut results = Vec::new();
     for (op, input) in tasks {
-        results.push(orch.dispatch(&dispatch_ctx(op.as_str()), input).await.unwrap().collect().await);
+        results.push(
+            orch.dispatch(&dispatch_ctx(op.as_str()), input)
+                .await
+                .unwrap()
+                .collect()
+                .await,
+        );
     }
 
     // All three should succeed

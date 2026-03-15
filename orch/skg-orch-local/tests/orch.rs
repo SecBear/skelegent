@@ -60,9 +60,7 @@ impl layer0::operator::Operator for FailingOperator {
         _ctx: &layer0::DispatchContext,
         _emitter: &layer0::dispatch::EffectEmitter,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
-        Err(layer0::error::OperatorError::non_retryable(
-            "always fails",
-        ))
+        Err(layer0::error::OperatorError::non_retryable("always fails"))
     }
 }
 
@@ -120,9 +118,9 @@ async fn usable_as_arc_dyn_dispatcher() {
 #[tokio::test]
 async fn middleware_observer_fires_on_dispatch() {
     use async_trait::async_trait;
+    use layer0::DispatchContext;
     use layer0::error::OrchError;
     use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
-    use layer0::DispatchContext;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct CountMiddleware {
@@ -170,9 +168,9 @@ async fn middleware_observer_fires_on_dispatch() {
 #[tokio::test]
 async fn middleware_guard_can_halt_dispatch() {
     use async_trait::async_trait;
+    use layer0::DispatchContext;
     use layer0::error::OrchError;
     use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
-    use layer0::DispatchContext;
 
     struct DenyAll;
 

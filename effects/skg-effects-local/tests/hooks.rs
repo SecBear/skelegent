@@ -1,17 +1,16 @@
 use async_trait::async_trait;
-use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
+use layer0::DispatchContext;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OrchError, StateError};
-use layer0::id::{DispatchId, OperatorId, WorkflowId};
+use layer0::id::DispatchId;
+use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
-use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
 use layer0::state::{Lifetime, StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
-use layer0::DispatchContext;
 use serde_json::json;
-use skg_effects_core::EffectExecutor;
 use skg_effects_core::Signalable;
-use skg_effects_local::LocalEffectExecutor;
+use skg_effects_core::{EffectHandler, EffectOutcome};
+use skg_effects_local::LocalEffectHandler;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -19,26 +18,9 @@ fn test_ctx() -> DispatchContext {
     DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
 }
 
-// ── Minimal no-op dispatcher + signaler ─────────────────────────────────────
+// ── Minimal no-op signaler ──────────────────────────────────────────────────
 
 struct NoOpOrch;
-
-#[async_trait]
-impl Dispatcher for NoOpOrch {
-    async fn dispatch(
-        &self,
-        ctx: &DispatchContext,
-        _input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
-        let output =
-            OperatorOutput::new(layer0::content::Content::text("ok"), ExitReason::Complete);
-        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
-        tokio::spawn(async move {
-            let _ = sender.send(DispatchEvent::Completed { output }).await;
-        });
-        Ok(handle)
-    }
-}
 
 #[async_trait]
 impl Signalable for NoOpOrch {
@@ -127,25 +109,30 @@ async fn halt_hook_prevents_memory_write() {
     let orch = Arc::new(NoOpOrch);
 
     let stack = StoreStack::builder().guard(Arc::new(HaltGuard)).build();
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    )
-    .with_store_middleware(stack);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_store_middleware(stack);
 
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "secret".into(),
-        value: json!("sensitive"),
-        tier: None,
-        lifetime: None,
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }], &test_ctx())
-    .await
-    .expect("halt is not an error — execute() succeeds");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "secret".into(),
+                value: json!("sensitive"),
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("halt is not an error — handle() succeeds");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Skipped),
+        "halt guard must produce Skipped outcome"
+    );
 
     let got = state.read(&Scope::Global, "secret").await.expect("read ok");
     assert_eq!(got, None, "halt guard must prevent the write");
@@ -156,24 +143,29 @@ async fn halt_hook_prevents_memory_write() {
 async fn no_hooks_writes_normally() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(NoOpOrch);
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    );
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>));
 
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "k".into(),
-        value: json!(42),
-        tier: None,
-        lifetime: None,
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }], &test_ctx())
-    .await
-    .expect("execute ok");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "k".into(),
+                value: json!(42),
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "write must produce Applied outcome"
+    );
 
     let got = state.read(&Scope::Global, "k").await.expect("read ok");
     assert_eq!(got, Some(json!(42)));
@@ -187,25 +179,30 @@ async fn observer_hook_sees_key_and_value() {
 
     let observer = RecordingObserver::new();
     let stack = StoreStack::builder().observe(observer.clone()).build();
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    )
-    .with_store_middleware(stack);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_store_middleware(stack);
 
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "observed_key".into(),
-        value: json!({"x": 1}),
-        tier: None,
-        lifetime: None,
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }], &test_ctx())
-    .await
-    .expect("execute ok");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "observed_key".into(),
+                value: json!({"x": 1}),
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "observer must not block — Applied"
+    );
 
     assert_eq!(
         *observer.seen_key.lock().await,
@@ -237,25 +234,30 @@ async fn modify_hook_replaces_value() {
             new_value: json!("replaced"),
         }))
         .build();
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    )
-    .with_store_middleware(stack);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_store_middleware(stack);
 
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "m".into(),
-        value: json!("original"),
-        tier: None,
-        lifetime: None,
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }], &test_ctx())
-    .await
-    .expect("execute ok");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "m".into(),
+                value: json!("original"),
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "transformer must commit — Applied"
+    );
 
     let got = state.read(&Scope::Global, "m").await.expect("read ok");
     assert_eq!(
@@ -297,26 +299,31 @@ async fn lifetime_guardrail_blocks_transient_write() {
     let stack = StoreStack::builder()
         .guard(Arc::new(LifetimeGuardrail))
         .build();
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    )
-    .with_store_middleware(stack);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_store_middleware(stack);
 
     // Transient write: middleware must block it.
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "transient_key".into(),
-        value: serde_json::json!("should_not_land"),
-        tier: None,
-        lifetime: Some(Lifetime::Transient),
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }], &test_ctx())
-    .await
-    .expect("halt is not an error");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "transient_key".into(),
+                value: serde_json::json!("should_not_land"),
+                tier: None,
+                lifetime: Some(Lifetime::Transient),
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("halt is not an error");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Skipped),
+        "transient write must be Skipped"
+    );
 
     let got = state
         .read(&Scope::Global, "transient_key")
@@ -325,18 +332,27 @@ async fn lifetime_guardrail_blocks_transient_write() {
     assert_eq!(got, None, "transient write must be blocked");
 
     // Durable write: middleware must allow it.
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "durable_key".into(),
-        value: serde_json::json!("should_land"),
-        tier: None,
-        lifetime: Some(layer0::state::Lifetime::Durable),
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }], &test_ctx())
-    .await
-    .expect("execute ok");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "durable_key".into(),
+                value: serde_json::json!("should_land"),
+                tier: None,
+                lifetime: Some(layer0::state::Lifetime::Durable),
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "durable write must be Applied"
+    );
 
     let got = state
         .read(&Scope::Global, "durable_key")

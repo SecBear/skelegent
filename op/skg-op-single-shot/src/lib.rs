@@ -152,11 +152,11 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::id::{DispatchId, OperatorId};
     use skg_turn::infer::InferResponse;
     use skg_turn::test_utils::{TestProvider, error_provider_rate_limited, make_text_response};
     use skg_turn::types::{StopReason, TokenUsage};
     use std::sync::Arc;
-    use layer0::id::{DispatchId, OperatorId};
 
     fn test_ctx() -> DispatchContext {
         DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
@@ -226,7 +226,13 @@ mod tests {
         let result = op
             .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
             .await;
-        assert!(matches!(result, Err(OperatorError::Model { retryable: true, .. })));
+        assert!(matches!(
+            result,
+            Err(OperatorError::Model {
+                retryable: true,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
@@ -267,9 +273,14 @@ mod tests {
         ));
 
         let ctx = test_ctx();
-        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &ctx, &EffectEmitter::noop())
-            .await
-            .unwrap();
+        let output = Operator::execute(
+            op.as_ref(),
+            simple_input("Hi"),
+            &ctx,
+            &EffectEmitter::noop(),
+        )
+        .await
+        .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
     }
 }

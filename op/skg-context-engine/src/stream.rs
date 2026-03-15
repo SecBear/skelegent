@@ -60,7 +60,6 @@ pub enum ContextMutation {
         new_len: usize,
     },
 
-
     /// Metrics were updated (tokens, cost).
     MetricsUpdated {
         /// Total input tokens after update.

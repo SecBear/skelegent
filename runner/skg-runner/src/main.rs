@@ -132,13 +132,10 @@ impl RunnerServiceImpl {
 
         // Spawn in a task to catch panics from operator implementations.
         let op_id = operator_id.to_owned();
-        let handle =
-            tokio::task::spawn(
-                async move {
-                    let ctx = DispatchContext::new(DispatchId::new("runner"), OperatorId::new(op_id));
-                    operator.execute(input, &ctx, &EffectEmitter::noop()).await
-                },
-            );
+        let handle = tokio::task::spawn(async move {
+            let ctx = DispatchContext::new(DispatchId::new("runner"), OperatorId::new(op_id));
+            operator.execute(input, &ctx, &EffectEmitter::noop()).await
+        });
 
         let result = handle.await.map_err(|join_err| {
             error!("operator panicked: {join_err}");
@@ -223,14 +220,12 @@ impl Runner for RunnerServiceImpl {
             }
 
             // Execute the operator, catching panics via the spawned task boundary.
-            let result =
-                tokio::task::spawn(
-                    async move {
-                        let ctx = DispatchContext::new(DispatchId::new("runner-sse"), OperatorId::new(sse_op_id));
-                        operator.execute(input, &ctx, &EffectEmitter::noop()).await
-                    },
-                )
-                .await;
+            let result = tokio::task::spawn(async move {
+                let ctx =
+                    DispatchContext::new(DispatchId::new("runner-sse"), OperatorId::new(sse_op_id));
+                operator.execute(input, &ctx, &EffectEmitter::noop()).await
+            })
+            .await;
 
             match result {
                 Ok(Ok(output)) => {

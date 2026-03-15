@@ -167,8 +167,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         let dispatch_ctx = DispatchContext::new(
             DispatchId::new(format!(
                 "cogop-{}-{}",
-                self.operator_id,
-                ctx.metrics.turns_completed
+                self.operator_id, ctx.metrics.turns_completed
             )),
             self.operator_id.clone(),
         );
@@ -274,7 +273,13 @@ mod tests {
         let result = op
             .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
             .await;
-        assert!(matches!(result, Err(OperatorError::Model { retryable: true, .. })));
+        assert!(matches!(
+            result,
+            Err(OperatorError::Model {
+                retryable: true,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
@@ -282,9 +287,14 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op: std::sync::Arc<dyn Operator> = std::sync::Arc::new(make_op(provider));
 
-        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &test_ctx(), &EffectEmitter::noop())
-            .await
-            .unwrap();
+        let output = Operator::execute(
+            op.as_ref(),
+            simple_input("Hi"),
+            &test_ctx(),
+            &EffectEmitter::noop(),
+        )
+        .await
+        .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
     }
 
@@ -310,7 +320,9 @@ mod tests {
                 )]
             });
 
-        let result = op.execute(simple_input("hi"), &test_ctx(), &EffectEmitter::noop()).await;
+        let result = op
+            .execute(simple_input("hi"), &test_ctx(), &EffectEmitter::noop())
+            .await;
 
         // Budget guard halts before first inference via Before<InferBoundary>.
         assert!(result.is_err());

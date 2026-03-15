@@ -9,11 +9,11 @@
 //! and "execution happens in containers" (skg-env-docker).
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::environment::{Environment, EnvironmentSpec};
 use layer0::error::OrchError;
 use layer0::id::OperatorId;
-use layer0::DispatchContext;
 use layer0::operator::OperatorInput;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,7 +78,6 @@ impl Default for EnvOrch {
     }
 }
 
-
 #[async_trait]
 impl Dispatcher for EnvOrch {
     #[tracing::instrument(skip_all, fields(operator_id = %ctx.operator_id))]
@@ -103,9 +102,7 @@ impl Dispatcher for EnvOrch {
                 }
                 Err(err) => {
                     let _ = sender
-                        .send(DispatchEvent::Failed {
-                            error: err.into(),
-                        })
+                        .send(DispatchEvent::Failed { error: err.into() })
                         .await;
                 }
             }
@@ -174,10 +171,7 @@ mod tests {
         let orch = EnvOrch::new();
 
         let ctx = DispatchContext::new(DispatchId::new("missing"), OperatorId::new("missing"));
-        let err = orch
-            .dispatch(&ctx, input("nope"))
-            .await
-            .unwrap_err();
+        let err = orch.dispatch(&ctx, input("nope")).await.unwrap_err();
 
         assert!(
             matches!(err, OrchError::OperatorNotFound(ref name) if name == "missing"),

@@ -118,10 +118,12 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
 
         let ctx_owned = ctx.clone();
         let operator = ToolOperator::new(Arc::clone(tool));
-        let (handle, sender) =
-            layer0::DispatchHandle::channel(ctx.dispatch_id.clone());
+        let (handle, sender) = layer0::DispatchHandle::channel(ctx.dispatch_id.clone());
         tokio::spawn(async move {
-            match operator.execute(input, &ctx_owned, &EffectEmitter::noop()).await {
+            match operator
+                .execute(input, &ctx_owned, &EffectEmitter::noop())
+                .await
+            {
                 Ok(output) => {
                     let _ = sender
                         .send(layer0::DispatchEvent::Completed { output })
@@ -264,10 +266,7 @@ mod tests {
             OperatorError::SubDispatch { operator, source } => {
                 assert_eq!(operator, "fail");
                 let msg = source.to_string();
-                assert!(
-                    msg.contains("always fails"),
-                    "unexpected message: {msg}"
-                );
+                assert!(msg.contains("always fails"), "unexpected message: {msg}");
             }
             other => panic!("expected SubDispatch, got {other:?}"),
         }
@@ -304,10 +303,7 @@ mod tests {
         let operator = OperatorId::new("unknown_tool");
         let ctx = DispatchContext::new(DispatchId::new("unknown_tool"), operator.clone());
         let input = make_input("{}");
-        let err = orch
-            .dispatch(&ctx, input)
-            .await
-            .expect_err("should fail");
+        let err = orch.dispatch(&ctx, input).await.expect_err("should fail");
 
         match err {
             OrchError::OperatorNotFound(name) => {

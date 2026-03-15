@@ -11,12 +11,12 @@ pub mod auth;
 pub use auth::{AuthError, AuthGuard, AuthIdentity, StaticKeyValidator, TokenValidator};
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::error::OrchError;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
 use layer0::operator::OperatorInput;
-use layer0::DispatchContext;
 use regex::Regex;
 
 /// Middleware that redacts secrets from dispatch output.

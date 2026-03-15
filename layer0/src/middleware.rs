@@ -238,9 +238,7 @@ impl DispatchNext for DispatchChain<'_> {
             index: self.index + 1,
             terminal: self.terminal,
         };
-        self.layers[self.index]
-            .dispatch(ctx, input, &next)
-            .await
+        self.layers[self.index].dispatch(ctx, input, &next).await
     }
 }
 
@@ -636,9 +634,7 @@ mod tests {
             crate::operator::TriggerType::User,
         );
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("a"));
-        let result = stack
-            .dispatch_with(&ctx, input, &EchoTerminal)
-            .await;
+        let result = stack.dispatch_with(&ctx, input, &EchoTerminal).await;
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
@@ -685,9 +681,7 @@ mod tests {
             crate::operator::TriggerType::User,
         );
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("a"));
-        let result = stack
-            .dispatch_with(&ctx, input, &EchoTerminal)
-            .await;
+        let result = stack.dispatch_with(&ctx, input, &EchoTerminal).await;
         assert!(result.is_ok());
     }
 

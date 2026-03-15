@@ -14,14 +14,14 @@ use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
 use crate::ops::tool::ExecuteTool;
 use crate::output::{OutputError, OutputMode, OutputSchema};
+use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::duration::DurationMs;
 use layer0::dispatch::EffectEmitter;
+use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use serde_json::Value;
-use layer0::DispatchContext;
 use skg_tool::{ToolDyn, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
@@ -488,8 +488,8 @@ mod tests {
     use super::*;
     use crate::output::OutputSchema;
     use layer0::id::OperatorId;
-    use serde_json::json;
     use layer0::{DispatchContext, DispatchId};
+    use serde_json::json;
     use skg_tool::{ToolDyn, ToolError};
     use skg_turn::test_utils::TestProvider;
     use std::pin::Pin;
@@ -905,9 +905,16 @@ mod tests {
             })),
         };
 
-        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config, &EffectEmitter::noop())
-            .await
-            .unwrap();
+        let output = react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &config,
+            &EffectEmitter::noop(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         // Verify only "allowed" tool was in the request schemas
@@ -960,9 +967,16 @@ mod tests {
 
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config(), &EffectEmitter::noop())
-            .await
-            .unwrap();
+        let output = react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &simple_config(),
+            &EffectEmitter::noop(),
+        )
+        .await
+        .unwrap();
 
         // Should exit with AwaitingApproval
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
@@ -993,9 +1007,16 @@ mod tests {
 
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config(), &EffectEmitter::noop())
-            .await
-            .unwrap();
+        let output = react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &simple_config(),
+            &EffectEmitter::noop(),
+        )
+        .await
+        .unwrap();
 
         // Normal completion — requires_approval defaults to false
         assert_eq!(output.exit_reason, ExitReason::Complete);
@@ -1022,9 +1043,16 @@ mod tests {
 
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config(), &EffectEmitter::noop())
-            .await
-            .unwrap();
+        let output = react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &simple_config(),
+            &EffectEmitter::noop(),
+        )
+        .await
+        .unwrap();
 
         // Should exit with AwaitingApproval (approval check happens before dispatch)
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);

@@ -55,14 +55,14 @@
 //! ```
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::content::{Content, ContentBlock};
 use layer0::dispatch::EffectEmitter;
-use layer0::id::{DispatchId, OperatorId};
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::error::OperatorError;
+use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, SubDispatchRecord};
-use layer0::DispatchContext;
 use skg_tool::ToolRegistry;
 /// A minimal operator that batches tool calls between barriers.
 pub struct BarrierOperator {
@@ -102,8 +102,10 @@ impl Operator for BarrierOperator {
             for (id, name, params) in batch.drain(..) {
                 let start = std::time::Instant::now();
                 if let Some(tool) = tools.get(&name) {
-                    let ctx =
-                        DispatchContext::new(DispatchId::new("barrier"), OperatorId::new("barrier"));
+                    let ctx = DispatchContext::new(
+                        DispatchId::new("barrier"),
+                        OperatorId::new("barrier"),
+                    );
                     match tool.call(params, &ctx).await {
                         Ok(val) => {
                             let content = val.to_string();
@@ -180,11 +182,13 @@ impl Operator for BarrierOperator {
         let mut output = OperatorOutput::new(Content::Blocks(out_blocks), ExitReason::Complete);
         output.metadata = metadata;
         // Demonstrate effect declaration boundary
-        emitter.effect(Effect::Log {
-            level: layer0::effect::LogLevel::Info,
-            message: "barrier operator executed".into(),
-            data: None,
-        }).await;
+        emitter
+            .effect(Effect::Log {
+                level: layer0::effect::LogLevel::Info,
+                message: "barrier operator executed".into(),
+                data: None,
+            })
+            .await;
         Ok(output)
     }
 }
@@ -249,7 +253,10 @@ mod tests {
         );
 
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("barrier"));
-        let out = op.execute(input, &ctx, &EffectEmitter::noop()).await.unwrap();
+        let out = op
+            .execute(input, &ctx, &EffectEmitter::noop())
+            .await
+            .unwrap();
         match out.message {
             Content::Blocks(blocks) => {
                 // Expect 4 tool results + 2 steering texts (after each flush)
@@ -268,6 +275,9 @@ mod tests {
             _ => panic!("expected blocks"),
         }
         assert_eq!(out.exit_reason, ExitReason::Complete);
-        assert!(out.effects.is_empty(), "effects now go through emitter, not output.effects");
+        assert!(
+            out.effects.is_empty(),
+            "effects now go through emitter, not output.effects"
+        );
     }
 }

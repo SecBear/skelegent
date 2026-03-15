@@ -18,7 +18,6 @@ use thiserror::Error;
 
 use layer0::DispatchContext;
 
-
 /// Errors from tool operations.
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -360,7 +359,10 @@ mod tests {
 
         let tool = reg.get("fail").unwrap();
         let result = tool
-            .call(json!({}), &DispatchContext::new(DispatchId::new("test"), OperatorId::new("test")))
+            .call(
+                json!({}),
+                &DispatchContext::new(DispatchId::new("test"), OperatorId::new("test")),
+            )
             .await;
         assert!(result.is_err());
     }

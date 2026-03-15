@@ -1,8 +1,8 @@
 // Integration tests for the `#[skg_tool]` proc macro.
 // Each test exercises the generated struct through the `ToolDyn` trait.
 
-use serde_json::{Value, json};
 use layer0::{DispatchContext, DispatchId, OperatorId};
+use serde_json::{Value, json};
 use skg_tool::{ToolConcurrencyHint, ToolDyn, ToolError};
 use skg_tool_macro::skg_tool;
 

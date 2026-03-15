@@ -66,7 +66,8 @@ impl ToolDyn for OperatorToolAdapter {
             let ctx = layer0::DispatchContext::new(
                 layer0::id::DispatchId::new(format!("mcp-tool-{name}")),
                 layer0::id::OperatorId::new(&name),
-            ).with_trace(ctx.trace.child_span());
+            )
+            .with_trace(ctx.trace.child_span());
             let output = operator
                 .execute(op_input, &ctx, &layer0::dispatch::EffectEmitter::noop())
                 .await
@@ -656,7 +657,10 @@ mod tests {
         registry.register(Arc::new(TestTool { tool_name: "echo" }));
 
         let tool = registry.get("echo").unwrap();
-        let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::OperatorId::new("test"));
+        let ctx = layer0::DispatchContext::new(
+            layer0::id::DispatchId::new("test"),
+            layer0::OperatorId::new("test"),
+        );
         let result = tool.call(json!({"msg": "hello"}), &ctx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), json!({"echoed": {"msg": "hello"}}));
@@ -668,7 +672,10 @@ mod tests {
         registry.register(Arc::new(FailingTool));
 
         let tool = registry.get("fail_tool").unwrap();
-        let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::OperatorId::new("test"));
+        let ctx = layer0::DispatchContext::new(
+            layer0::id::DispatchId::new("test"),
+            layer0::OperatorId::new("test"),
+        );
         let result = tool.call(json!({}), &ctx).await;
         assert!(result.is_err());
     }
@@ -805,14 +812,19 @@ mod tests {
         assert_eq!(adapter.input_schema(), schema);
 
         // call roundtrip: input is serialized → operator echoes JSON string → parsed back
-        let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::OperatorId::new("test"));
+        let ctx = layer0::DispatchContext::new(
+            layer0::id::DispatchId::new("test"),
+            layer0::OperatorId::new("test"),
+        );
         let result = adapter.call(json!({"query": "hello"}), &ctx).await.unwrap();
         assert_eq!(result, json!({"result": "ok"}));
     }
 
     #[test]
     fn parse_traceparent_valid() {
-        let tc = super::parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").unwrap();
+        let tc =
+            super::parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+                .unwrap();
         assert_eq!(tc.trace_id, "0af7651916cd43dd8448eb211c80319c");
         assert_eq!(tc.span_id, "b7ad6b7169203331");
         assert_eq!(tc.trace_flags, 1);

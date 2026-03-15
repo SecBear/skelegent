@@ -10,12 +10,12 @@
 //!     .await?;
 //! ```
 
+use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::EffectEmitter;
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
-use layer0::DispatchContext;
 use skg_tool::ToolRegistry;
 #[cfg(any(
     feature = "provider-anthropic",
@@ -115,11 +115,14 @@ impl BuiltAgent {
     pub async fn run(&self, message: &str) -> Result<OperatorOutput, OperatorError> {
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
-        let output = self.operator.execute(input, &ctx, &EffectEmitter::noop()).await?;
+        let output = self
+            .operator
+            .execute(input, &ctx, &EffectEmitter::noop())
+            .await?;
         if output.has_unhandled_effects() {
             eprintln!(
                 "warning: OperatorOutput contains {} effect(s) that will not be executed. \
-                 Use an EffectInterpreter or OrchestratedRunner to process effects.",
+                 Use an EffectHandler or OrchestratedRunner to process effects.",
                 output.effects.len(),
             );
         }

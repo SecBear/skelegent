@@ -59,7 +59,9 @@ impl ContextOp for ExecuteTool {
                 reason: format!("unknown tool: {}", self.call.name),
             })?;
 
-        let result_json = tool.call(self.call.input.clone(), &self.dispatch_ctx).await?;
+        let result_json = tool
+            .call(self.call.input.clone(), &self.dispatch_ctx)
+            .await?;
 
         // Update metrics
         ctx.metrics.tool_calls_total += 1;

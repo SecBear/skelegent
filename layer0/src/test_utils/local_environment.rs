@@ -30,10 +30,7 @@ impl crate::environment::Environment for LocalEnvironment {
         input: OperatorInput,
         _spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
-        let ctx = DispatchContext::new(
-            DispatchId::new("local-env"),
-            OperatorId::new("local"),
-        );
+        let ctx = DispatchContext::new(DispatchId::new("local-env"), OperatorId::new("local"));
         self.operator
             .execute(input, &ctx, &EffectEmitter::noop())
             .await
