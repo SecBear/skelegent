@@ -140,16 +140,16 @@ impl DispatchMiddleware for RetryMiddleware {
                 let delay = self.config.backoff.delay(self.config.base_delay, attempt - 1);
 
                 // If the delay would push us past the deadline, don't bother.
-                if let Some(remaining) = ctx.remaining() {
-                    if remaining <= delay {
-                        tracing::warn!(
-                            attempt,
-                            ?delay,
-                            ?remaining,
-                            "remaining time less than backoff delay, aborting retry loop"
-                        );
-                        break;
-                    }
+                if let Some(remaining) = ctx.remaining()
+                    && remaining <= delay
+                {
+                    tracing::warn!(
+                        attempt,
+                        ?delay,
+                        ?remaining,
+                        "remaining time less than backoff delay, aborting retry loop"
+                    );
+                    break;
                 }
 
                 tracing::info!(
