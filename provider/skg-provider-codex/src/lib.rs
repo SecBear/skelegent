@@ -351,6 +351,7 @@ impl CodexProvider {
                                         None
                                     },
                                     cache_creation_tokens: None,
+                                    reasoning_tokens: None,
                                 }));
                             }
                             if let Some(status) = response.get("status").and_then(|v| v.as_str()) {
@@ -420,6 +421,7 @@ impl CodexProvider {
                 None
             },
             cache_creation_tokens: None,
+            reasoning_tokens: None,
         };
 
         let response = InferResponse {

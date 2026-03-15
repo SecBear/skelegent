@@ -52,6 +52,7 @@ fn make_response(
             output_tokens,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            reasoning_tokens: None,
         },
         model: model.into(),
         cost: Some(cost),

@@ -173,7 +173,6 @@ pub struct OpenAIUsage {
     pub prompt_tokens_details: Option<OpenAIPromptTokensDetails>,
     /// Detailed breakdown of completion token usage.
     #[serde(default)]
-    #[allow(dead_code)]
     pub completion_tokens_details: Option<OpenAICompletionTokensDetails>,
 }
 
@@ -190,7 +189,6 @@ pub struct OpenAIPromptTokensDetails {
 pub struct OpenAICompletionTokensDetails {
     /// Number of reasoning tokens used.
     #[serde(default)]
-    #[allow(dead_code)]
     pub reasoning_tokens: Option<u64>,
 }
 

@@ -259,8 +259,8 @@ impl OllamaProvider {
             output_tokens: response.eval_count.unwrap_or(0),
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            reasoning_tokens: None,
         };
-
         InferResponse {
             content,
             tool_calls,
@@ -509,6 +509,7 @@ impl StreamProvider for OllamaProvider {
                             output_tokens,
                             cache_read_tokens: None,
                             cache_creation_tokens: None,
+                            reasoning_tokens: None,
                         };
                         on_event(StreamEvent::Usage(usage));
                     }
@@ -527,6 +528,7 @@ impl StreamProvider for OllamaProvider {
                 output_tokens,
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
+                reasoning_tokens: None,
             };
 
             let response = InferResponse {

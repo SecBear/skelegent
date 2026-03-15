@@ -395,6 +395,9 @@ impl OpenAIProvider {
                 .prompt_tokens_details
                 .and_then(|d| d.cached_tokens),
             cache_creation_tokens: None,
+            reasoning_tokens: response.usage.completion_tokens_details.as_ref()
+                .and_then(|d| d.reasoning_tokens)
+                .filter(|&t| t > 0),
         };
 
         let input_cost = Decimal::from(response.usage.prompt_tokens) * Decimal::new(15, 8);
@@ -573,6 +576,7 @@ impl StreamProvider for OpenAIProvider {
             let mut tool_names: Vec<String> = Vec::new();
             let mut tool_args: Vec<String> = Vec::new();
             let mut cache_read_tokens: Option<u64> = None;
+            let mut reasoning_tokens: Option<u64> = None;
 
             while let Some(chunk) = stream.next().await {
                 let bytes = chunk.map_err(|e| ProviderError::TransientError {
@@ -616,11 +620,17 @@ impl StreamProvider for OpenAIProvider {
                                 .prompt_tokens_details
                                 .as_ref()
                                 .and_then(|d| d.cached_tokens);
+                            reasoning_tokens = usage
+                                .completion_tokens_details
+                                .as_ref()
+                                .and_then(|d| d.reasoning_tokens)
+                                .filter(|&t| t > 0);
                             let usage_event = TokenUsage {
                                 input_tokens,
                                 output_tokens,
                                 cache_read_tokens,
                                 cache_creation_tokens: None,
+                                reasoning_tokens,
                             };
                             on_event(StreamEvent::Usage(usage_event));
                         }
@@ -708,6 +718,7 @@ impl StreamProvider for OpenAIProvider {
                 output_tokens,
                 cache_read_tokens,
                 cache_creation_tokens: None,
+                reasoning_tokens,
             };
 
             let input_cost = Decimal::from(input_tokens) * Decimal::new(15, 8);

@@ -260,6 +260,7 @@ fn parse_anthropic_infer_response(
         output_tokens: response.usage.output_tokens,
         cache_read_tokens: response.usage.cache_read_input_tokens,
         cache_creation_tokens: response.usage.cache_creation_input_tokens,
+        reasoning_tokens: None,
     };
 
     let input_cost = Decimal::from(response.usage.input_tokens) * Decimal::new(25, 8);
@@ -601,6 +602,7 @@ impl StreamProvider for AnthropicProvider {
                                     output_tokens,
                                     cache_read_tokens,
                                     cache_creation_tokens,
+                                    reasoning_tokens: None,
                                 };
                                 on_event(StreamEvent::Usage(usage_event));
                             }
@@ -637,6 +639,7 @@ impl StreamProvider for AnthropicProvider {
                 output_tokens,
                 cache_read_tokens,
                 cache_creation_tokens,
+                reasoning_tokens: None,
             };
 
             let input_cost = Decimal::from(input_tokens) * Decimal::new(25, 8);

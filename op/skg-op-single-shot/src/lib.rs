@@ -245,7 +245,9 @@ mod tests {
             usage: TokenUsage {
                 input_tokens: 100,
                 output_tokens: 50,
-                ..Default::default()
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                reasoning_tokens: None,
             },
             model: "mock".into(),
             cost: Some(cost),
