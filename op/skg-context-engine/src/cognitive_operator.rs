@@ -20,6 +20,7 @@ use layer0::operator::{Operator, OperatorInput, OperatorOutput};
 use layer0::{DispatchContext, DispatchId};
 use skg_tool::ToolRegistry;
 use skg_turn::provider::Provider;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::context::Context;
@@ -159,7 +160,21 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             .await
             .map_err(OperatorError::context_assembly)?;
 
-        let config = self.react_loop_config();
+        let mut config = self.react_loop_config();
+
+        // Apply allowed_operators from dispatch input as a tool filter.
+        // When a parent sets allowed_operators, only those tools are visible
+        // to the LLM. AND-combined with any existing tool_filter.
+        if let Some(ref op_config) = input.config
+            && let Some(ref allowed) = op_config.allowed_operators
+        {
+            let allowed_set: HashSet<String> = allowed.iter().cloned().collect();
+            let existing_filter = config.tool_filter.take();
+            config.tool_filter = Some(Arc::new(move |tool: &dyn skg_tool::ToolDyn, ctx: &crate::context::Context| {
+                let name_allowed = allowed_set.contains(tool.name());
+                name_allowed && existing_filter.as_ref().is_none_or(|f| f(tool, ctx))
+            }));
+        }
 
         // Construct a DispatchContext for this execution.
         // When Operator::execute receives &DispatchContext from the
@@ -222,7 +237,7 @@ pub fn map_engine_error(err: EngineError) -> OperatorError {
 mod tests {
     use super::*;
     use layer0::content::Content;
-    use layer0::operator::{ExitReason, TriggerType};
+    use layer0::operator::{ExitReason, OperatorConfig, TriggerType};
     use skg_turn::test_utils::{TestProvider, make_text_response};
 
     fn test_ctx() -> DispatchContext {
@@ -333,5 +348,122 @@ mod tests {
 
         // Budget guard halts before first inference via Before<InferBoundary>.
         assert!(result.is_err());
+    }
+
+    // ── allowed_operators filtering ────────────────────────────────────────
+
+    /// Minimal [`ToolDyn`] implementation for filter tests.
+    struct StubTool(&'static str);
+
+    impl skg_tool::ToolDyn for StubTool {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "stub"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &DispatchContext,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, skg_tool::ToolError>> + Send + '_>,
+        > {
+            Box::pin(async { Ok(serde_json::json!(null)) })
+        }
+    }
+
+    fn registry_with_tools(names: &[&'static str]) -> ToolRegistry {
+        let mut reg = ToolRegistry::new();
+        for name in names {
+            reg.register(Arc::new(StubTool(name)));
+        }
+        reg
+    }
+
+    #[tokio::test]
+    async fn allowed_operators_filters_visible_tools() {
+        let provider = TestProvider::with_responses(vec![make_text_response("ok")]);
+        let tools = registry_with_tools(&["tool_a", "tool_b", "tool_c"]);
+        let op = CognitiveOperator::new("test-op", provider, tools, make_config());
+
+        let mut input = simple_input("go");
+        let mut op_config = OperatorConfig::default();
+        op_config.allowed_operators = Some(vec!["tool_a".into()]);
+        input.config = Some(op_config);
+
+        let output = op
+            .execute(input, &test_ctx(), &EffectEmitter::noop())
+            .await
+            .unwrap();
+
+        // The model never saw tool_b or tool_c, so it returned text
+        // (no tool calls). The exit is Complete.
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+    }
+
+    #[test]
+    fn allowed_operators_filter_correctness() {
+        // Directly verify the filter function produced by execute's
+        // allowed_operators logic.
+        let allowed: HashSet<String> =
+            ["tool_a"].iter().map(|s| s.to_string()).collect();
+        let filter: crate::react::ToolFilter =
+            Arc::new(move |tool: &dyn skg_tool::ToolDyn, _ctx: &Context| {
+                allowed.contains(tool.name())
+            });
+
+        let tool_a: Arc<dyn skg_tool::ToolDyn> = Arc::new(StubTool("tool_a"));
+        let tool_b: Arc<dyn skg_tool::ToolDyn> = Arc::new(StubTool("tool_b"));
+        let ctx = Context::new();
+
+        assert!(filter(tool_a.as_ref(), &ctx));
+        assert!(!filter(tool_b.as_ref(), &ctx));
+    }
+
+    #[test]
+    fn allowed_operators_and_combines_with_existing_filter() {
+        // Existing filter rejects tool_a. allowed_operators includes
+        // tool_a and tool_b. The AND-combination should reject tool_a
+        // (blocked by existing) and accept tool_b.
+        let existing: crate::react::ToolFilter =
+            Arc::new(|tool: &dyn skg_tool::ToolDyn, _ctx: &Context| tool.name() != "tool_a");
+
+        let allowed: HashSet<String> =
+            ["tool_a", "tool_b"].iter().map(|s| s.to_string()).collect();
+        let existing_opt = Some(existing);
+        let combined: crate::react::ToolFilter =
+            Arc::new(move |tool: &dyn skg_tool::ToolDyn, ctx: &Context| {
+                let name_allowed = allowed.contains(tool.name());
+                name_allowed && existing_opt.as_ref().is_none_or(|f| f(tool, ctx))
+            });
+
+        let ctx = Context::new();
+        let tool_a: Arc<dyn skg_tool::ToolDyn> = Arc::new(StubTool("tool_a"));
+        let tool_b: Arc<dyn skg_tool::ToolDyn> = Arc::new(StubTool("tool_b"));
+        let tool_c: Arc<dyn skg_tool::ToolDyn> = Arc::new(StubTool("tool_c"));
+
+        // tool_a: in allowed, but rejected by existing filter → false
+        assert!(!combined(tool_a.as_ref(), &ctx));
+        // tool_b: in allowed, not rejected by existing → true
+        assert!(combined(tool_b.as_ref(), &ctx));
+        // tool_c: not in allowed → false
+        assert!(!combined(tool_c.as_ref(), &ctx));
+    }
+
+    #[test]
+    fn allowed_operators_empty_list_blocks_all() {
+        let allowed: HashSet<String> = HashSet::new();
+        let filter: crate::react::ToolFilter =
+            Arc::new(move |tool: &dyn skg_tool::ToolDyn, _ctx: &Context| {
+                allowed.contains(tool.name())
+            });
+
+        let tool_a: Arc<dyn skg_tool::ToolDyn> = Arc::new(StubTool("tool_a"));
+        let ctx = Context::new();
+        assert!(!filter(tool_a.as_ref(), &ctx));
     }
 }

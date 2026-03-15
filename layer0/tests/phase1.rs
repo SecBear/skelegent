@@ -516,26 +516,6 @@ fn search_result_round_trip() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// LogLevel round-trip
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn log_level_round_trip() {
-    let levels = vec![
-        layer0::effect::LogLevel::Trace,
-        layer0::effect::LogLevel::Debug,
-        layer0::effect::LogLevel::Info,
-        layer0::effect::LogLevel::Warn,
-        layer0::effect::LogLevel::Error,
-    ];
-    for l in levels {
-        let json = serde_json::to_string(&l).unwrap();
-        let back: layer0::effect::LogLevel = serde_json::from_str(&json).unwrap();
-        assert_eq!(l, back);
-    }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Wire format stability: Decimal serializes as string
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -863,22 +843,6 @@ fn budget_decision_downgrade_round_trip() {
     assert_eq!(json, json2);
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Effect::Log and Effect::Handoff round-trips
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn effect_log_round_trip() {
-    let e = Effect::Log {
-        level: layer0::effect::LogLevel::Info,
-        message: "turn completed".into(),
-        data: Some(json!({"duration_ms": 1500})),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: Effect = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
-}
 
 #[test]
 fn effect_handoff_round_trip() {

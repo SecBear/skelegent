@@ -183,10 +183,9 @@ impl Operator for BarrierOperator {
         output.metadata = metadata;
         // Demonstrate effect declaration boundary
         emitter
-            .effect(Effect::Log {
-                level: layer0::effect::LogLevel::Info,
-                message: "barrier operator executed".into(),
-                data: None,
+            .effect(Effect::Custom {
+                effect_type: "barrier_log".into(),
+                data: serde_json::json!({"message": "barrier operator executed"}),
             })
             .await;
         Ok(output)

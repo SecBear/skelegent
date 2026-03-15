@@ -169,15 +169,31 @@ where
                     input,
                 })
             }
-            // Known but non-executing effects: treat as unknown for policy handling.
-            Effect::Log { .. } | Effect::Custom { .. } => match self.unknown_policy {
+            Effect::LinkMemory { scope, link } => {
+                self.state.link(scope, link).await?;
+                Ok(EffectOutcome::Applied)
+            }
+            Effect::UnlinkMemory {
+                scope,
+                from_key,
+                to_key,
+                relation,
+            } => {
+                self.state.unlink(scope, from_key, to_key, relation).await?;
+                Ok(EffectOutcome::Applied)
+            }
+            // Custom effects: treat as unknown for policy handling.
+            Effect::Custom { .. } => match self.unknown_policy {
                 UnknownEffectPolicy::IgnoreAndWarn => {
                     tracing::warn!("ignoring unsupported effect: {:?}", effect);
                     Ok(EffectOutcome::Skipped)
                 }
                 UnknownEffectPolicy::Error => Err(Error::UnknownEffect),
             },
-            // Forward-compat: Effect is non_exhaustive; handle any future variants.
+            // Forward-compat: Effect is #[non_exhaustive].
+            // Progress, Artifact, and ToolApprovalRequired are caller-interpreted
+            // effects (routed via EffectEmitter → DispatchHandle, not EffectHandler).
+            // They intentionally fall through here.
             _ => match self.unknown_policy {
                 UnknownEffectPolicy::IgnoreAndWarn => {
                     tracing::warn!("ignoring forward-compatible effect variant: {:?}", effect);

@@ -107,17 +107,6 @@ Effect::Signal {
 }
 ```
 
-### Log
-
-Emit an observable log/trace event. Consumed by observers and telemetry; not a state write.
-
-```rust
-Effect::Log {
-    level: LogLevel,
-    message: String,
-    data: Option<serde_json::Value>,
-}
-```
 
 ### LinkMemory
 

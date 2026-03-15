@@ -163,7 +163,6 @@ impl ContextOp for TelemetryRule {
                         elapsed_ms = m.elapsed_ms(),
                         message_count = ctx.messages().len(),
                         rule_count = ctx.rule_count(),
-                        rule_count = ctx.rule_count(),
                         "skg.full"
                     );
                 }
@@ -207,7 +206,6 @@ impl ContextOp for TelemetryRule {
                         elapsed_ms = m.elapsed_ms(),
                         message_count = ctx.messages().len(),
                         rule_count = ctx.rule_count(),
-                        rule_count = ctx.rule_count(),
                         "skg.full"
                     );
                 }
@@ -250,7 +248,6 @@ impl ContextOp for TelemetryRule {
                         delta_tool_calls = delta_tools,
                         elapsed_ms = m.elapsed_ms(),
                         message_count = ctx.messages().len(),
-                        rule_count = ctx.rule_count(),
                         rule_count = ctx.rule_count(),
                         "skg.full"
                     );

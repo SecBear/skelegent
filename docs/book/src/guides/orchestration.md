@@ -222,6 +222,6 @@ The traits are transport-agnostic by design. All protocol types (`OperatorInput`
 
 Skelegent draws a hard boundary: operators declare `effects`; orchestrators execute them. This separation lets you reuse the same operator across transports (in-process, Temporal, Restate) without leaking execution mechanics.
 
-Custom operators (e.g., barrier-scheduled loops) can freely declare effects like `Effect::Log`, `Effect::Delegate`, or `Effect::Signal`. The orchestrator decides when to execute them relative to dispatch lifecycles, and exposes `signal()`/`query()` for out-of-band communication.
+Custom operators (e.g., barrier-scheduled loops) can freely declare effects like `Effect::Custom`, `Effect::Delegate`, or `Effect::Signal`. The orchestrator decides when to execute them relative to dispatch lifecycles, and exposes `signal()`/`query()` for out-of-band communication.
 
 Defaults stay slim: if you do nothing, wrap `react_loop` in a simple operator or use `SingleShotOperator`. If you need custom control (barriers and steering), implement a custom operator and keep effects at the boundary. See `examples/custom_operator_barrier`.

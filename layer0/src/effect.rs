@@ -84,16 +84,6 @@ pub enum Effect {
         state: serde_json::Value,
     },
 
-    /// Emit a log/trace event. Observers and telemetry consume these.
-    Log {
-        /// Severity level.
-        level: LogLevel,
-        /// Log message.
-        message: String,
-        /// Optional structured data.
-        data: Option<serde_json::Value>,
-    },
-
     /// Create a link between two memory entries.
     LinkMemory {
         /// The scope for the link.
@@ -205,19 +195,3 @@ impl SignalPayload {
     }
 }
 
-/// Log severity levels.
-#[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum LogLevel {
-    /// Finest-grained tracing.
-    Trace,
-    /// Debug-level detail.
-    Debug,
-    /// Informational messages.
-    Info,
-    /// Warnings.
-    Warn,
-    /// Errors.
-    Error,
-}
