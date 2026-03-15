@@ -178,7 +178,7 @@ pub async fn react_loop<P: Provider>(
     ctx: &mut Context,
     provider: &P,
     tools: &ToolRegistry,
-    tool_ctx: &ToolCallContext,
+    ctx: &DispatchContext,
     config: &ReactLoopConfig,
 ) -> Result<OperatorOutput, EngineError> {
     // assemble system prompt

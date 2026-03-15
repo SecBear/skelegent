@@ -124,14 +124,16 @@ Then construct a `Context` and call `react_loop` with the mock provider:
 
 ```rust,no_run
 use skg_context_engine::{Context, react_loop, ReactLoopConfig};
-use skg_tool::{ToolRegistry, ToolCallContext};
+use layer0::DispatchContext;
+use layer0::id::{DispatchId, OperatorId};
+use skg_tool::ToolRegistry;
 use layer0::context::{Message, Role};
 
 let mut ctx = Context::new("You are a helpful assistant.");
 ctx.inject_message(Message::new(Role::User, "Hello"));
 
 let tools = ToolRegistry::new();
-let tool_ctx = ToolCallContext::empty();
+let tool_ctx = DispatchContext::new(DispatchId::new("assistant"), OperatorId::new("assistant"));
 let config = ReactLoopConfig::default();
 
 // Now test without network calls

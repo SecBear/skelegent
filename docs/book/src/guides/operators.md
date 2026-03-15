@@ -38,13 +38,14 @@ use layer0::operator::{Operator, OperatorInput, OperatorOutput, OperatorError};
 use layer0::context::{Message, Role};
 use skg_context_engine::{Context, react_loop, ReactLoopConfig};
 use skg_turn::provider::Provider;
-use skg_tool::{ToolRegistry, ToolCallContext};
+use layer0::DispatchContext;
+use skg_tool::ToolRegistry;
 
 struct MyOperator<P: Provider> {
     provider: P,
     config: ReactLoopConfig,
     tools: ToolRegistry,
-    tool_ctx: ToolCallContext,
+    tool_ctx: DispatchContext,
 }
 
 #[async_trait]

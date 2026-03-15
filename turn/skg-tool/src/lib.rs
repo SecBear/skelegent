@@ -10,7 +10,6 @@ pub mod adapter;
 #[cfg(feature = "macros")]
 pub use skg_tool_macro::skg_tool;
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -18,39 +17,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use layer0::DispatchContext;
-use layer0::id::OperatorId;
 
-/// Context available to tools during execution.
-///
-/// Carries operator identity, typed dependencies (via Any downcasting),
-/// and metadata for the current tool call.
-#[derive(Clone)]
-pub struct ToolCallContext {
-    /// Identity of the operator making the tool call.
-    pub operator_id: OperatorId,
-    /// Typed dependencies, downcast at the call site.
-    pub deps: Arc<dyn Any + Send + Sync>,
-}
-
-impl ToolCallContext {
-    /// Create a new context with the given operator ID and no deps.
-    pub fn new(operator_id: OperatorId) -> Self {
-        Self {
-            operator_id,
-            deps: Arc::new(()),
-        }
-    }
-
-    /// Create a context with typed dependencies.
-    pub fn with_deps(operator_id: OperatorId, deps: Arc<dyn Any + Send + Sync>) -> Self {
-        Self { operator_id, deps }
-    }
-
-    /// Downcast deps to a specific type.
-    pub fn deps<T: 'static>(&self) -> Option<&T> {
-        self.deps.downcast_ref::<T>()
-    }
-}
 
 /// Errors from tool operations.
 #[non_exhaustive]
@@ -260,7 +227,7 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer0::DispatchId;
+    use layer0::id::{DispatchId, OperatorId};
     use serde_json::json;
 
     fn _assert_send_sync<T: Send + Sync>() {}
