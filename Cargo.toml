@@ -36,7 +36,6 @@ members = [
   "secret/skg-secret",
   "crypto/skg-crypto",
   "auth/skg-auth",
-  "auth/skg-auth-omp",
   "secret/skg-secret-vault",
   "hooks/skg-hook-security",
   "examples/custom_operator_barrier",

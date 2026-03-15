@@ -16,7 +16,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Build auth provider from OMP's credential store.
-    let auth = Arc::new(OmpAuthProvider::new()?);
+    let auth = Arc::new(OmpAuthProvider::from_env().expect("OMP agent.db not found"));
     let provider = AnthropicProvider::with_auth(auth);
 
     // 2. Build operator.
