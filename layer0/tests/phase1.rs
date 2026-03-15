@@ -1608,7 +1608,6 @@ fn effect_unlink_memory_round_trip() {
 fn _assert_state_store_still_object_safe(_: &dyn StateStore) {}
 fn _assert_state_reader_still_object_safe(_: &dyn StateReader) {}
 
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CollectedDispatch / collect_all
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1647,7 +1646,10 @@ async fn collect_all_preserves_intermediate_events() {
     // Both Progress and EffectEmitted should be in events.
     assert_eq!(result.events.len(), 2);
     assert!(matches!(result.events[0], DispatchEvent::Progress { .. }));
-    assert!(matches!(result.events[1], DispatchEvent::EffectEmitted { .. }));
+    assert!(matches!(
+        result.events[1],
+        DispatchEvent::EffectEmitted { .. }
+    ));
 
     // Effects should also be populated in output.
     assert_eq!(result.output.effects.len(), 1);

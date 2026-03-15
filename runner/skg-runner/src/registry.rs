@@ -67,7 +67,10 @@ mod tests {
             _ctx: &DispatchContext,
             _emitter: &EffectEmitter,
         ) -> Result<OperatorOutput, OperatorError> {
-            Ok(OperatorOutput::new(Content::text("ok"), ExitReason::Complete))
+            Ok(OperatorOutput::new(
+                Content::text("ok"),
+                ExitReason::Complete,
+            ))
         }
     }
 

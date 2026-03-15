@@ -175,7 +175,13 @@ impl CodexProvider {
 
         let status = http_response.status();
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Err(ProviderError::RateLimited);
+            let retry_after = http_response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(std::time::Duration::from_secs);
+            return Err(ProviderError::RateLimited { retry_after });
         }
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             let body = http_response.text().await.unwrap_or_default();
@@ -509,7 +515,7 @@ fn map_error_response(status: reqwest::StatusCode, body: &str) -> ProviderError 
         || body.contains("usage_not_included")
         || body.contains("rate_limit_exceeded")
     {
-        return ProviderError::RateLimited;
+        return ProviderError::RateLimited { retry_after: None };
     }
 
     if body.contains("content_filter") || body.contains("content policy") {
@@ -517,7 +523,14 @@ fn map_error_response(status: reqwest::StatusCode, body: &str) -> ProviderError 
             message: body.to_string(),
         };
     }
-
+    // Client errors (4xx except 429, handled earlier) are not retryable.
+    if status.is_client_error() {
+        return ProviderError::InvalidRequest {
+            message: format!("HTTP {status}: {body}"),
+            status: Some(status_u16),
+        };
+    }
+    // Server errors and network issues are transient.
     ProviderError::TransientError {
         message: format!("HTTP {status}: {body}"),
         status: Some(status_u16),
@@ -550,7 +563,7 @@ mod tests {
             reqwest::StatusCode::BAD_REQUEST,
             r#"{"error":{"code":"rate_limit_exceeded"}}"#,
         );
-        assert!(matches!(err, ProviderError::RateLimited));
+        assert!(matches!(err, ProviderError::RateLimited { .. }));
     }
 
     #[test]

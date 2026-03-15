@@ -108,7 +108,10 @@ impl RunnerServiceImpl {
     }
 
     /// Deserialize `OperatorInput` from base64-encoded JSON.
-    pub fn deserialize_input_from_b64(&self, b64: &str) -> Result<layer0::OperatorInput, CoreError> {
+    pub fn deserialize_input_from_b64(
+        &self,
+        b64: &str,
+    ) -> Result<layer0::OperatorInput, CoreError> {
         use base64::Engine;
         let bytes = base64::prelude::BASE64_STANDARD
             .decode(b64)
@@ -117,7 +120,10 @@ impl RunnerServiceImpl {
     }
 
     /// Look up an operator by id.
-    pub fn resolve_operator(&self, operator_id: &str) -> Result<Arc<dyn layer0::Operator>, CoreError> {
+    pub fn resolve_operator(
+        &self,
+        operator_id: &str,
+    ) -> Result<Arc<dyn layer0::Operator>, CoreError> {
         self.registry
             .get(operator_id)
             .cloned()
@@ -163,7 +169,11 @@ impl RunnerServiceImpl {
 
         let output = handle.collect().await.map_err(|e| {
             error!("operator error: {e}");
-            CoreError::Internal("operator execution failed".into())
+            match &e {
+                layer0::error::OrchError::OperatorNotFound(msg) => CoreError::NotFound(msg.clone()),
+                layer0::error::OrchError::WorkflowNotFound(msg) => CoreError::NotFound(msg.clone()),
+                _ => CoreError::Internal(e.to_string()),
+            }
         })?;
 
         if output.has_unhandled_effects() {
@@ -285,30 +295,25 @@ impl Runner for RunnerServiceImpl {
                             Err(_) => continue,
                         }
                     }
-                    DispatchEvent::Completed { output } => {
-                        match serde_json::to_vec(output) {
-                            Ok(output_bytes) => ExecuteEvent {
-                                event: Some(execute_event::Event::FinalOutput(
-                                    ExecuteResponse {
-                                        output: output_bytes,
-                                    },
-                                )),
-                            },
-                            Err(e) => {
-                                let _ = tx
-                                    .send(Err(Status::internal(format!(
-                                        "failed to serialize operator output: {e}"
-                                    ))))
-                                    .await;
-                                return;
-                            }
+                    DispatchEvent::Completed { output } => match serde_json::to_vec(output) {
+                        Ok(output_bytes) => ExecuteEvent {
+                            event: Some(execute_event::Event::FinalOutput(ExecuteResponse {
+                                output: output_bytes,
+                            })),
+                        },
+                        Err(e) => {
+                            let _ = tx
+                                .send(Err(Status::internal(format!(
+                                    "failed to serialize operator output: {e}"
+                                ))))
+                                .await;
+                            return;
                         }
-                    }
+                    },
                     DispatchEvent::Failed { error } => {
                         error!("operator error during stream: {error}");
-                        let _ = tx
-                            .send(Err(Status::internal("operator execution failed")))
-                            .await;
+                        let status = orch_error_to_grpc_status(error);
+                        let _ = tx.send(Err(status)).await;
                         return;
                     }
                     _ => continue, // Future variants.
@@ -333,6 +338,34 @@ impl Runner for RunnerServiceImpl {
             ready: true,
             version: env!("CARGO_PKG_VERSION").to_string(),
         }))
+    }
+}
+
+/// Map an `OrchError` to the appropriate gRPC status code.
+///
+/// Preserves variant-level classification: not-found errors become
+/// `NOT_FOUND`, retryable errors become `UNAVAILABLE`, halts become
+/// `ABORTED`, and everything else falls through to `INTERNAL`.
+fn orch_error_to_grpc_status(error: &layer0::error::OrchError) -> Status {
+    use layer0::error::{OperatorError, OrchError};
+
+    match error {
+        OrchError::OperatorNotFound(msg) => Status::not_found(msg.clone()),
+        OrchError::WorkflowNotFound(msg) => Status::not_found(msg.clone()),
+        OrchError::DispatchFailed(msg) => Status::unavailable(msg.clone()),
+        OrchError::SignalFailed(msg) => Status::unavailable(msg.clone()),
+        OrchError::OperatorError(op_err) => match op_err {
+            OperatorError::Model {
+                retryable: true, ..
+            } => Status::unavailable(format!("model error (retryable): {op_err}")),
+            OperatorError::Retryable { message, .. } => {
+                Status::unavailable(format!("retryable: {message}"))
+            }
+            OperatorError::Halted { reason } => Status::aborted(format!("halted: {reason}")),
+            _ => Status::internal(op_err.to_string()),
+        },
+        OrchError::EnvironmentError(env_err) => Status::failed_precondition(env_err.to_string()),
+        _ => Status::internal(error.to_string()),
     }
 }
 

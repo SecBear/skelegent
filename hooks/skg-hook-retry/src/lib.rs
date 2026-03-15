@@ -60,7 +60,8 @@ impl BackoffStrategy {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Default classification: transient dispatch failures are retryable;
-/// operator-not-found and operator errors are not.
+/// operator-not-found errors are not. Operator errors delegate to
+/// [`OperatorError::is_retryable`] for fine-grained classification.
 fn is_retryable_default(err: &OrchError) -> bool {
     match err {
         // Transient failures worth retrying.
@@ -68,8 +69,9 @@ fn is_retryable_default(err: &OrchError) -> bool {
         // Permanent failures — retrying won't help.
         OrchError::OperatorNotFound(_)
         | OrchError::WorkflowNotFound(_)
-        | OrchError::OperatorError(_)
         | OrchError::EnvironmentError(_) => false,
+        // Operator errors: delegate to inner retryability.
+        OrchError::OperatorError(op_err) => op_err.is_retryable(),
         // Unknown variants (non_exhaustive): default to not retrying.
         _ => false,
     }
@@ -137,7 +139,10 @@ impl DispatchMiddleware for RetryMiddleware {
 
             // Wait before retry (skip delay on the initial attempt).
             if attempt > 0 {
-                let delay = self.config.backoff.delay(self.config.base_delay, attempt - 1);
+                let delay = self
+                    .config
+                    .backoff
+                    .delay(self.config.base_delay, attempt - 1);
 
                 // If the delay would push us past the deadline, don't bother.
                 if let Some(remaining) = ctx.remaining()
@@ -176,7 +181,9 @@ impl DispatchMiddleware for RetryMiddleware {
 
         // All retries exhausted or deadline expired — return the last error.
         Err(last_err.unwrap_or_else(|| {
-            OrchError::DispatchFailed("retry loop exited without an error (deadline expired before first attempt)".into())
+            OrchError::DispatchFailed(
+                "retry loop exited without an error (deadline expired before first attempt)".into(),
+            )
         }))
     }
 }
@@ -188,13 +195,14 @@ impl DispatchMiddleware for RetryMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::ExitReason;
     use layer0::content::Content;
     use layer0::dispatch::{DispatchEvent, DispatchHandle};
+    use layer0::error::OperatorError;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{OperatorOutput, TriggerType};
-    use layer0::ExitReason;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     /// Helper: create a DispatchHandle that immediately completes.
     fn immediate_handle(output: OperatorOutput) -> DispatchHandle {
@@ -361,5 +369,89 @@ mod tests {
             calls < 10,
             "should have stopped retrying before max_retries due to deadline, but made {calls} calls"
         );
+    }
+
+    // ── Operator-error retryability propagation ─────────────
+
+    /// Mock that fails once with a retryable OperatorError, then succeeds.
+    struct RetryableOperatorErrorThenSucceed {
+        remaining: AtomicU32,
+    }
+
+    impl RetryableOperatorErrorThenSucceed {
+        fn new() -> Self {
+            Self {
+                remaining: AtomicU32::new(1),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl DispatchNext for RetryableOperatorErrorThenSucceed {
+        async fn dispatch(
+            &self,
+            _ctx: &DispatchContext,
+            _input: OperatorInput,
+        ) -> Result<DispatchHandle, OrchError> {
+            let prev = self.remaining.fetch_sub(1, Ordering::SeqCst);
+            if prev > 0 {
+                Err(OrchError::OperatorError(OperatorError::model_retryable(
+                    std::io::Error::other("rate limited"),
+                )))
+            } else {
+                Ok(immediate_handle(OperatorOutput::new(
+                    Content::text("ok"),
+                    ExitReason::Complete,
+                )))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_retryable_operator_error() {
+        let mw = RetryMiddleware::new(RetryConfig {
+            max_retries: 3,
+            base_delay: Duration::from_millis(1),
+            backoff: BackoffStrategy::Fixed,
+        });
+
+        let mock = RetryableOperatorErrorThenSucceed::new();
+        let result = mw.dispatch(&test_ctx(), test_input(), &mock).await;
+        assert!(
+            result.is_ok(),
+            "should succeed after retrying retryable operator error"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_retry_on_permanent_operator_error() {
+        let call_count = Arc::new(AtomicU32::new(0));
+        let count = call_count.clone();
+
+        struct PermanentOperatorError(Arc<AtomicU32>);
+
+        #[async_trait]
+        impl DispatchNext for PermanentOperatorError {
+            async fn dispatch(
+                &self,
+                _ctx: &DispatchContext,
+                _input: OperatorInput,
+            ) -> Result<DispatchHandle, OrchError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(OrchError::OperatorError(OperatorError::model("permanent")))
+            }
+        }
+
+        let mw = RetryMiddleware::new(RetryConfig {
+            max_retries: 3,
+            base_delay: Duration::from_millis(1),
+            backoff: BackoffStrategy::Fixed,
+        });
+
+        let mock = PermanentOperatorError(count);
+        let result = mw.dispatch(&test_ctx(), test_input(), &mock).await;
+        assert!(result.is_err());
+        // Should have been called exactly once — no retries for permanent errors.
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 }

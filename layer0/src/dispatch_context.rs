@@ -140,7 +140,11 @@ impl DispatchContext {
     pub fn remaining(&self) -> Option<std::time::Duration> {
         self.deadline.map(|d| {
             let now = tokio::time::Instant::now();
-            if d > now { d - now } else { std::time::Duration::ZERO }
+            if d > now {
+                d - now
+            } else {
+                std::time::Duration::ZERO
+            }
         })
     }
 
@@ -148,7 +152,8 @@ impl DispatchContext {
     ///
     /// Returns `false` if no deadline is set.
     pub fn is_expired(&self) -> bool {
-        self.deadline.is_some_and(|d| tokio::time::Instant::now() >= d)
+        self.deadline
+            .is_some_and(|d| tokio::time::Instant::now() >= d)
     }
 
     /// Read-only access to extensions.

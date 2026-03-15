@@ -202,10 +202,17 @@ pub fn map_engine_error(err: EngineError) -> OperatorError {
             }
         }
         EngineError::Operator(err) => err,
-        EngineError::Tool(err) => OperatorError::SubDispatch {
-            operator: "tool".into(),
-            source: Box::new(err),
-        },
+        EngineError::Tool(err) => {
+            // Extract tool identity from the error when available.
+            let label = match &err {
+                skg_tool::ToolError::NotFound(name) => format!("tool:{name}"),
+                _ => "tool".to_string(),
+            };
+            OperatorError::SubDispatch {
+                operator: label,
+                source: Box::new(err),
+            }
+        }
         EngineError::Halted { reason } => OperatorError::Halted { reason },
         EngineError::Custom(err) => OperatorError::Other(err),
     }

@@ -117,6 +117,44 @@ impl IntoResponse for CoreError {
 // Handlers
 // ---------------------------------------------------------------------------
 
+/// Classify an `OrchError` into a structured SSE error payload.
+///
+/// Returns a JSON value with `error` (human-readable message), `code`
+/// (machine-readable variant), and `retryable` (whether the caller can retry).
+fn classify_error(error: &layer0::error::OrchError) -> serde_json::Value {
+    use layer0::error::{OperatorError, OrchError};
+
+    let (code, retryable) = match error {
+        OrchError::OperatorNotFound(_) => ("operator_not_found", false),
+        OrchError::WorkflowNotFound(_) => ("workflow_not_found", false),
+        OrchError::DispatchFailed(_) => ("dispatch_failed", true),
+        OrchError::SignalFailed(_) => ("signal_failed", true),
+        OrchError::OperatorError(op_err) => match op_err {
+            OperatorError::Model { retryable, .. } => {
+                if *retryable {
+                    ("model_error_retryable", true)
+                } else {
+                    ("model_error", false)
+                }
+            }
+            OperatorError::SubDispatch { .. } => ("tool_error", false),
+            OperatorError::ContextAssembly { .. } => ("context_error", false),
+            OperatorError::Retryable { .. } => ("retryable_error", true),
+            OperatorError::NonRetryable { .. } => ("non_retryable_error", false),
+            OperatorError::Halted { .. } => ("halted", false),
+            _ => ("operator_error", false),
+        },
+        OrchError::EnvironmentError(_) => ("environment_error", false),
+        _ => ("internal_error", false),
+    };
+
+    serde_json::json!({
+        "error": error.to_string(),
+        "code": code,
+        "retryable": retryable,
+    })
+}
+
 async fn health_handler() -> Json<JsonHealthResponse> {
     Json(JsonHealthResponse {
         ready: true,
@@ -195,10 +233,8 @@ async fn execute_stream_handler(
         // Spawn the operator execution, then send the terminal event.
         let op_id_inner = op_id.clone();
         tokio::spawn(async move {
-            let ctx = DispatchContext::new(
-                DispatchId::new("runner-sse"),
-                OperatorId::new(op_id_inner),
-            );
+            let ctx =
+                DispatchContext::new(DispatchId::new("runner-sse"), OperatorId::new(op_id_inner));
             match operator.execute(input, &ctx, &emitter).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
@@ -217,15 +253,13 @@ async fn execute_stream_handler(
         // Forward dispatch events as SSE events.
         while let Some(event) = handle.recv().await {
             let sse_event = match &event {
-                DispatchEvent::Progress { content } => {
-                    match serde_json::to_string(content) {
-                        Ok(json) => Event::default().event("progress").data(json),
-                        Err(e) => {
-                            error!("failed to serialize progress: {e}");
-                            continue;
-                        }
+                DispatchEvent::Progress { content } => match serde_json::to_string(content) {
+                    Ok(json) => Event::default().event("progress").data(json),
+                    Err(e) => {
+                        error!("failed to serialize progress: {e}");
+                        continue;
                     }
-                }
+                },
                 DispatchEvent::ArtifactProduced { artifact } => {
                     match serde_json::to_string(artifact) {
                         Ok(json) => Event::default().event("artifact").data(json),
@@ -235,35 +269,28 @@ async fn execute_stream_handler(
                         }
                     }
                 }
-                DispatchEvent::EffectEmitted { effect } => {
-                    match serde_json::to_string(effect) {
-                        Ok(json) => Event::default().event("effect").data(json),
-                        Err(e) => {
-                            error!("failed to serialize effect: {e}");
-                            continue;
-                        }
+                DispatchEvent::EffectEmitted { effect } => match serde_json::to_string(effect) {
+                    Ok(json) => Event::default().event("effect").data(json),
+                    Err(e) => {
+                        error!("failed to serialize effect: {e}");
+                        continue;
                     }
-                }
-                DispatchEvent::Completed { output } => {
-                    match serde_json::to_string(output) {
-                        Ok(json) => Event::default().event("output").data(json),
-                        Err(e) => {
-                            let err_json =
-                                serde_json::json!({ "error": format!("serialize failed: {e}") });
-                            let _ = tx
-                                .send(Ok(Event::default()
-                                    .event("error")
-                                    .data(err_json.to_string())))
-                                .await;
-                            return;
-                        }
+                },
+                DispatchEvent::Completed { output } => match serde_json::to_string(output) {
+                    Ok(json) => Event::default().event("output").data(json),
+                    Err(e) => {
+                        let err_json =
+                            serde_json::json!({ "error": format!("serialize failed: {e}") });
+                        let _ = tx
+                            .send(Ok(Event::default()
+                                .event("error")
+                                .data(err_json.to_string())))
+                            .await;
+                        return;
                     }
-                }
+                },
                 DispatchEvent::Failed { error } => {
-                    let err_json = serde_json::json!({
-                        "error": error.to_string(),
-                        "code": "operator_error",
-                    });
+                    let err_json = classify_error(error);
                     let _ = tx
                         .send(Ok(Event::default()
                             .event("error")

@@ -494,10 +494,7 @@ mod tests {
         assert!(echo.output_schema().is_none()); // default
 
         // Verify it still works as an Operator
-        let input = OperatorInput::new(
-            Content::text("hello"),
-            TriggerType::User,
-        );
+        let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let emitter = EffectEmitter::noop();
         let output = echo.execute(input, &ctx, &emitter).await.unwrap();

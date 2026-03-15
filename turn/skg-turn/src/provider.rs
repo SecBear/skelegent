@@ -8,6 +8,7 @@
 
 use crate::infer::{InferRequest, InferResponse};
 use std::future::Future;
+use std::time::Duration;
 use thiserror::Error;
 
 /// Errors from LLM providers.
@@ -25,7 +26,19 @@ pub enum ProviderError {
 
     /// Provider rate-limited the request.
     #[error("rate limited")]
-    RateLimited,
+    RateLimited {
+        /// Server-suggested delay before retry, if provided via `Retry-After` header.
+        retry_after: Option<Duration>,
+    },
+
+    /// Client-side error (malformed request, bad parameters) — do NOT retry.
+    #[error("invalid request: {message}")]
+    InvalidRequest {
+        /// Human-readable description.
+        message: String,
+        /// HTTP status code.
+        status: Option<u16>,
+    },
 
     /// Content blocked by safety filter — do NOT retry.
     #[error("content blocked: {message}")]
@@ -52,7 +65,7 @@ impl ProviderError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            ProviderError::RateLimited | ProviderError::TransientError { .. }
+            ProviderError::RateLimited { .. } | ProviderError::TransientError { .. }
         )
     }
 }
@@ -105,7 +118,18 @@ mod tests {
             .to_string(),
             "content blocked: blocked"
         );
-        assert_eq!(ProviderError::RateLimited.to_string(), "rate limited");
+        assert_eq!(
+            ProviderError::RateLimited { retry_after: None }.to_string(),
+            "rate limited"
+        );
+        assert_eq!(
+            ProviderError::InvalidRequest {
+                message: "bad param".into(),
+                status: Some(400),
+            }
+            .to_string(),
+            "invalid request: bad param"
+        );
         assert_eq!(
             ProviderError::AuthFailed("bad key".into()).to_string(),
             "auth failed: bad key"
@@ -118,7 +142,20 @@ mod tests {
 
     #[test]
     fn provider_error_retryable() {
-        assert!(ProviderError::RateLimited.is_retryable());
+        assert!(ProviderError::RateLimited { retry_after: None }.is_retryable());
+        assert!(
+            ProviderError::RateLimited {
+                retry_after: Some(Duration::from_secs(30))
+            }
+            .is_retryable()
+        );
+        assert!(
+            !ProviderError::InvalidRequest {
+                message: "bad".into(),
+                status: Some(400),
+            }
+            .is_retryable()
+        );
         assert!(
             ProviderError::TransientError {
                 message: "timeout".into(),
@@ -178,7 +215,41 @@ mod tests {
 
     #[test]
     fn rate_limited_is_retryable() {
-        assert!(ProviderError::RateLimited.is_retryable());
+        assert!(ProviderError::RateLimited { retry_after: None }.is_retryable());
+    }
+
+    #[test]
+    fn rate_limited_with_retry_after_display() {
+        assert_eq!(
+            ProviderError::RateLimited {
+                retry_after: Some(Duration::from_secs(30))
+            }
+            .to_string(),
+            "rate limited"
+        );
+    }
+
+    #[test]
+    fn invalid_request_is_not_retryable() {
+        assert!(
+            !ProviderError::InvalidRequest {
+                message: "missing field".into(),
+                status: Some(422),
+            }
+            .is_retryable()
+        );
+    }
+
+    #[test]
+    fn invalid_request_display() {
+        assert_eq!(
+            ProviderError::InvalidRequest {
+                message: "bad param".into(),
+                status: Some(400),
+            }
+            .to_string(),
+            "invalid request: bad param"
+        );
     }
 
     #[test]

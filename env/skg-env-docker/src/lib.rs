@@ -47,7 +47,6 @@ pub mod proto {
     }
 }
 
-
 /// Docker-backed environment that executes operators in isolated containers.
 ///
 /// Owns a bollard `Docker` client and delegates operator execution to a
@@ -174,7 +173,6 @@ impl DockerEnvironmentBuilder {
         self.secret_resolver = Some(resolver);
         self
     }
-
 
     /// Override the default configuration.
     pub fn config(mut self, cfg: DockerEnvConfig) -> Self {

@@ -72,6 +72,7 @@ pub struct TurnMetrics {
     pub cost: Decimal,
     pub turns_completed: u32,
     pub tool_calls_total: u32,
+    pub tool_calls_failed: u32,
     pub start: Instant,
 }
 ```

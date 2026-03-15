@@ -189,4 +189,3 @@ pub async fn discover_grpc_endpoint(
     tracing::info!(container = %container_id, endpoint = %endpoint, "discovered gRPC endpoint");
     Ok(endpoint)
 }
-

@@ -395,7 +395,10 @@ impl OpenAIProvider {
                 .prompt_tokens_details
                 .and_then(|d| d.cached_tokens),
             cache_creation_tokens: None,
-            reasoning_tokens: response.usage.completion_tokens_details.as_ref()
+            reasoning_tokens: response
+                .usage
+                .completion_tokens_details
+                .as_ref()
                 .and_then(|d| d.reasoning_tokens)
                 .filter(|&t| t > 0),
         };
@@ -467,7 +470,13 @@ impl Provider for OpenAIProvider {
 
             let status = http_response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(ProviderError::RateLimited);
+                let retry_after = http_response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                return Err(ProviderError::RateLimited { retry_after });
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
@@ -548,7 +557,13 @@ impl StreamProvider for OpenAIProvider {
 
             let status = http_response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(ProviderError::RateLimited);
+                let retry_after = http_response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                return Err(ProviderError::RateLimited { retry_after });
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
@@ -757,6 +772,14 @@ fn map_error_response(status: reqwest::StatusCode, body: &str) -> ProviderError 
             message: body.to_string(),
         };
     }
+    // Client errors (4xx except 429, handled earlier) are not retryable.
+    if status.is_client_error() {
+        return ProviderError::InvalidRequest {
+            message: format!("HTTP {status}: {body}"),
+            status: Some(status_u16),
+        };
+    }
+    // Server errors and network issues are transient.
     ProviderError::TransientError {
         message: format!("HTTP {status}: {body}"),
         status: Some(status_u16),

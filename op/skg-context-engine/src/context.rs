@@ -80,6 +80,8 @@ pub struct TurnMetrics {
     pub turns_completed: u32,
     /// Total tool calls dispatched.
     pub tool_calls_total: u32,
+    /// Total tool calls that returned an error.
+    pub tool_calls_failed: u32,
     /// When this operator invocation started.
     pub start: Instant,
 }
@@ -92,6 +94,7 @@ impl Default for TurnMetrics {
             cost: Decimal::ZERO,
             turns_completed: 0,
             tool_calls_total: 0,
+            tool_calls_failed: 0,
             start: Instant::now(),
         }
     }

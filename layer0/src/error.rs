@@ -108,6 +108,18 @@ impl OperatorError {
             source: None,
         }
     }
+
+    /// Whether this error represents a condition that might succeed on retry.
+    ///
+    /// Returns `true` for `Model { retryable: true, .. }` and `Retryable { .. }`.
+    /// All other variants are considered permanent failures.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Model { retryable, .. } => *retryable,
+            Self::Retryable { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 /// Orchestration errors.
@@ -206,4 +218,23 @@ pub enum EnvError {
     /// Catch-all.
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_error_retryable_classification() {
+        assert!(OperatorError::model_retryable(std::io::Error::other("x")).is_retryable());
+        assert!(OperatorError::retryable("transient").is_retryable());
+        assert!(!OperatorError::model("permanent").is_retryable());
+        assert!(!OperatorError::non_retryable("fatal").is_retryable());
+        assert!(
+            !OperatorError::Halted {
+                reason: "stopped".into(),
+            }
+            .is_retryable()
+        );
+    }
 }

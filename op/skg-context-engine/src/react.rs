@@ -193,7 +193,8 @@ pub async fn react_loop<P: Provider>(
         // Fire Before<InferBoundary> rules (e.g. budget guard)
         ctx.fire_before_rules(TypeId::of::<InferBoundary>()).await?;
 
-        let result = compiled.infer(provider).await?;
+        let infer_span = tracing::info_span!("infer", turn = ctx.metrics.turns_completed);
+        let result = tracing::Instrument::instrument(compiled.infer(provider), infer_span).await?;
 
         // Fire After<InferBoundary> rules
         ctx.fire_after_rules(TypeId::of::<InferBoundary>()).await?;
@@ -228,16 +229,26 @@ pub async fn react_loop<P: Provider>(
 
         // Phase 5: Dispatch tool calls
         for call in &tool_calls {
-            let result_str = match ctx
-                .run(ExecuteTool::new(
+            let tool_span = tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
+            let start = std::time::Instant::now();
+            let tool_result = tracing::Instrument::instrument(
+                ctx.run(ExecuteTool::new(
                     call.clone(),
                     tools.clone(),
                     dispatch_ctx.clone(),
-                ))
-                .await
-            {
-                Ok(s) => s,
-                Err(e) => format_tool_error(&e),
+                )),
+                tool_span,
+            )
+            .await;
+            let result_str = match tool_result {
+                Ok(s) => {
+                    tracing::debug!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, "tool succeeded");
+                    s
+                }
+                Err(e) => {
+                    tracing::warn!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, error = %e, "tool failed");
+                    format_tool_error(&e)
+                }
             };
 
             // Append tool result to context
