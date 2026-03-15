@@ -6,6 +6,7 @@
 //!
 //! [`Message`]: layer0::context::Message
 
+use crate::embedding::{EmbedRequest, EmbedResponse};
 use crate::infer::{InferRequest, InferResponse};
 use std::future::Future;
 use std::time::Duration;
@@ -87,6 +88,22 @@ pub trait Provider: Send + Sync {
         &self,
         request: InferRequest,
     ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send;
+
+    /// Embed texts into vector space.
+    ///
+    /// Not all providers support embedding. The default implementation returns
+    /// an error. Providers that support embedding (Anthropic, OpenAI) override
+    /// this method.
+    fn embed(
+        &self,
+        _request: EmbedRequest,
+    ) -> impl Future<Output = Result<EmbedResponse, ProviderError>> + Send {
+        async {
+            Err(ProviderError::Other(
+                "embedding not supported by this provider".into(),
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@
 //! Use [`InferRequest`] / [`InferResponse`] via [`Provider::infer()`].
 
 pub mod config;
+pub mod embedding;
 pub mod infer;
 pub mod provider;
 pub mod stream;
@@ -20,5 +21,6 @@ pub mod test_utils;
 // Re-exports
 pub use config::TurnConfig;
 pub use infer::{InferRequest, InferResponse, ToolCall};
+pub use embedding::{EmbedRequest, EmbedResponse, Embedding};
 pub use provider::{Provider, ProviderError};
 pub use types::*;
