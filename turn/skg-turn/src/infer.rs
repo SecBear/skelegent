@@ -39,7 +39,6 @@ pub struct InferRequest {
     pub system: Option<String>,
 
     /// Provider-specific config passthrough (e.g., thinking blocks, caching).
-    #[allow(dead_code)]
     pub extra: serde_json::Value,
 }
 

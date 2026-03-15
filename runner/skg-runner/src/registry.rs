@@ -11,25 +11,11 @@ pub struct OperatorRegistry {
 }
 
 impl OperatorRegistry {
-    /// Create an empty registry.
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self {
-            operators: HashMap::new(),
-        }
-    }
-
     /// Start building a registry with a builder pattern.
     pub fn builder() -> OperatorRegistryBuilder {
         OperatorRegistryBuilder {
             operators: HashMap::new(),
         }
-    }
-
-    /// Register an operator. Overwrites any existing operator with the same id.
-    #[allow(dead_code)]
-    pub fn register(&mut self, id: OperatorId, op: Arc<dyn Operator>) {
-        self.operators.insert(id, op);
     }
 
     /// Look up an operator by string id.
@@ -45,7 +31,6 @@ pub struct OperatorRegistryBuilder {
 
 impl OperatorRegistryBuilder {
     /// Register an operator into the builder.
-    #[allow(dead_code)]
     pub fn register(mut self, id: OperatorId, op: Arc<dyn Operator>) -> Self {
         self.operators.insert(id, op);
         self
@@ -65,7 +50,7 @@ mod tests {
 
     #[test]
     fn empty_registry_returns_none() {
-        let reg = OperatorRegistry::new();
+        let reg = OperatorRegistry::builder().build();
         assert!(reg.get("nonexistent").is_none());
     }
 

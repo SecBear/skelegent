@@ -6,8 +6,7 @@
 
 use bollard::Docker;
 use bollard::container::{
-    Config, CreateContainerOptions, InspectContainerOptions, RemoveContainerOptions,
-    StartContainerOptions, StopContainerOptions,
+    Config, CreateContainerOptions, InspectContainerOptions, StartContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::{HostConfig, PortBinding, PortMap};
@@ -191,25 +190,3 @@ pub async fn discover_grpc_endpoint(
     Ok(endpoint)
 }
 
-#[allow(dead_code)] // Public API for explicit teardown; not called internally yet.
-/// Stop and remove a container. Used both by the cleanup guard and explicit teardown.
-pub async fn stop_and_remove(docker: &Docker, container_id: &str) -> Result<(), EnvError> {
-    docker
-        .stop_container(container_id, Some(StopContainerOptions { t: 10 }))
-        .await
-        .map_err(|e| EnvError::ProvisionFailed(format!("container stop failed: {e}")))?;
-
-    docker
-        .remove_container(
-            container_id,
-            Some(RemoveContainerOptions {
-                force: true,
-                ..Default::default()
-            }),
-        )
-        .await
-        .map_err(|e| EnvError::ProvisionFailed(format!("container remove failed: {e}")))?;
-
-    tracing::info!(container = %container_id, "container stopped and removed");
-    Ok(())
-}
