@@ -15,6 +15,12 @@
 //! returned in the response body but **never interpreted** by the runner.
 //! Callers that receive effects in the response are responsible for
 //! deciding how and when to execute them.
+//!
+//! # Streaming
+//!
+//! The `/v1/execute/stream` endpoint returns real-time SSE events as the
+//! operator executes. Progress updates, artifacts, and effects are streamed
+//! incrementally — not buffered to completion.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -26,8 +32,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::prelude::*;
+use layer0::dispatch::{DispatchEvent, DispatchHandle, EffectEmitter};
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::error;
 
 use crate::{CoreError, RunnerServiceImpl};
 
@@ -149,84 +158,130 @@ async fn execute_handler(
 /// SSE streaming execute endpoint.
 ///
 /// Accepts the same input as `POST /v1/execute` but returns an SSE stream.
-/// The stream emits:
-/// - `event: output` — JSON-serialized `OperatorOutput` (the final result)
-/// - `event: done`   — signals completion (empty data)
-/// - `event: error`  — JSON `{"error": "..."}` on failure
+/// Events are streamed in real-time as the operator executes:
 ///
-/// **Note:** This is a "streaming envelope" — the operator itself runs to
-/// completion, then the output is streamed as a single event. True real-time
-/// streaming (where partial results arrive during execution) requires
-/// `EffectEmitter` integration.
+/// - `event: progress`  — intermediate progress content (reasoning, status)
+/// - `event: artifact`  — intermediate artifact produced during execution
+/// - `event: effect`    — side-effect emitted by the operator
+/// - `event: output`    — JSON-serialized `OperatorOutput` (final result)
+/// - `event: done`      — signals completion (empty data)
+/// - `event: error`     — JSON `{"error": "..."}` on failure
 ///
 /// # Effect interpretation
 ///
-/// As with the non-streaming endpoint, effects are included in the response
-/// but **not interpreted** by the runner. Callers must handle effects.
-///
-// TODO: Integrate `EffectEmitter` callback to stream partial effects and
-// intermediate messages as they are produced during operator execution.
+/// Effects are included in the stream but **not interpreted** by the runner.
+/// Callers must handle effects.
 async fn execute_stream_handler(
     State(runner): State<Arc<RunnerServiceImpl>>,
     Json(req): Json<JsonExecuteRequest>,
 ) -> Result<impl IntoResponse, CoreError> {
     runner.validate_session_key(&req.session_key)?;
 
-    let input_bytes = BASE64_STANDARD
-        .decode(&req.input)
-        .map_err(|e| CoreError::InvalidArgument(format!("invalid base64 in `input`: {e}")))?;
-
+    let input = runner.deserialize_input_from_b64(&req.input)?;
+    let operator = runner.resolve_operator(&req.operator)?;
     let _spec_bytes = BASE64_STANDARD
         .decode(&req.spec)
         .map_err(|e| CoreError::InvalidArgument(format!("invalid base64 in `spec`: {e}")))?;
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
 
-    let operator_id = req.operator;
+    let op_id = req.operator;
     tokio::spawn(async move {
-        match runner.execute_operator(&operator_id, &input_bytes).await {
-            Ok(output) => {
-                let json = match serde_json::to_string(&output) {
-                    Ok(j) => j,
-                    Err(e) => {
-                        let err_json =
-                            serde_json::json!({ "error": format!("serialize failed: {e}") });
-                        let _ = tx
-                            .send(Ok(Event::default()
-                                .event("error")
-                                .data(err_json.to_string())))
-                            .await;
-                        return;
-                    }
-                };
+        // Create a dispatch channel so the operator can emit real-time events.
+        let dispatch_id = DispatchId::new("runner-sse");
+        let (mut handle, sender) = DispatchHandle::channel(dispatch_id);
+        let emitter = EffectEmitter::new(sender.clone());
 
-                // Send the full output as a single event.
-                if tx
-                    .send(Ok(Event::default().event("output").data(json)))
-                    .await
-                    .is_err()
-                {
-                    return; // client disconnected
+        // Spawn the operator execution, then send the terminal event.
+        let op_id_inner = op_id.clone();
+        tokio::spawn(async move {
+            let ctx = DispatchContext::new(
+                DispatchId::new("runner-sse"),
+                OperatorId::new(op_id_inner),
+            );
+            match operator.execute(input, &ctx, &emitter).await {
+                Ok(output) => {
+                    let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
-
-                // Signal completion.
-                let _ = tx.send(Ok(Event::default().event("done").data(""))).await;
+                Err(op_err) => {
+                    let _ = sender
+                        .send(DispatchEvent::Failed {
+                            error: op_err.into(),
+                        })
+                        .await;
+                }
             }
-            Err(core_err) => {
-                let err_json = serde_json::json!({
-                    "error": core_err.message(),
-                    "code": match &core_err {
-                        CoreError::Unauthenticated(_) => "unauthenticated",
-                        CoreError::NotFound(_) => "not_found",
-                        CoreError::InvalidArgument(_) => "invalid_argument",
-                        CoreError::Internal(_) => "internal",
-                    },
-                });
-                let _ = tx
-                    .send(Ok(Event::default()
-                        .event("error")
-                        .data(err_json.to_string())))
-                    .await;
+            // Drop sender to close the channel.
+        });
+
+        // Forward dispatch events as SSE events.
+        while let Some(event) = handle.recv().await {
+            let sse_event = match &event {
+                DispatchEvent::Progress { content } => {
+                    match serde_json::to_string(content) {
+                        Ok(json) => Event::default().event("progress").data(json),
+                        Err(e) => {
+                            error!("failed to serialize progress: {e}");
+                            continue;
+                        }
+                    }
+                }
+                DispatchEvent::ArtifactProduced { artifact } => {
+                    match serde_json::to_string(artifact) {
+                        Ok(json) => Event::default().event("artifact").data(json),
+                        Err(e) => {
+                            error!("failed to serialize artifact: {e}");
+                            continue;
+                        }
+                    }
+                }
+                DispatchEvent::EffectEmitted { effect } => {
+                    match serde_json::to_string(effect) {
+                        Ok(json) => Event::default().event("effect").data(json),
+                        Err(e) => {
+                            error!("failed to serialize effect: {e}");
+                            continue;
+                        }
+                    }
+                }
+                DispatchEvent::Completed { output } => {
+                    match serde_json::to_string(output) {
+                        Ok(json) => Event::default().event("output").data(json),
+                        Err(e) => {
+                            let err_json =
+                                serde_json::json!({ "error": format!("serialize failed: {e}") });
+                            let _ = tx
+                                .send(Ok(Event::default()
+                                    .event("error")
+                                    .data(err_json.to_string())))
+                                .await;
+                            return;
+                        }
+                    }
+                }
+                DispatchEvent::Failed { error } => {
+                    let err_json = serde_json::json!({
+                        "error": error.to_string(),
+                        "code": "operator_error",
+                    });
+                    let _ = tx
+                        .send(Ok(Event::default()
+                            .event("error")
+                            .data(err_json.to_string())))
+                        .await;
+                    return;
+                }
+                _ => continue, // Future variants — skip gracefully.
+            };
+
+            if tx.send(Ok(sse_event)).await.is_err() {
+                return; // client disconnected
+            }
+
+            // If we just sent the terminal output, signal done.
+            if matches!(event, DispatchEvent::Completed { .. }) {
+                let _ = tx.send(Ok(Event::default().event("done").data(""))).await;
+                return;
             }
         }
     });
