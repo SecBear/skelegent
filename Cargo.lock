@@ -1142,6 +1142,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "middleware-approval"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "tokio",
+]
+
+[[package]]
+name = "middleware-echo"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "tokio",
+]
+
+[[package]]
+name = "middleware-recorder"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "skg-hook-recorder",
+ "tokio",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"

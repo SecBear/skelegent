@@ -324,6 +324,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn infer_stack_empty_passthrough() {
+        // An empty InferStack (no middleware) passes through directly to the terminal.
+        let stack = InferStack::builder().build();
+
+        struct EchoTerminal;
+
+        #[async_trait]
+        impl InferNext for EchoTerminal {
+            async fn infer(&self, _request: InferRequest) -> Result<InferResponse, ProviderError> {
+                Ok(make_infer_response())
+            }
+        }
+
+        let result = stack.infer_with(make_infer_request(), &EchoTerminal).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().model, "test-model");
+    }
+
+    #[tokio::test]
     async fn infer_middleware_is_object_safe() {
         struct TagMiddleware;
 

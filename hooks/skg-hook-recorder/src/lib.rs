@@ -97,7 +97,7 @@ pub enum Phase {
 ///
 /// Present on all boundary records that pass through `DispatchMiddleware`.
 /// Store and exec recorders that lack a dispatch context use empty strings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordContext {
     /// W3C trace ID from [`layer0::dispatch_context::TraceContext::trace_id`].
     pub trace_id: String,
@@ -127,7 +127,7 @@ impl RecordContext {
 /// Every operation that passes through a recorder produces two entries:
 /// one at [`Phase::Pre`] (before calling `next`) and one at [`Phase::Post`]
 /// (after `next` returns). The `Post` entry includes timing and any error.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordEntry {
     /// Which middleware boundary this entry was captured at.
     pub boundary: Boundary,

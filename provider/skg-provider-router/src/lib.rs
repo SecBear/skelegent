@@ -304,6 +304,12 @@ impl MiddlewareProvider {
     }
 }
 
+impl std::fmt::Debug for MiddlewareProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MiddlewareProvider").finish_non_exhaustive()
+    }
+}
+
 impl Provider for MiddlewareProvider {
     fn infer(
         &self,
@@ -329,7 +335,7 @@ mod tests {
     use super::*;
     use layer0::content::Content;
     use layer0::context::{Message, Role};
-    use skg_turn::infer_middleware::{InferMiddleware, InferStackBuilder};
+    use skg_turn::infer_middleware::{EmbedMiddleware, InferMiddleware};
     use skg_turn::types::{StopReason, TokenUsage};
     use std::sync::{Arc, Mutex};
 
@@ -529,9 +535,9 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let inner = box_provider(RecordingProvider::new("inner", Arc::clone(&calls)));
 
-        let stack = InferStackBuilder::build(
-            skg_turn::infer_middleware::InferStack::builder().transform(Arc::new(ModelRenamer)),
-        );
+        let stack = InferStack::builder()
+            .transform(Arc::new(ModelRenamer))
+            .build();
 
         let mp = MiddlewareProvider::new(inner).with_infer_stack(stack);
 
@@ -543,5 +549,70 @@ mod tests {
         let log = calls.lock().unwrap();
         // The inner provider should have received the renamed model
         assert_eq!(*log, vec!["inner:renamed-model"]);
+    }
+
+    /// An embed transformer middleware that modifies the request is applied.
+    #[tokio::test]
+    async fn middleware_provider_embed_transform() {
+        use async_trait::async_trait;
+        use skg_turn::embedding::Embedding;
+
+        struct InputNormalizer;
+
+        #[async_trait]
+        impl EmbedMiddleware for InputNormalizer {
+            async fn embed(
+                &self,
+                mut request: EmbedRequest,
+                next: &dyn EmbedNext,
+            ) -> Result<EmbedResponse, ProviderError> {
+                // Normalize: uppercase all texts.
+                request.texts = request
+                    .texts
+                    .into_iter()
+                    .map(|s| s.to_uppercase())
+                    .collect();
+                next.embed(request).await
+            }
+        }
+
+        // A simple DynProvider that records the embed texts and returns a fixed response.
+        struct RecordingEmbedProvider {
+            texts: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl Provider for RecordingEmbedProvider {
+            async fn infer(&self, _request: InferRequest) -> Result<InferResponse, ProviderError> {
+                Err(ProviderError::Other("not supported".into()))
+            }
+
+            async fn embed(&self, request: EmbedRequest) -> Result<EmbedResponse, ProviderError> {
+                let recorded = request.texts.clone();
+                *self.texts.lock().unwrap() = recorded;
+                Ok(EmbedResponse {
+                    embeddings: vec![Embedding { vector: vec![1.0] }],
+                    model: "embed-model".into(),
+                    usage: TokenUsage::default(),
+                })
+            }
+        }
+
+        let recorded_texts = Arc::new(Mutex::new(Vec::new()));
+        let inner = box_provider(RecordingEmbedProvider {
+            texts: Arc::clone(&recorded_texts),
+        });
+
+        let stack = EmbedStack::builder()
+            .transform(Arc::new(InputNormalizer))
+            .build();
+
+        let mp = MiddlewareProvider::new(inner).with_embed_stack(stack);
+
+        let req = EmbedRequest::new(vec!["hello world".into()]);
+        let resp = mp.embed(req).await.unwrap();
+
+        assert_eq!(resp.model, "embed-model");
+        let texts = recorded_texts.lock().unwrap();
+        assert_eq!(*texts, vec!["HELLO WORLD"]);
     }
 }
