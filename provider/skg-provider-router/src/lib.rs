@@ -24,7 +24,10 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use async_trait::async_trait;
+use skg_turn::embedding::{EmbedRequest, EmbedResponse};
 use skg_turn::infer::{InferRequest, InferResponse};
+use skg_turn::infer_middleware::{EmbedNext, EmbedStack, InferNext, InferStack};
 use skg_turn::provider::{Provider, ProviderError};
 
 // ---------------------------------------------------------------------------
@@ -41,6 +44,21 @@ pub trait DynProvider: Send + Sync {
         &self,
         request: InferRequest,
     ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>>;
+
+    /// Run embedding, returning a boxed future.
+    ///
+    /// Default implementation returns an unsupported error. Override for
+    /// providers that support embedding.
+    fn embed_boxed(
+        &self,
+        _request: EmbedRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<EmbedResponse, ProviderError>> + Send + '_>> {
+        Box::pin(async {
+            Err(ProviderError::Other(
+                "embedding not supported by this provider".into(),
+            ))
+        })
+    }
 }
 
 impl<P: Provider> DynProvider for P {
@@ -49,6 +67,13 @@ impl<P: Provider> DynProvider for P {
         request: InferRequest,
     ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>> {
         Box::pin(self.infer(request))
+    }
+
+    fn embed_boxed(
+        &self,
+        request: EmbedRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<EmbedResponse, ProviderError>> + Send + '_>> {
+        Box::pin(self.embed(request))
     }
 }
 
@@ -195,6 +220,107 @@ impl Provider for RoutingProvider {
 }
 
 // ---------------------------------------------------------------------------
+// MiddlewareProvider — DynProvider wrapped with middleware stacks
+// ---------------------------------------------------------------------------
+
+/// Terminal adapter that bridges `&dyn DynProvider` to [`InferNext`].
+///
+/// Used to connect the tail of an [`InferStack`] to the actual provider.
+struct DynInferTerminal<'a> {
+    inner: &'a dyn DynProvider,
+}
+
+#[async_trait]
+impl InferNext for DynInferTerminal<'_> {
+    async fn infer(&self, request: InferRequest) -> Result<InferResponse, ProviderError> {
+        self.inner.infer_boxed(request).await
+    }
+}
+
+/// Terminal adapter that bridges `&dyn DynProvider` to [`EmbedNext`].
+///
+/// Used to connect the tail of an [`EmbedStack`] to the actual provider.
+struct DynEmbedTerminal<'a> {
+    inner: &'a dyn DynProvider,
+}
+
+#[async_trait]
+impl EmbedNext for DynEmbedTerminal<'_> {
+    async fn embed(&self, request: EmbedRequest) -> Result<EmbedResponse, ProviderError> {
+        self.inner.embed_boxed(request).await
+    }
+}
+
+/// A provider wrapped with inference and embedding middleware stacks.
+///
+/// Wraps any [`DynProvider`] with an [`InferStack`] and an [`EmbedStack`],
+/// allowing cross-cutting concerns (logging, caching, guardrails) to be
+/// layered around any backend without modifying it.
+///
+/// `MiddlewareProvider` implements [`Provider`], so it automatically satisfies
+/// [`DynProvider`] via the blanket impl.
+pub struct MiddlewareProvider {
+    inner: Box<dyn DynProvider>,
+    infer_stack: InferStack,
+    embed_stack: EmbedStack,
+}
+
+impl MiddlewareProvider {
+    /// Create a `MiddlewareProvider` with empty (passthrough) middleware stacks.
+    pub fn new(inner: Box<dyn DynProvider>) -> Self {
+        Self {
+            inner,
+            infer_stack: InferStack::builder().build(),
+            embed_stack: EmbedStack::builder().build(),
+        }
+    }
+
+    /// Replace the inference middleware stack.
+    pub fn with_infer_stack(mut self, stack: InferStack) -> Self {
+        self.infer_stack = stack;
+        self
+    }
+
+    /// Replace the embedding middleware stack.
+    pub fn with_embed_stack(mut self, stack: EmbedStack) -> Self {
+        self.embed_stack = stack;
+        self
+    }
+
+    /// Run inference through the middleware stack, terminating at the inner provider.
+    async fn infer_via_stack(&self, request: InferRequest) -> Result<InferResponse, ProviderError> {
+        let terminal = DynInferTerminal {
+            inner: self.inner.as_ref(),
+        };
+        self.infer_stack.infer_with(request, &terminal).await
+    }
+
+    /// Run embedding through the middleware stack, terminating at the inner provider.
+    async fn embed_via_stack(&self, request: EmbedRequest) -> Result<EmbedResponse, ProviderError> {
+        let terminal = DynEmbedTerminal {
+            inner: self.inner.as_ref(),
+        };
+        self.embed_stack.embed_with(request, &terminal).await
+    }
+}
+
+impl Provider for MiddlewareProvider {
+    fn infer(
+        &self,
+        request: InferRequest,
+    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
+        self.infer_via_stack(request)
+    }
+
+    fn embed(
+        &self,
+        request: EmbedRequest,
+    ) -> impl Future<Output = Result<EmbedResponse, ProviderError>> + Send {
+        self.embed_via_stack(request)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -203,6 +329,7 @@ mod tests {
     use super::*;
     use layer0::content::Content;
     use layer0::context::{Message, Role};
+    use skg_turn::infer_middleware::{InferMiddleware, InferStackBuilder};
     use skg_turn::types::{StopReason, TokenUsage};
     use std::sync::{Arc, Mutex};
 
@@ -361,5 +488,60 @@ mod tests {
 
         let log = calls.lock().unwrap();
         assert_eq!(*log, vec!["only:anything"]);
+    }
+
+    // -- MiddlewareProvider tests --------------------------------------------
+
+    /// MiddlewareProvider with empty stacks passes calls through to inner provider.
+    #[tokio::test]
+    async fn middleware_provider_passthrough() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let inner = box_provider(RecordingProvider::new("inner", Arc::clone(&calls)));
+        let mp = MiddlewareProvider::new(inner);
+
+        let req = InferRequest::new(vec![]).with_model("test-model");
+        let resp = mp.infer(req).await.unwrap();
+
+        assert_eq!(resp.model, "test-model");
+        let log = calls.lock().unwrap();
+        assert_eq!(*log, vec!["inner:test-model"]);
+    }
+
+    /// A transformer middleware that modifies the request model field is applied.
+    #[tokio::test]
+    async fn middleware_provider_infer_transform() {
+        use async_trait::async_trait;
+
+        struct ModelRenamer;
+
+        #[async_trait]
+        impl InferMiddleware for ModelRenamer {
+            async fn infer(
+                &self,
+                mut request: InferRequest,
+                next: &dyn InferNext,
+            ) -> Result<InferResponse, ProviderError> {
+                request.model = Some("renamed-model".into());
+                next.infer(request).await
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let inner = box_provider(RecordingProvider::new("inner", Arc::clone(&calls)));
+
+        let stack = InferStackBuilder::build(
+            skg_turn::infer_middleware::InferStack::builder().transform(Arc::new(ModelRenamer)),
+        );
+
+        let mp = MiddlewareProvider::new(inner).with_infer_stack(stack);
+
+        let req = InferRequest::new(vec![]).with_model("original-model");
+        let resp = mp.infer(req).await.unwrap();
+
+        // The response model comes from what RecordingProvider echoes back
+        assert_eq!(resp.model, "renamed-model");
+        let log = calls.lock().unwrap();
+        // The inner provider should have received the renamed model
+        assert_eq!(*log, vec!["inner:renamed-model"]);
     }
 }

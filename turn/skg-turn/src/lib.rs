@@ -11,6 +11,7 @@
 pub mod config;
 pub mod embedding;
 pub mod infer;
+pub mod infer_middleware;
 pub mod provider;
 pub mod stream;
 pub mod types;
@@ -20,7 +21,11 @@ pub mod test_utils;
 
 // Re-exports
 pub use config::TurnConfig;
-pub use infer::{InferRequest, InferResponse, ToolCall};
 pub use embedding::{EmbedRequest, EmbedResponse, Embedding};
+pub use infer::{InferRequest, InferResponse, ToolCall};
+pub use infer_middleware::{
+    EmbedMiddleware, EmbedNext, EmbedStack, EmbedStackBuilder, InferMiddleware, InferNext,
+    InferStack, InferStackBuilder,
+};
 pub use provider::{Provider, ProviderError};
 pub use types::*;

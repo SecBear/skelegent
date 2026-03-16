@@ -20,12 +20,12 @@ pub mod store;
 pub mod timer;
 pub mod wait;
 
+pub use checkpoint::{Checkpoint, CheckpointError, CheckpointStore};
 pub use command::{DispatchPayload, OrchestrationCommand};
 pub use control::{RunControlError, RunController, RunStarter};
 pub use deadline::{PortableWakeDeadline, WakeDeadlineError};
 pub use driver::{DriverError, DriverRequest, DriverResponse, RunDriver};
 pub use id::{CheckpointId, RunId, WaitPointId};
-pub use checkpoint::{Checkpoint, CheckpointError, CheckpointStore};
 pub use kernel::{KernelError, ResumeAction, RunEvent, RunKernel, RunTransition};
 pub use lease::{LeaseClaim, LeaseError, LeaseGrant, LeaseStore};
 pub use model::{RunOutcome, RunStatus, RunView};

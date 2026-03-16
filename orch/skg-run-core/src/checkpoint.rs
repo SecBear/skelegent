@@ -87,10 +87,16 @@ pub enum CheckpointError {
 #[async_trait]
 pub trait CheckpointStore: Send + Sync {
     /// Save a checkpoint. Returns the checkpoint ID.
-    async fn save_checkpoint(&self, checkpoint: Checkpoint) -> Result<CheckpointId, CheckpointError>;
+    async fn save_checkpoint(
+        &self,
+        checkpoint: Checkpoint,
+    ) -> Result<CheckpointId, CheckpointError>;
 
     /// Retrieve a checkpoint by ID.
-    async fn get_checkpoint(&self, id: &CheckpointId) -> Result<Option<Checkpoint>, CheckpointError>;
+    async fn get_checkpoint(
+        &self,
+        id: &CheckpointId,
+    ) -> Result<Option<Checkpoint>, CheckpointError>;
 
     /// List all checkpoints for a run, ordered by step.
     async fn list_checkpoints(&self, run_id: &RunId) -> Result<Vec<Checkpoint>, CheckpointError>;
@@ -102,8 +108,14 @@ mod tests {
 
     #[test]
     fn checkpoint_serde_round_trip() {
-        let cp = Checkpoint::new("cp-1", "run-1", 0, "operator-a", serde_json::json!({"messages": []}))
-            .with_parent("cp-0");
+        let cp = Checkpoint::new(
+            "cp-1",
+            "run-1",
+            0,
+            "operator-a",
+            serde_json::json!({"messages": []}),
+        )
+        .with_parent("cp-0");
         let json = serde_json::to_string(&cp).unwrap();
         let back: Checkpoint = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id.as_str(), "cp-1");

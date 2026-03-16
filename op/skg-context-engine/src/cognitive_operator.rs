@@ -170,10 +170,12 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         {
             let allowed_set: HashSet<String> = allowed.iter().cloned().collect();
             let existing_filter = config.tool_filter.take();
-            config.tool_filter = Some(Arc::new(move |tool: &dyn skg_tool::ToolDyn, ctx: &crate::context::Context| {
-                let name_allowed = allowed_set.contains(tool.name());
-                name_allowed && existing_filter.as_ref().is_none_or(|f| f(tool, ctx))
-            }));
+            config.tool_filter = Some(Arc::new(
+                move |tool: &dyn skg_tool::ToolDyn, ctx: &crate::context::Context| {
+                    let name_allowed = allowed_set.contains(tool.name());
+                    name_allowed && existing_filter.as_ref().is_none_or(|f| f(tool, ctx))
+                },
+            ));
         }
 
         // Construct a DispatchContext for this execution.
@@ -370,7 +372,11 @@ mod tests {
             _input: serde_json::Value,
             _ctx: &DispatchContext,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<serde_json::Value, skg_tool::ToolError>> + Send + '_>,
+            Box<
+                dyn std::future::Future<Output = Result<serde_json::Value, skg_tool::ToolError>>
+                    + Send
+                    + '_,
+            >,
         > {
             Box::pin(async { Ok(serde_json::json!(null)) })
         }
@@ -409,8 +415,7 @@ mod tests {
     fn allowed_operators_filter_correctness() {
         // Directly verify the filter function produced by execute's
         // allowed_operators logic.
-        let allowed: HashSet<String> =
-            ["tool_a"].iter().map(|s| s.to_string()).collect();
+        let allowed: HashSet<String> = ["tool_a"].iter().map(|s| s.to_string()).collect();
         let filter: crate::react::ToolFilter =
             Arc::new(move |tool: &dyn skg_tool::ToolDyn, _ctx: &Context| {
                 allowed.contains(tool.name())
@@ -432,8 +437,7 @@ mod tests {
         let existing: crate::react::ToolFilter =
             Arc::new(|tool: &dyn skg_tool::ToolDyn, _ctx: &Context| tool.name() != "tool_a");
 
-        let allowed: HashSet<String> =
-            ["tool_a", "tool_b"].iter().map(|s| s.to_string()).collect();
+        let allowed: HashSet<String> = ["tool_a", "tool_b"].iter().map(|s| s.to_string()).collect();
         let existing_opt = Some(existing);
         let combined: crate::react::ToolFilter =
             Arc::new(move |tool: &dyn skg_tool::ToolDyn, ctx: &Context| {

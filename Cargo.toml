@@ -39,6 +39,7 @@ members = [
   "secret/skg-secret-vault",
   "hooks/skg-hook-security",
   "hooks/skg-hook-retry",
+  "hooks/skg-hook-recorder",
   "examples/custom_operator_barrier",
   "turn/skg-turn-kit",
   "effects/skg-effects-core",

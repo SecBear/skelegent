@@ -843,7 +843,6 @@ fn budget_decision_downgrade_round_trip() {
     assert_eq!(json, json2);
 }
 
-
 #[test]
 fn effect_handoff_round_trip() {
     let e = Effect::Handoff {

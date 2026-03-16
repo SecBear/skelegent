@@ -9,8 +9,8 @@ use futures_util::StreamExt;
 use layer0::content::{Content, ContentBlock};
 use layer0::context;
 use rust_decimal::Decimal;
-use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
 use skg_turn::embedding::{EmbedRequest, EmbedResponse, Embedding};
+use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
 use skg_turn::provider::{Provider, ProviderError};
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use skg_turn::types::*;
@@ -536,12 +536,13 @@ impl Provider for OpenAIProvider {
                 http_req = http_req.header("OpenAI-Organization", org);
             }
 
-            let response = http_req.send().await.map_err(|e| {
-                ProviderError::TransientError {
+            let response = http_req
+                .send()
+                .await
+                .map_err(|e| ProviderError::TransientError {
                     message: format!("embedding request failed: {e}"),
                     status: None,
-                }
-            })?;
+                })?;
 
             let status = response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -557,21 +558,16 @@ impl Provider for OpenAIProvider {
                 || status == reqwest::StatusCode::FORBIDDEN
             {
                 let body = response.text().await.unwrap_or_default();
-                return Err(ProviderError::AuthFailed(format!(
-                    "HTTP {status}: {body}"
-                )));
+                return Err(ProviderError::AuthFailed(format!("HTTP {status}: {body}")));
             }
             if !status.is_success() {
                 let body = response.text().await.unwrap_or_default();
                 return Err(map_error_response(status, &body));
             }
 
-            let wire_resp: types::OpenAIEmbeddingResponse =
-                response.json().await.map_err(|e| {
-                    ProviderError::InvalidResponse(format!(
-                        "embedding response parse failed: {e}"
-                    ))
-                })?;
+            let wire_resp: types::OpenAIEmbeddingResponse = response.json().await.map_err(|e| {
+                ProviderError::InvalidResponse(format!("embedding response parse failed: {e}"))
+            })?;
 
             let embeddings = wire_resp
                 .data

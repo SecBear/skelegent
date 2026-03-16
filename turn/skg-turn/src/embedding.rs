@@ -4,8 +4,8 @@
 //! support embedding override the default method; providers that don't inherit
 //! an error return.
 
-use serde::{Deserialize, Serialize};
 use crate::types::TokenUsage;
+use serde::{Deserialize, Serialize};
 
 /// Request to embed one or more texts into vector space.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +21,11 @@ pub struct EmbedRequest {
 impl EmbedRequest {
     /// Create an embed request from a list of texts.
     pub fn new(texts: Vec<String>) -> Self {
-        Self { texts, model: None, dimensions: None }
+        Self {
+            texts,
+            model: None,
+            dimensions: None,
+        }
     }
 
     /// Set the model.
@@ -73,8 +77,12 @@ mod tests {
     fn embed_response_serde_round_trip() {
         let resp = EmbedResponse {
             embeddings: vec![
-                Embedding { vector: vec![0.1, 0.2, 0.3] },
-                Embedding { vector: vec![0.4, 0.5, 0.6] },
+                Embedding {
+                    vector: vec![0.1, 0.2, 0.3],
+                },
+                Embedding {
+                    vector: vec![0.4, 0.5, 0.6],
+                },
             ],
             model: "test-model".into(),
             usage: TokenUsage::default(),

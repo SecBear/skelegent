@@ -80,8 +80,14 @@ mod tests {
     #[tokio::test]
     async fn accumulates_across_multiple_appends() {
         let mut ctx = Context::new();
-        AppendResponse::new(make_text_response("a")).execute(&mut ctx).await.unwrap();
-        AppendResponse::new(make_text_response("b")).execute(&mut ctx).await.unwrap();
+        AppendResponse::new(make_text_response("a"))
+            .execute(&mut ctx)
+            .await
+            .unwrap();
+        AppendResponse::new(make_text_response("b"))
+            .execute(&mut ctx)
+            .await
+            .unwrap();
 
         assert_eq!(ctx.messages().len(), 2);
         assert_eq!(ctx.messages()[0].role, Role::Assistant);
@@ -92,7 +98,10 @@ mod tests {
     async fn cost_none_leaves_zero() {
         let mut ctx = Context::new();
         // make_text_response has cost: None
-        AppendResponse::new(make_text_response("ok")).execute(&mut ctx).await.unwrap();
+        AppendResponse::new(make_text_response("ok"))
+            .execute(&mut ctx)
+            .await
+            .unwrap();
         assert_eq!(ctx.metrics.cost, Decimal::ZERO);
     }
 }

@@ -194,4 +194,3 @@ impl SignalPayload {
         }
     }
 }
-

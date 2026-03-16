@@ -496,7 +496,6 @@ async fn anthropic_extract_cognitive_state_live() {
     );
 }
 
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Pi auth integration tests
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -548,16 +547,19 @@ async fn pi_auth_token(key: &str) -> Option<String> {
     let resp_json: serde_json::Value = resp.json().await.ok()?;
     let new_access = resp_json.get("access_token")?.as_str()?;
     let new_refresh = resp_json.get("refresh_token")?.as_str()?;
-    let expires_in = resp_json.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(3600);
+    let expires_in = resp_json
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(3600);
 
     // Write back to auth.json
     let mut all_creds: serde_json::Value = serde_json::from_str(&raw).ok()?;
     if let Some(entry) = all_creds.get_mut(key) {
         entry["access"] = serde_json::Value::String(new_access.to_string());
         entry["refresh"] = serde_json::Value::String(new_refresh.to_string());
-        entry["expires"] = serde_json::Value::Number(
-            serde_json::Number::from(now_ms + (expires_in as i64 * 1000) - 5 * 60 * 1000),
-        );
+        entry["expires"] = serde_json::Value::Number(serde_json::Number::from(
+            now_ms + (expires_in as i64 * 1000) - 5 * 60 * 1000,
+        ));
     }
     let _ = std::fs::write(&path, serde_json::to_string_pretty(&all_creds).ok()?);
     eprintln!("pi auth: token refreshed and persisted");
@@ -567,13 +569,12 @@ async fn pi_auth_token(key: &str) -> Option<String> {
 #[tokio::test]
 #[ignore]
 async fn pi_auth_anthropic_inference() {
-    let token = pi_auth_token("anthropic").await.expect("pi auth: no anthropic credential");
+    let token = pi_auth_token("anthropic")
+        .await
+        .expect("pi auth: no anthropic credential");
     let provider = AnthropicProvider::new(token);
 
-    let op = SingleShotOperator::new(
-        provider,
-        single_shot_config("claude-3-haiku-20240307"),
-    );
+    let op = SingleShotOperator::new(provider, single_shot_config("claude-3-haiku-20240307"));
 
     let output = op
         .execute(
@@ -601,10 +602,7 @@ async fn pi_auth_openai_inference() {
     };
     let provider = OpenAIProvider::new(token);
 
-    let op = SingleShotOperator::new(
-        provider,
-        single_shot_config("gpt-4o-mini"),
-    );
+    let op = SingleShotOperator::new(provider, single_shot_config("gpt-4o-mini"));
 
     let output = op
         .execute(
@@ -632,11 +630,11 @@ async fn pi_auth_openai_embed() {
     };
     let provider = OpenAIProvider::new(token);
 
-    use skg_turn::embedding::EmbedRequest;
     use skg_turn::Provider;
+    use skg_turn::embedding::EmbedRequest;
 
-    let request = EmbedRequest::new(vec!["hello world".into()])
-        .with_model("text-embedding-3-small");
+    let request =
+        EmbedRequest::new(vec!["hello world".into()]).with_model("text-embedding-3-small");
     let response = provider.embed(request).await.unwrap();
 
     assert_eq!(response.embeddings.len(), 1);

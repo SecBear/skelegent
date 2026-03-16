@@ -207,7 +207,9 @@ pub trait StateStore: Send + Sync {
     /// Graph-aware backends create a typed edge. Default returns an error
     /// indicating graph operations are not supported.
     async fn link(&self, _scope: &Scope, _link: &MemoryLink) -> Result<(), StateError> {
-        Err(StateError::Other("graph operations not supported by this store".into()))
+        Err(StateError::Other(
+            "graph operations not supported by this store".into(),
+        ))
     }
 
     /// Remove a link between two memory entries.
@@ -220,7 +222,9 @@ pub trait StateStore: Send + Sync {
         _to_key: &str,
         _relation: &str,
     ) -> Result<(), StateError> {
-        Err(StateError::Other("graph operations not supported by this store".into()))
+        Err(StateError::Other(
+            "graph operations not supported by this store".into(),
+        ))
     }
 
     /// Traverse links from a starting key.
@@ -235,7 +239,9 @@ pub trait StateStore: Send + Sync {
         _relation: Option<&str>,
         _max_depth: u32,
     ) -> Result<Vec<String>, StateError> {
-        Err(StateError::Other("graph operations not supported by this store".into()))
+        Err(StateError::Other(
+            "graph operations not supported by this store".into(),
+        ))
     }
 
     /// Enhanced search with advisory options.

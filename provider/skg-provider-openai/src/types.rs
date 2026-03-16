@@ -259,7 +259,6 @@ pub struct OpenAIStreamFunction {
     pub arguments: Option<String>,
 }
 
-
 /// OpenAI embeddings API request.
 #[derive(Debug, Serialize)]
 pub(crate) struct OpenAIEmbeddingRequest {

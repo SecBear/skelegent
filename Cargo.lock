@@ -2318,6 +2318,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "skg-hook-recorder"
+version = "0.4.1"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "serde",
+ "serde_json",
+ "skg-turn",
+ "tokio",
+]
+
+[[package]]
 name = "skg-hook-retry"
 version = "0.4.1"
 dependencies = [
@@ -2486,6 +2498,7 @@ dependencies = [
 name = "skg-provider-router"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "layer0",
  "skg-turn",
  "thiserror",
