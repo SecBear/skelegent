@@ -22,6 +22,16 @@ use std::time::Instant;
 ///
 /// The [`RecordContext`] is populated from the [`DispatchContext`]:
 /// `trace_id`, `operator_id`, and `dispatch_id`.
+///
+/// # Dispatch Post-Phase Payload Limitation
+///
+/// The Post-phase payload for a successful dispatch is `{"status": "dispatched"}`, NOT the
+/// actual [`OperatorOutput`]. This is a fundamental limitation: [`DispatchMiddleware`] returns
+/// a [`DispatchHandle`] immediately, and the actual output arrives asynchronously through
+/// [`DispatchEvent::Completed`](layer0::dispatch::DispatchEvent::Completed) on that handle.
+/// The recorder middleware has no way to await the handle without breaking the streaming
+/// protocol. The replay engine (`skg-hook-replay`) must construct its own output independently
+/// and does not rely on the recorder's Post-phase payload for dispatch entries.
 pub struct DispatchRecorder {
     sink: Arc<dyn RecordSink>,
 }
@@ -63,12 +73,18 @@ impl DispatchMiddleware for DispatchRecorder {
         let duration_ms = start.elapsed().as_millis() as u64;
 
         // Post-phase: record outcome.
+        // NOTE: We cannot capture the actual OperatorOutput here because DispatchHandle is
+        // async — the output arrives later via DispatchEvent::Completed. See type-level docs.
+        let post_payload = match &result {
+            Ok(_) => serde_json::json!({"status": "dispatched"}),
+            Err(e) => serde_json::json!({"error": e.to_string()}),
+        };
         let error = result.as_ref().err().map(|e| e.to_string());
         self.sink
             .record(RecordEntry::post(
                 Boundary::Dispatch,
                 record_ctx,
-                serde_json::Value::Null,
+                post_payload,
                 duration_ms,
                 error,
             ))
@@ -141,6 +157,7 @@ mod tests {
         assert_eq!(entries[1].boundary, Boundary::Dispatch);
         assert!(entries[1].duration_ms.is_some());
         assert!(entries[1].error.is_none());
+        assert_eq!(entries[1].payload_json["status"], "dispatched");
     }
 
     #[tokio::test]
@@ -170,5 +187,6 @@ mod tests {
         let post = &entries[1];
         assert_eq!(post.phase, Phase::Post);
         assert!(post.error.is_some());
+        assert_eq!(post.payload_json["error"], "dispatch failed: boom");
     }
 }

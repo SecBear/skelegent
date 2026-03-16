@@ -60,12 +60,16 @@ impl StoreMiddleware for StoreRecorder {
         let result = next.write(scope, key, value, options).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
+        let post_payload = match &result {
+            Ok(()) => serde_json::json!({"status": "ok"}),
+            Err(_) => serde_json::Value::Null,
+        };
         let error = result.as_ref().err().map(|e| e.to_string());
         self.sink
             .record(RecordEntry::post(
                 Boundary::StoreWrite,
                 RecordContext::empty(),
-                serde_json::Value::Null,
+                post_payload,
                 duration_ms,
                 error,
             ))
@@ -97,12 +101,17 @@ impl StoreMiddleware for StoreRecorder {
         let result = next.read(scope, key).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
+        let post_payload = match &result {
+            Ok(Some(value)) => value.clone(),
+            Ok(None) => serde_json::json!({"found": false}),
+            Err(_) => serde_json::Value::Null,
+        };
         let error = result.as_ref().err().map(|e| e.to_string());
         self.sink
             .record(RecordEntry::post(
                 Boundary::StoreRead,
                 RecordContext::empty(),
-                serde_json::Value::Null,
+                post_payload,
                 duration_ms,
                 error,
             ))
@@ -189,6 +198,7 @@ mod tests {
         assert_eq!(post.boundary, Boundary::StoreWrite);
         assert!(post.duration_ms.is_some());
         assert!(post.error.is_none());
+        assert_eq!(post.payload_json["status"], "ok");
     }
 
     #[tokio::test]
@@ -211,5 +221,11 @@ mod tests {
         assert_eq!(pre.phase, Phase::Pre);
         assert_eq!(pre.boundary, Boundary::StoreRead);
         assert_eq!(pre.payload_json["key"], "some-key");
+
+        let post = &entries[1];
+        assert_eq!(post.phase, Phase::Post);
+        assert_eq!(post.boundary, Boundary::StoreRead);
+        // Post payload should be the returned value (42 in this case).
+        assert_eq!(post.payload_json, serde_json::json!(42));
     }
 }

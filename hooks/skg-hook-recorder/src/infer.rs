@@ -54,13 +54,17 @@ impl InferMiddleware for InferRecorder {
         let result = next.infer(request).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Post-phase: record outcome.
+        // Post-phase: record outcome, including the full InferResponse on success.
+        let post_payload = match &result {
+            Ok(response) => serde_json::to_value(response).unwrap_or(serde_json::Value::Null),
+            Err(_) => serde_json::Value::Null,
+        };
         let error = result.as_ref().err().map(|e| e.to_string());
         self.sink
             .record(RecordEntry::post(
                 Boundary::Infer,
                 RecordContext::empty(),
-                serde_json::Value::Null,
+                post_payload,
                 duration_ms,
                 error,
             ))
@@ -155,6 +159,9 @@ mod tests {
         assert_eq!(post.boundary, Boundary::Infer);
         assert!(post.duration_ms.is_some());
         assert!(post.error.is_none());
+        // Post payload should contain the serialized InferResponse.
+        assert!(!post.payload_json.is_null());
+        assert_eq!(post.payload_json["model"], "test-model");
     }
 
     #[tokio::test]

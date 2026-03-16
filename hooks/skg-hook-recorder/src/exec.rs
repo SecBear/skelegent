@@ -56,12 +56,16 @@ impl ExecMiddleware for ExecRecorder {
         let result = next.run(input, spec).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
+        let post_payload = match &result {
+            Ok(output) => serde_json::to_value(output).unwrap_or(serde_json::Value::Null),
+            Err(_) => serde_json::Value::Null,
+        };
         let error = result.as_ref().err().map(|e| e.to_string());
         self.sink
             .record(RecordEntry::post(
                 Boundary::Exec,
                 RecordContext::empty(),
-                serde_json::Value::Null,
+                post_payload,
                 duration_ms,
                 error,
             ))
@@ -121,6 +125,12 @@ mod tests {
         assert_eq!(post.boundary, Boundary::Exec);
         assert!(post.duration_ms.is_some());
         assert!(post.error.is_none());
+        // Post payload should contain the serialized OperatorOutput.
+        assert!(!post.payload_json.is_null());
+        assert!(
+            post.payload_json["exit_reason"].is_string()
+                || post.payload_json["exit_reason"].is_object()
+        );
     }
 
     #[tokio::test]
