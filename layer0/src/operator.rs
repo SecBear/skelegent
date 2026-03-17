@@ -153,7 +153,7 @@ pub enum ExitReason {
     /// Hit the max_turns limit.
     MaxTurns,
     /// Hit the cost budget (`max_cost`) or the tool-call step limit (`max_tool_calls`).
-    /// Use `BudgetEvent` sink notifications to distinguish the two causes.
+    /// Runtime/orchestration code may distinguish the exact cause above Layer 0.
     BudgetExhausted,
     /// Circuit breaker tripped (consecutive failures).
     CircuitBreaker,

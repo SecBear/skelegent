@@ -9,6 +9,7 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::{Effect, Scope};
 use layer0::error::{OrchError, StateError};
 use layer0::middleware::{StoreStack, StoreWriteNext};

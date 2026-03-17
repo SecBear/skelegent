@@ -379,3 +379,40 @@ fn resolve_model(
 
     Ok(BuiltAgent { operator })
 }
+
+#[cfg(not(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+)))]
+fn resolve_model(
+    model: &str,
+    _system_prompt: String,
+    _tools: ToolRegistry,
+    _max_turns: u32,
+    _max_tokens: u32,
+) -> Result<BuiltAgent, AgentBuildError> {
+    if model.starts_with("claude-") || model.starts_with("anthropic:") {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-anthropic",
+        });
+    }
+
+    if model.starts_with("gpt-")
+        || model.starts_with("openai:")
+        || model.starts_with("o1-")
+        || model.starts_with("o3-")
+    {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-openai",
+        });
+    }
+
+    if model.starts_with("ollama:") {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-ollama",
+        });
+    }
+
+    Err(AgentBuildError::UnknownModel(model.to_string()))
+}

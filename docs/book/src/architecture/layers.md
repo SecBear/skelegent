@@ -7,9 +7,9 @@ skelegent organizes its crates into six layers plus an umbrella crate. Each laye
  │            skelegent (umbrella crate)                │
  │         Feature-gated re-exports of all layers    │
  ├──────────────────────────────────────────────────┤
- │  LAYER 5 — Cross-Cutting                         │
- │  Security middleware, lifecycle coordination       │
- ├──────────────────────────────────────────────────┤
+│  LAYER 5 — Cross-Cutting                         │
+│  Security middleware, runtime governance         │
+├──────────────────────────────────────────────────┤
  │  LAYER 4 — Environment                           │
  │  Isolation, credentials, secret backends,         │
  │  auth backends, crypto backends                   │

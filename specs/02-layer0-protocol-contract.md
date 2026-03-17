@@ -27,11 +27,15 @@ Layer 0 defines six primary protocol traits:
 
 - `Environment`: isolated execution boundary
 
-Layer 0 also defines cross-cutting governance interfaces:
+Middleware traits/stacks are cross-cutting protocol surfaces, but not separate primary runtime protocols. Lifecycle coordination and observability policy live above Layer 0 unless promoted into a real cross-boundary contract.
 
-- `Hook` (observation/intervention at hook points)
-- lifecycle vocabulary types (`BudgetEvent`, `CompactionEvent`, `ObservableEvent`)
+Layer 0 also defines the cross-boundary nouns that travel between components:
 
+- `Message` / `MessageMeta` / `Role` for conversational state that crosses runtime, store, and dispatch boundaries
+- `Effect` and `Scope` for declared side effects and state addressing
+- `CompactionPolicy` as a message-level advisory hint that travels with the message
+
+Budget enforcement, compaction coordination, observability plumbing, and other lifecycle policy decisions live above Layer 0 unless and until they become real cross-boundary contracts.
 ## Type Inventory
 
 Core types that cross layer boundaries:

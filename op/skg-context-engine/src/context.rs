@@ -325,27 +325,72 @@ impl Context {
     /// the rule dispatch is skipped (and interventions are not drained).
     pub async fn run<O: ContextOp + 'static>(&mut self, op: O) -> Result<O::Output, EngineError> {
         let op_type = TypeId::of::<O>();
+        self.enter_governed(op_type).await?;
+        let output = op.execute(self).await?;
+        self.exit_governed(op_type).await?;
+        Ok(output)
+    }
 
+    /// Enter a typed governance boundary for non-`ContextOp` work.
+    ///
+    /// This reuses the same intervention drain + before/when sequence as
+    /// [`Context::run()`], but the boundary type is a marker rather than a real
+    /// operation. Use this for external discontinuities such as provider calls
+    /// that must still be targetable by rules.
+    pub(crate) async fn enter_boundary<B: 'static>(&mut self) -> Result<(), EngineError> {
+        self.enter_governed(TypeId::of::<B>()).await
+    }
+
+    /// Finish a typed governance boundary for non-`ContextOp` work.
+    ///
+    /// Call this only after the guarded work has succeeded. This matches
+    /// [`Context::run()`], which only fires `After` rules when the inner work
+    /// completes without error.
+    pub(crate) async fn exit_boundary<B: 'static>(&mut self) -> Result<(), EngineError> {
+        self.exit_governed(TypeId::of::<B>()).await
+    }
+
+    async fn enter_governed(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         if !self.in_rule {
             // Drain pending interventions
             self.drain_interventions().await?;
 
             // Fire "before" rules
             self.fire_before_rules(op_type).await?;
-
-            // Fire "when" rules
             self.fire_when_rules().await?;
         }
 
-        // Execute the operation
-        let output = op.execute(self).await?;
+        Ok(())
+    }
 
+    async fn exit_governed(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         if !self.in_rule {
-            // Fire "after" rules
             self.fire_after_rules(op_type).await?;
         }
 
-        Ok(output)
+        Ok(())
+    }
+
+    /// Drain and execute all pending interventions.
+    ///
+    /// Each intervention is a `Box<dyn ErasedOp>` — any ContextOp sent
+    /// through the intervention channel. They are executed in FIFO order
+    /// as normal context ops (with full `&mut Context` power).
+    async fn drain_interventions(&mut self) -> Result<(), EngineError> {
+        // Take the receiver out to avoid borrow conflict —
+        // execute_erased needs &mut self, but rx is inside self.
+        let mut rx = match self.intervention_rx.take() {
+            Some(rx) => rx,
+            None => return Ok(()),
+        };
+
+        while let Ok(intervention) = rx.try_recv() {
+            intervention.execute_erased(self).await?;
+        }
+
+        // Put it back.
+        self.intervention_rx = Some(rx);
+        Ok(())
     }
 
     /// Drain and execute all pending interventions.

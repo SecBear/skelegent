@@ -28,20 +28,20 @@ Internal traits like `Provider` are never used behind `dyn` -- they appear as ge
 
 `Decimal` adds one dependency to Layer 0 but eliminates an entire class of bugs.
 
-## Why four protocols plus two interfaces
+## Why four protocol concerns plus middleware interfaces
 
 **Decision:** The architecture has six protocol traits (`Operator`, `Dispatcher`, `Signalable`, `Queryable`, `StateStore`, `Environment`) and two cross-cutting interfaces (per-boundary middleware, lifecycle events).
 
-**Reasoning:** The four protocols are orthogonal concerns that compose independently:
+**Reasoning:** The four concerns are orthogonal and compose independently:
 
 1. **Operator** -- What happens in a single agent cycle (reasoning + acting).
 2. **Dispatch/Signal/Query** -- How multiple agents compose (topology + durability). Dispatcher invokes, Signalable delivers signals, Queryable reads workflow state.
 3. **State** -- How data persists (storage backend).
 4. **Environment** -- Where code runs (isolation + credentials).
 
-These were derived from analyzing 23 architectural decisions that every agentic system must make. The four protocols cover all 23 decisions without overlap. Reducing to three protocols (by merging state into environment, or orchestration into operator) creates coupling where orthogonal concerns should be independent. Expanding to five or more protocols creates distinctions without meaningful boundaries.
+These were derived from analyzing 23 architectural decisions that every agentic system must make. The four concerns cover all 23 decisions without overlap. Reducing to three concerns (by merging state into environment, or orchestration into operator) creates coupling where orthogonal concerns should be independent. Expanding to more concerns creates distinctions without meaningful boundaries.
 
-The two interfaces (middleware and lifecycle events) are *cross-cutting* -- they span multiple protocols and cannot be owned by any single one. A budget event involves the operator (which tracks cost), the middleware (which observes it), and the orchestrator (which reacts to it). Making this a method on any single trait would couple unrelated protocols.
+Middleware is the cross-cutting Layer 0 surface because it intercepts stable protocol seams without turning runtime policy into protocol API. Budget/compaction coordination and observation/intervention mechanics live in runtime or orchestration code above Layer 0 unless they are later promoted into a real cross-boundary contract. Layer 0 only carries the middleware seams and message-level hints that travel with data, such as `CompactionPolicy`.
 
 ## Why edition 2024
 

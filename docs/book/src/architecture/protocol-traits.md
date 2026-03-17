@@ -349,14 +349,12 @@ Middleware is composed into stacks:
 
 The Rule system provides typed interception within the context engine specifically, for use cases like tool-call filtering that are operator-internal rather than cross-cutting. Rules fire via Trigger enum: Before (pre-inference, pre-tool), After (post-inference, post-tool), or When (exit checks, steering).
 
-## Interface 6: Lifecycle Events
+## Message-Level Hints
 
 **Crate:** `layer0::lifecycle`
 
-Cross-layer coordination events:
+This module now carries only message-level policy hints that travel with protocol data:
 
-- **`BudgetEvent`** -- Emitted when cost thresholds are crossed. A hook observes cost, emits a budget event, and the orchestrator can react (cancel the workflow, notify the user, adjust limits).
-- **`CompactionEvent`** -- Coordinates context compaction between the operator and the state store.
-- **`ObservableEvent`** -- General-purpose observable events for telemetry and monitoring.
+- **`CompactionPolicy`** -- An advisory per-message hint consumed by compaction code in the runtime or orchestration layers.
 
-These events are the glue between protocols. They carry information across boundaries that individual protocols cannot see.
+Lifecycle coordination, telemetry streams, and observation/intervention mechanics live above Layer 0 unless they are later promoted into a real cross-boundary contract.

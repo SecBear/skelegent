@@ -29,9 +29,10 @@ pub struct CompileConfig {
 
 /// A snapshot of context compiled for inference.
 ///
-/// Produced by [`Context::compile()`]. This is the explicit phase boundary
-/// between assembly and inference. Rules with `Before(Infer)` triggers
-/// should be used to modify context before calling compile.
+/// Produced by [`Context::compile()`]. This snapshots context for a later
+/// provider call, but it is not itself the governed inference boundary.
+/// Runtime loops should target [`crate::InferBoundary`] or
+/// [`crate::StreamInferBoundary`] for pre-inference rules.
 pub struct CompiledContext {
     /// The inference request ready to send.
     pub request: InferRequest,
@@ -77,8 +78,10 @@ impl InferResult {
 impl Context {
     /// Compile the current context into an inference request.
     ///
-    /// This is the phase boundary between assembly and inference. The context
-    /// is NOT consumed — you can compile multiple times (e.g., for retry).
+    /// This snapshots the current assembled context into a provider request.
+    /// The actual governed inference boundary is `InferBoundary` /
+    /// `StreamInferBoundary`, not `compile()` itself. The context is NOT
+    /// consumed — you can compile multiple times (e.g., for retry).
     ///
     /// Messages are cloned into the request. The context continues to exist
     /// for post-inference operations.

@@ -21,6 +21,8 @@ Then change the code. Do not let code drift from the architecture.
 **Authority**: Architecture > Specs (`specs/`) > Rules (`rules/`) > Agent
 judgment. Higher authority wins. A spec may refine but not contradict a position.
 
+**Decision surface map**: `docs/design/23-decision-surface.md` is the concrete inventory of where each golden decision currently lives: Layer 0 noun, turn-local knob, orchestration knob, and backend implementation point. Use it to normalize configuration surfaces without expanding Layer 0 speculatively.
+
 ---
 
 ## Core Values
@@ -140,9 +142,7 @@ acknowledged.
 **Model selection**: Turn-owned. Single through three-tier routing supported,
 not mandated.
 
-**Durability**: Orchestration-owned. The turn cooperates via heartbeat hooks.
-Local orchestration: no durability. Durable orchestration: checkpoint or replay.
-Same operator works in both — deployment choice, not code change.
+**Durability**: Orchestration-owned. The turn cooperates by respecting orchestration-controlled boundaries and explicit lifecycle outcomes. Local orchestration has no durability. Durable orchestration adds a run/control layer above Layer 0 for starting, inspecting, signalling, resuming, and cancelling long-lived runs. Recovery internals — replay, checkpoints, journals, leases, and storage schema — remain backend-specific. The same operator works in both deployments; durability is a deployment and infrastructure choice, not an operator-level change.
 
 **Retry**: Orchestration-owned. Turn classifies errors as retryable or not
 (budget exhaustion and safety refusals: never retry). A single retry
@@ -240,10 +240,7 @@ turns, write important state to persistent storage. On termination, capture work
 product before the context window is destroyed. This is the single most critical
 lifecycle mechanism for long-running agents.
 
-**Compaction**: Three-way coordination between turn (detects pressure, executes
-summarization), orchestration (may continue-as-new), and state (persists
-results). Summarization is the default. The compaction reserve must never be
-zero. `sliding_window` and `policy_trim` strategies are implemented, with
+**Compaction**: Coordination lives above Layer 0. The turn/runtime detects pressure and runs summarization, orchestration may continue-as-new, and state persists results. Layer 0 carries only the message-level hints that travel with the data (`Message` from `layer0::context`, `CompactionPolicy`). Summarization is the default. The compaction reserve must never be zero. `sliding_window` and `policy_trim` strategies are implemented, with
 LLM-driven `summarize` and `extract_cognitive_state` available. Tiered/zone-based
 compaction is tracked in `TODO-aspirational.md` as future work.
 Recursive summarization degradation is a documented failure mode: summarizing
@@ -255,14 +252,11 @@ because they share the same dependency footprint and type universe as the contex
 itself. Pre-built strategies (sliding window, policy-aware trim, summarize-and-replace)
 compose with any StateStore backend.
 
-**Crash recovery**: Entangled with orchestration by design. Local: no recovery,
-acceptable for short tasks. Durable: replay recovery. The same operator works
-in both. This entanglement is architectural, not incidental — we accept it
-rather than fighting it with leaky abstractions.
+**Crash recovery**: Entangled with orchestration by design, but not with a single universal substrate. Local orchestration provides no recovery — acceptable for short tasks. Durable orchestration adds a run/control layer above Layer 0 and may recover through backend-specific replay, checkpoints, journals, leases, or platform-native history. Public contracts should describe run lifecycle and control semantics; backend recovery internals stay below that boundary. The same operator works in both deployments.
 
-**Budget governance**: Single authority. The turn emits cost events.
-Orchestration tracks aggregate cost. The lifecycle coordinator makes
-halt/continue/downgrade decisions. Planners observe remaining budget (read-only).
+**Budget governance**: Single authority, but current enforcement is runtime-local.
+The turn/runtime currently enforces local cost, turn, duration, and tool-call limits via `BudgetGuard` at governed runtime boundaries. Budget-triggered stops surface as structured exits (`MaxTurns`, `BudgetExhausted`, `Timeout`) in the plain ReAct loops, while broader halt/continue/downgrade policy belongs to orchestration above Layer 0 unless/until it becomes a real cross-boundary contract.
+Planners observe remaining budget (read-only).
 
 **Observability**: Cross-cutting. Within an operator, the context stream
 provides full-fidelity real-time visibility into every context mutation and
