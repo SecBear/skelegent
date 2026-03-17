@@ -54,6 +54,12 @@ pub trait SecretMiddleware: Send + Sync {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // SECRET STACK (composed middleware chain)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

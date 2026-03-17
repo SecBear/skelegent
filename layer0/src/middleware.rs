@@ -136,6 +136,12 @@ pub trait ExecMiddleware: Send + Sync {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // DISPATCH STACK (composed middleware chain)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -241,6 +247,12 @@ impl DispatchNext for DispatchChain<'_> {
         self.layers[self.index].dispatch(ctx, input, &next).await
     }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // STORE STACK (composed middleware chain)
@@ -395,6 +407,12 @@ impl StoreReadNext for StoreReadChain<'_> {
         self.layers[self.index].read(scope, key, &next).await
     }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // EXEC STACK (composed middleware chain)

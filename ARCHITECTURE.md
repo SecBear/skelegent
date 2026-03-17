@@ -388,3 +388,67 @@ synchronized registries, and collapses when the descriptor language can't
 express what the actual code can. If you need richer per-dispatch
 customization than `OperatorConfig` provides, add a field to `OperatorConfig`
 (it is `#[non_exhaustive]`), not a descriptor language.
+
+---
+
+## Middleware Blueprint
+
+Six middleware stacks protect six protocol boundaries. Each stack follows the
+same structural pattern. The traits are hand-written per boundary because each
+boundary has a unique method signature — dispatch takes `(ctx, input) → Handle`,
+infer takes `request → Response`, store has separate `read` and `write`, etc.
+Rust's type system prevents a single generic middleware trait across these
+signatures. This is intentional: **type safety at each boundary IS the value.**
+
+### Where stacks live
+
+| Crate | Stacks | Boundaries |
+|---|---|---|
+| `layer0` | `DispatchStack`, `StoreStack`, `ExecStack` | Protocol boundaries (dispatch, state, environment) |
+| `skg-turn` | `InferStack`, `EmbedStack` | Provider boundaries (inference, embedding) |
+| `skg-secret` | `SecretStack` | Secret boundary (secret resolution) |
+
+### The pattern
+
+Every stack is built from the same five components. When adding a new boundary,
+replicate this template:
+
+1. **`*Next` trait** — Continuation to the next layer. One async method matching
+   the boundary's signature. Implementing types: the chain struct and the
+   terminal (the real service).
+
+2. **`*Middleware` trait** — Wraps the call with a `next: &dyn *Next` parameter
+   for continuation-passing. Code before `next` = pre-processing. Code after
+   `next` = post-processing. Not calling `next` = short-circuit.
+
+3. **`*Stack` struct** — `{ layers: Vec<Arc<dyn *Middleware>> }`. Holds the
+   composed chain. Provides `*_with()` to run a request through the chain.
+
+4. **`*StackBuilder`** — `{ observers, transformers, guards }` with `.observe()`,
+   `.transform()`, `.guard()`, `.build()`. Enforces ordering at construction.
+
+5. **`*Chain` struct** — Internal (not `pub`). Links middleware to next via
+   `index + terminal`. Implements `*Next` so each layer sees the remainder of
+   the chain as its continuation.
+
+The `*_with()` method on the stack runs the request through the chain. If the
+stack is empty, it calls the terminal directly (zero overhead).
+
+### Ordering contract
+
+Stacking order is fixed at build time:
+
+```
+Observers (outermost) → Transformers → Guards (innermost) → Terminal
+```
+
+- **Observers** always run, always call `next`. They see every request and
+  response, even when a guard short-circuits. Use for: logging, metrics,
+  audit trails.
+- **Transformers** may modify the request or response, always call `next`.
+  Use for: input normalization, encryption, model overrides.
+- **Guards** may short-circuit by returning an error without calling `next`.
+  Use for: budget enforcement, content filtering, access control.
+
+This ordering means observers see the original request, transformers shape it,
+and guards make the final accept/reject decision on the transformed input.

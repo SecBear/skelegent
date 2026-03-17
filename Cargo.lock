@@ -2711,6 +2711,7 @@ dependencies = [
  "skg-provider-codex",
  "skg-provider-ollama",
  "skg-provider-openai",
+ "skg-secret",
  "skg-state-fs",
  "skg-state-memory",
  "skg-tool",

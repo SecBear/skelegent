@@ -79,6 +79,12 @@ pub trait EmbedMiddleware: Send + Sync {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // INFER STACK (composed middleware chain)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -179,6 +185,12 @@ impl InferNext for InferChain<'_> {
         self.layers[self.index].infer(request, &next).await
     }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // EMBED STACK (composed middleware chain)
