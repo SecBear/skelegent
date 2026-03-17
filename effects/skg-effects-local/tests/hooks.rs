@@ -5,7 +5,7 @@ use layer0::error::{OrchError, StateError};
 use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
-use layer0::state::{Lifetime, StateStore, StoreOptions};
+use layer0::state::{Lifetime, MemoryLink, StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
 use serde_json::json;
 use skg_effects_core::Signalable;
@@ -362,5 +362,40 @@ async fn lifetime_guardrail_blocks_transient_write() {
         got,
         Some(serde_json::json!("should_land")),
         "durable write must succeed"
+    );
+}
+
+/// Effect::LinkMemory creates a graph link that is traversable via the store.
+#[tokio::test]
+async fn link_memory_effect_creates_graph_link() {
+    let state = Arc::new(InMemoryStore::new());
+    let orch = Arc::new(NoOpOrch);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>));
+
+    let outcome = handler
+        .handle(
+            &Effect::LinkMemory {
+                scope: Scope::Global,
+                link: MemoryLink::new("notes/meeting", "decisions/arch", "references"),
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "LinkMemory must produce Applied outcome"
+    );
+
+    // Verify the link was created by traversing from the source key.
+    let reachable = state
+        .traverse(&Scope::Global, "notes/meeting", Some("references"), 1)
+        .await
+        .expect("traverse ok");
+    assert_eq!(
+        reachable,
+        vec!["decisions/arch"],
+        "link must be traversable from source to target"
     );
 }

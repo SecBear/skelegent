@@ -1683,3 +1683,92 @@ async fn collect_all_returns_error_on_failure() {
     let err = handle.collect_all().await.unwrap_err();
     assert!(matches!(err, OrchError::DispatchFailed(_)));
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Graph operations on InMemoryStore
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[cfg(feature = "test-utils")]
+mod graph_tests {
+    use layer0::effect::Scope;
+    use layer0::state::{MemoryLink, StateStore};
+    use layer0::test_utils::InMemoryStore;
+
+    #[tokio::test]
+    async fn graph_link_and_traverse() {
+        let store = InMemoryStore::new();
+        let scope = Scope::Global;
+
+        // a -> b -> c
+        store
+            .link(&scope, &MemoryLink::new("a", "b", "related"))
+            .await
+            .unwrap();
+        store
+            .link(&scope, &MemoryLink::new("b", "c", "related"))
+            .await
+            .unwrap();
+
+        // depth 1: only b reachable from a
+        let depth1 = store.traverse(&scope, "a", None, 1).await.unwrap();
+        assert_eq!(depth1, vec!["b"]);
+
+        // depth 2: b and c reachable from a
+        let mut depth2 = store.traverse(&scope, "a", None, 2).await.unwrap();
+        depth2.sort();
+        assert_eq!(depth2, vec!["b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn graph_unlink_removes_edge() {
+        let store = InMemoryStore::new();
+        let scope = Scope::Global;
+
+        store
+            .link(&scope, &MemoryLink::new("x", "y", "depends_on"))
+            .await
+            .unwrap();
+
+        let before = store.traverse(&scope, "x", None, 1).await.unwrap();
+        assert_eq!(before, vec!["y"]);
+
+        store.unlink(&scope, "x", "y", "depends_on").await.unwrap();
+
+        let after = store.traverse(&scope, "x", None, 1).await.unwrap();
+        assert!(after.is_empty(), "unlink must remove the edge");
+    }
+
+    #[tokio::test]
+    async fn graph_traverse_filters_by_relation() {
+        let store = InMemoryStore::new();
+        let scope = Scope::Global;
+
+        store
+            .link(&scope, &MemoryLink::new("a", "b", "references"))
+            .await
+            .unwrap();
+        store
+            .link(&scope, &MemoryLink::new("a", "c", "supersedes"))
+            .await
+            .unwrap();
+
+        // Filter by "references" — only b
+        let refs = store
+            .traverse(&scope, "a", Some("references"), 1)
+            .await
+            .unwrap();
+        assert_eq!(refs, vec!["b"]);
+
+        // Filter by "supersedes" — only c
+        let sups = store
+            .traverse(&scope, "a", Some("supersedes"), 1)
+            .await
+            .unwrap();
+        assert_eq!(sups, vec!["c"]);
+
+        // No filter — both b and c
+        let mut all = store.traverse(&scope, "a", None, 1).await.unwrap();
+        all.sort();
+        assert_eq!(all, vec!["b", "c"]);
+    }
+}
