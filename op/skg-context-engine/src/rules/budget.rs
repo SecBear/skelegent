@@ -140,7 +140,7 @@ impl ContextOp for BudgetGuard {
                 "budget guard: tool call limit exceeded"
             );
             return Err(Self::exit(
-                ExitReason::MaxTurns,
+                ExitReason::BudgetExhausted,
                 format!(
                     "tool call limit exceeded: {} >= {}",
                     ctx.metrics.tool_calls_total, max_tool_calls
@@ -250,5 +250,21 @@ mod tests {
 
         let err = guard.execute(&mut ctx).await.unwrap_err();
         assert_exit(err, ExitReason::Timeout);
+    }
+    #[tokio::test]
+    async fn budget_guard_tool_limit_returns_budget_exhausted_not_max_turns() {
+        let mut ctx = Context::new();
+        ctx.metrics.tool_calls_total = 20;
+        ctx.metrics.turns_completed = 0;
+
+        let guard = BudgetGuard::with_config(BudgetGuardConfig {
+            max_cost: None,
+            max_turns: None,
+            max_duration: None,
+            max_tool_calls: Some(10),
+        });
+
+        let err = guard.execute(&mut ctx).await.unwrap_err();
+        assert_exit(err, ExitReason::BudgetExhausted);
     }
 }
