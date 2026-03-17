@@ -13,8 +13,11 @@
 //! - [`SecretRegistry`] dispatches by [`SecretSource`] variant, following the same
 //!   composition pattern as `ToolRegistry`.
 
+pub mod middleware;
+
 use async_trait::async_trait;
 use layer0::secret::SecretSource;
+use middleware::SecretNext;
 use std::sync::Arc;
 use std::time::SystemTime;
 use thiserror::Error;
@@ -214,6 +217,7 @@ impl SourceMatcher {
 pub struct SecretRegistry {
     resolvers: Vec<(SourceMatcher, Arc<dyn SecretResolver>)>,
     event_sink: Option<Arc<dyn SecretEventSink>>,
+    middleware: Option<middleware::SecretStack>,
 }
 
 impl SecretRegistry {
@@ -222,6 +226,7 @@ impl SecretRegistry {
         Self {
             resolvers: Vec::new(),
             event_sink: None,
+            middleware: None,
         }
     }
 
@@ -238,6 +243,16 @@ impl SecretRegistry {
     /// Set the event sink for audit logging.
     pub fn with_event_sink(mut self, sink: Arc<dyn SecretEventSink>) -> Self {
         self.event_sink = Some(sink);
+        self
+    }
+
+    /// Set the middleware stack for secret resolution.
+    ///
+    /// When set, all `resolve()` calls pass through the middleware chain
+    /// before reaching the resolver backend. When not set, resolvers are
+    /// called directly (zero cost).
+    pub fn with_middleware(mut self, stack: middleware::SecretStack) -> Self {
+        self.middleware = Some(stack);
         self
     }
 
@@ -306,10 +321,31 @@ impl SecretRegistry {
 
 #[async_trait]
 impl SecretResolver for SecretRegistry {
-    /// Route to the matching resolver. No audit event -- use `resolve_named()`
-    /// when you have a credential name for proper audit logging.
+    /// Route to the matching resolver, passing through middleware if configured.
+    ///
+    /// No audit event — use `resolve_named()` when you have a credential name
+    /// for proper audit logging.
     async fn resolve(&self, source: &SecretSource) -> Result<SecretLease, SecretError> {
-        for (matcher, resolver) in &self.resolvers {
+        let terminal = RegistryTerminal {
+            resolvers: &self.resolvers,
+        };
+        match &self.middleware {
+            Some(stack) => stack.resolve_with(source, &terminal).await,
+            None => terminal.resolve(source).await,
+        }
+    }
+}
+
+/// Internal terminal that adapts the registry's resolver chain into a
+/// [`SecretNext`](middleware::SecretNext) for middleware stacks.
+struct RegistryTerminal<'a> {
+    resolvers: &'a [(SourceMatcher, Arc<dyn SecretResolver>)],
+}
+
+#[async_trait]
+impl middleware::SecretNext for RegistryTerminal<'_> {
+    async fn resolve(&self, source: &SecretSource) -> Result<SecretLease, SecretError> {
+        for (matcher, resolver) in self.resolvers {
             if matcher.matches(source) {
                 return resolver.resolve(source).await;
             }
