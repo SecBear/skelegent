@@ -1,8 +1,8 @@
 //! [`DispatchRecorder`] — records dispatch operations via [`DispatchMiddleware`].
 
-use crate::{Boundary, RecordContext, RecordEntry, RecordSink};
+use crate::{Boundary, RecordContext, RecordEntry, RecordSink, SCHEMA_VERSION};
 use async_trait::async_trait;
-use layer0::dispatch::DispatchHandle;
+use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::dispatch_context::DispatchContext;
 use layer0::error::OrchError;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
@@ -18,20 +18,14 @@ use std::time::Instant;
 ///
 /// Captures two entries per dispatch:
 /// - [`Phase::Pre`](crate::Phase::Pre) — before calling `next`, with the serialized [`OperatorInput`]
-/// - [`Phase::Post`](crate::Phase::Post) — after `next` returns, with duration and any error
+/// - [`Phase::Post`](crate::Phase::Post) — recorded asynchronously via [`DispatchHandle::intercept`]
+///   when the [`DispatchEvent::Completed`] terminal event arrives, carrying the actual
+///   [`layer0::operator::OperatorOutput`] as its payload. For dispatches that return an
+///   immediate error (before a handle is returned), Post is recorded synchronously with the
+///   error information.
 ///
 /// The [`RecordContext`] is populated from the [`DispatchContext`]:
 /// `trace_id`, `operator_id`, and `dispatch_id`.
-///
-/// # Dispatch Post-Phase Payload Limitation
-///
-/// The Post-phase payload for a successful dispatch is `{"status": "dispatched"}`, NOT the
-/// actual [`OperatorOutput`]. This is a fundamental limitation: [`DispatchMiddleware`] returns
-/// a [`DispatchHandle`] immediately, and the actual output arrives asynchronously through
-/// [`DispatchEvent::Completed`](layer0::dispatch::DispatchEvent::Completed) on that handle.
-/// The recorder middleware has no way to await the handle without breaking the streaming
-/// protocol. The replay engine (`skg-hook-replay`) must construct its own output independently
-/// and does not rely on the recorder's Post-phase payload for dispatch entries.
 pub struct DispatchRecorder {
     sink: Arc<dyn RecordSink>,
 }
@@ -72,25 +66,45 @@ impl DispatchMiddleware for DispatchRecorder {
         let result = next.dispatch(ctx, input).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Post-phase: record outcome.
-        // NOTE: We cannot capture the actual OperatorOutput here because DispatchHandle is
-        // async — the output arrives later via DispatchEvent::Completed. See type-level docs.
-        let post_payload = match &result {
-            Ok(_) => serde_json::json!({"status": "dispatched"}),
-            Err(e) => serde_json::json!({"error": e.to_string()}),
-        };
-        let error = result.as_ref().err().map(|e| e.to_string());
-        self.sink
-            .record(RecordEntry::post(
-                Boundary::Dispatch,
-                record_ctx,
-                post_payload,
-                duration_ms,
-                error,
-            ))
-            .await;
-
-        result
+        match result {
+            Err(e) => {
+                // Immediate failure — record Post synchronously with the error.
+                let error_str = e.to_string();
+                self.sink
+                    .record(RecordEntry::post(
+                        Boundary::Dispatch,
+                        record_ctx,
+                        serde_json::json!({"error": error_str}),
+                        duration_ms,
+                        Some(error_str),
+                    ))
+                    .await;
+                Err(e)
+            }
+            Ok(handle) => {
+                // Success — use intercept() to capture the Completed event asynchronously.
+                // The Post-phase entry is written when the terminal event arrives on the handle.
+                let sink = self.sink.clone();
+                let intercepted = handle.intercept(move |event| {
+                    if let DispatchEvent::Completed { output } = event {
+                        let payload =
+                            serde_json::to_value(output).unwrap_or(serde_json::Value::Null);
+                        let entry = RecordEntry {
+                            boundary: Boundary::Dispatch,
+                            phase: crate::Phase::Post,
+                            context: record_ctx.clone(),
+                            payload_json: payload,
+                            duration_ms: Some(duration_ms),
+                            error: None,
+                            version: SCHEMA_VERSION,
+                        };
+                        let sink = sink.clone();
+                        tokio::spawn(async move { sink.record(entry).await });
+                    }
+                });
+                Ok(intercepted)
+            }
+        }
     }
 }
 
@@ -140,8 +154,11 @@ mod tests {
         let ctx = DispatchContext::new(DispatchId::new("d-001"), OperatorId::from("my-op"));
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
 
-        let result = recorder.dispatch(&ctx, input, &EchoNext).await;
-        assert!(result.is_ok());
+        let handle = recorder.dispatch(&ctx, input, &EchoNext).await.unwrap();
+        // Consume the handle so the intercept task flushes the Completed event.
+        let _ = handle.collect().await.unwrap();
+        // Yield to allow the spawned sink.record() task to complete.
+        tokio::task::yield_now().await;
 
         let entries = sink.entries().await;
         assert_eq!(entries.len(), 2, "expected pre + post entries");
@@ -157,7 +174,40 @@ mod tests {
         assert_eq!(entries[1].boundary, Boundary::Dispatch);
         assert!(entries[1].duration_ms.is_some());
         assert!(entries[1].error.is_none());
-        assert_eq!(entries[1].payload_json["status"], "dispatched");
+        // Post-phase now carries the actual OperatorOutput instead of {"status": "dispatched"}.
+        // The output message is "hello" echoed back by EchoNext.
+        assert!(entries[1].payload_json.is_object());
+        assert!(
+            entries[1].payload_json.get("status").is_none(),
+            "old stub payload must not appear"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_recorder_post_contains_operator_output() {
+        let sink = Arc::new(InMemorySink::new());
+        let recorder = DispatchRecorder::new(sink.clone());
+
+        let ctx = DispatchContext::new(DispatchId::new("d-002"), OperatorId::from("echo-op"));
+        let input = OperatorInput::new(Content::text("world"), TriggerType::User);
+
+        let handle = recorder.dispatch(&ctx, input, &EchoNext).await.unwrap();
+        let output = handle.collect().await.unwrap();
+        tokio::task::yield_now().await;
+
+        assert_eq!(output.message.as_text().unwrap(), "world");
+
+        let entries = sink.entries().await;
+        assert_eq!(entries.len(), 2);
+        let post = &entries[1];
+        assert_eq!(post.phase, Phase::Post);
+        // The payload should be a serialized OperatorOutput (has "message" and "exit_reason" fields).
+        assert!(
+            post.payload_json.get("message").is_some()
+                || post.payload_json.get("exit_reason").is_some(),
+            "post payload should contain OperatorOutput fields, got: {}",
+            post.payload_json
+        );
     }
 
     #[tokio::test]

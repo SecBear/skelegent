@@ -29,6 +29,7 @@ use skg_turn::embedding::{EmbedRequest, EmbedResponse};
 use skg_turn::infer::{InferRequest, InferResponse};
 use skg_turn::infer_middleware::{EmbedNext, EmbedStack, InferNext, InferStack};
 use skg_turn::provider::{Provider, ProviderError};
+use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 
 // ---------------------------------------------------------------------------
 // DynProvider — object-safe wrapper
@@ -351,6 +352,68 @@ impl Provider for MiddlewareProvider {
         request: EmbedRequest,
     ) -> impl Future<Output = Result<EmbedResponse, ProviderError>> + Send {
         self.embed_via_stack(request)
+    }
+}
+
+impl StreamProvider for MiddlewareProvider {
+    /// Run streaming inference through the middleware stack.
+    ///
+    /// Converts the [`StreamRequest`] to an [`InferRequest`], runs it through
+    /// the full [`InferStack`] (guards, transformers, observers), then forwards
+    /// the result to [`infer_stream_fallback`] which emits the response as
+    /// streaming events via `on_event`.
+    ///
+    /// This ensures all InferMiddleware (logging, caching, guardrails) applies
+    /// to streaming calls. Providers that support native streaming are used
+    /// via the fallback path — they will emit incremental events if they
+    /// implement [`StreamProvider`] directly; otherwise a single `Done` event
+    /// is emitted. The InferStack always fires in either case.
+    ///
+    /// # Note on native streaming
+    ///
+    /// The inner provider is held as `Box<dyn DynProvider>` which is not
+    /// object-safe for RPITIT traits like `StreamProvider`. If the inner
+    /// provider supports native streaming, use it directly (not wrapped in
+    /// `MiddlewareProvider`) or add a `DynStreamProvider` extension when
+    /// incremental streaming through middleware is required.
+    fn infer_stream(
+        &self,
+        request: StreamRequest,
+        on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
+    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
+        // Convert StreamRequest → InferRequest, run through the InferStack,
+        // then use the fallback which wraps the response in stream events.
+        let infer_request = InferRequest {
+            model: request.model,
+            messages: request.messages,
+            tools: request.tools,
+            max_tokens: request.max_tokens,
+            temperature: request.temperature,
+            system: request.system,
+            extra: request.extra,
+        };
+        let stack_future = self.infer_via_stack(infer_request);
+        async move {
+            let response = stack_future.await?;
+            // Emit the response as stream events.
+            if let Some(text) = response.text() {
+                on_event(StreamEvent::TextDelta(text.to_string()));
+            }
+            for (i, call) in response.tool_calls.iter().enumerate() {
+                on_event(StreamEvent::ToolCallStart {
+                    index: i,
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                });
+                on_event(StreamEvent::ToolCallDelta {
+                    index: i,
+                    json_delta: call.input.to_string(),
+                });
+            }
+            on_event(StreamEvent::Usage(response.usage.clone()));
+            on_event(StreamEvent::Done(response.clone()));
+            Ok(response)
+        }
     }
 }
 

@@ -371,6 +371,55 @@ impl DispatchHandle {
         }
     }
 
+    /// Wrap this handle with an event interceptor.
+    ///
+    /// Creates a new channel pair and spawns a background task that reads
+    /// events from the inner handle, passes each to the interceptor callback,
+    /// and forwards to the new channel. The returned handle has the same API
+    /// surface — consumers (including A2A server) work transparently.
+    ///
+    /// The interceptor sees every event (`Progress`, `ArtifactProduced`, `Completed`,
+    /// `Failed`, `EffectEmitted`) before it reaches the consumer. It cannot modify
+    /// or block events — use middleware guards for that.
+    ///
+    /// Cancellation is propagated: if the outer (returned) handle is cancelled,
+    /// the cancellation is forwarded to the inner handle's sender.
+    pub fn intercept<F>(self, f: F) -> Self
+    where
+        F: Fn(&DispatchEvent) + Send + Sync + 'static,
+    {
+        let (new_handle, sender) = Self::channel(self.id.clone());
+        // Subscribe to cancellation on the *new* handle so we can forward it.
+        let mut outer_cancel = new_handle.cancel_tx.subscribe();
+        let mut inner = self;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    // Propagate outer cancellation into the inner handle.
+                    result = outer_cancel.changed() => {
+                        if result.is_ok() && *outer_cancel.borrow() {
+                            inner.cancel();
+                        }
+                        // Don't break here — keep draining events until the inner
+                        // sender closes naturally.
+                    }
+                    event = inner.recv() => {
+                        match event {
+                            None => break, // inner sender dropped — done
+                            Some(ev) => {
+                                f(&ev);
+                                if sender.send(ev).await.is_err() {
+                                    break; // consumer dropped outer handle
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        new_handle
+    }
+
     /// Consume all events, preserving intermediate events alongside the final output.
     ///
     /// Unlike [`collect`](Self::collect), this method retains all `Progress`,
@@ -645,5 +694,115 @@ impl std::fmt::Debug for EffectEmitter {
         f.debug_struct("EffectEmitter")
             .field("active", &self.sender.is_some())
             .finish_non_exhaustive()
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TESTS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::content::Content;
+    use crate::id::DispatchId;
+    use crate::operator::OperatorOutput;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
+
+    /// Helper: create a handle that immediately emits the given events then completes.
+    fn make_handle_with_events(events: Vec<DispatchEvent>) -> DispatchHandle {
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-intercept"));
+        tokio::spawn(async move {
+            for ev in events {
+                if sender.send(ev).await.is_err() {
+                    return;
+                }
+            }
+        });
+        handle
+    }
+
+    fn progress_event(text: &str) -> DispatchEvent {
+        DispatchEvent::Progress {
+            content: Content::text(text),
+        }
+    }
+
+    fn completed_event() -> DispatchEvent {
+        DispatchEvent::Completed {
+            output: OperatorOutput::new(
+                Content::text("done"),
+                crate::operator::ExitReason::Complete,
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_intercept_sees_all_events() {
+        let counter = Arc::new(AtomicU32::new(0));
+        let c = counter.clone();
+
+        let handle = make_handle_with_events(vec![
+            progress_event("a"),
+            progress_event("b"),
+            progress_event("c"),
+            completed_event(),
+        ]);
+
+        let intercepted = handle.intercept(move |_ev| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let _ = intercepted.collect().await.unwrap();
+
+        // Allow the spawn to flush — the intercept task runs concurrently.
+        tokio::task::yield_now().await;
+
+        // 4 events: 3 progress + 1 completed
+        assert_eq!(counter.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn handle_intercept_transparent_to_consumer() {
+        let handle = make_handle_with_events(vec![
+            progress_event("step1"),
+            progress_event("step2"),
+            completed_event(),
+        ]);
+
+        let intercepted = handle.intercept(|_ev| { /* no-op */ });
+
+        // collect() should still work exactly as without interception.
+        let output = intercepted.collect().await.unwrap();
+        assert_eq!(output.message.as_text().unwrap(), "done");
+    }
+
+    #[tokio::test]
+    async fn handle_intercept_chains() {
+        let counter_a = Arc::new(AtomicU32::new(0));
+        let counter_b = Arc::new(AtomicU32::new(0));
+        let ca = counter_a.clone();
+        let cb = counter_b.clone();
+
+        let handle = make_handle_with_events(vec![progress_event("x"), completed_event()]);
+
+        // Chain two interceptors.
+        let intercepted = handle
+            .intercept(move |_| {
+                ca.fetch_add(1, Ordering::SeqCst);
+            })
+            .intercept(move |_| {
+                cb.fetch_add(1, Ordering::SeqCst);
+            });
+
+        let _ = intercepted.collect().await.unwrap();
+        tokio::task::yield_now().await;
+
+        // Both interceptors see all events: 1 progress + 1 completed = 2 each.
+        assert_eq!(counter_a.load(Ordering::SeqCst), 2);
+        assert_eq!(counter_b.load(Ordering::SeqCst), 2);
     }
 }
