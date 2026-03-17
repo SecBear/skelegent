@@ -365,6 +365,42 @@ async fn lifetime_guardrail_blocks_transient_write() {
     );
 }
 
+/// Handoff must preserve structured JSON state in `input.metadata`.
+#[tokio::test]
+async fn handoff_preserves_structured_state_in_metadata() {
+    let state = Arc::new(InMemoryStore::new());
+    let orch = Arc::new(NoOpOrch);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>));
+
+    let handoff_state = json!({
+        "conversation_id": "abc-123",
+        "context": { "depth": 3, "tags": ["urgent", "follow-up"] },
+        "score": 0.95
+    });
+
+    let outcome = handler
+        .handle(
+            &Effect::Handoff {
+                operator: OperatorId::new("next-op"),
+                state: handoff_state.clone(),
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    match outcome {
+        EffectOutcome::Handoff { operator, input } => {
+            assert_eq!(operator, OperatorId::new("next-op"));
+            assert_eq!(
+                input.metadata, handoff_state,
+                "metadata must carry the original structured JSON, not Null"
+            );
+        }
+        other => panic!("expected Handoff outcome, got {:?}", other),
+    }
+}
+
 /// Effect::LinkMemory creates a graph link that is traversable via the store.
 #[tokio::test]
 async fn link_memory_effect_creates_graph_link() {

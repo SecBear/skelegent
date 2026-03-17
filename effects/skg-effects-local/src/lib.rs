@@ -163,7 +163,7 @@ where
             Effect::Handoff { operator, state } => {
                 let mut input =
                     OperatorInput::new(Content::text(state.to_string()), TriggerType::Task);
-                input.metadata = serde_json::Value::Null;
+                input.metadata = state.clone();
                 Ok(EffectOutcome::Handoff {
                     operator: operator.clone(),
                     input,
