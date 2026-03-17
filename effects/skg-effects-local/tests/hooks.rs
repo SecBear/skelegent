@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
+use layer0::content::Content;
+use layer0::dispatch::Artifact;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OrchError, StateError};
 use layer0::id::DispatchId;
@@ -9,7 +11,7 @@ use layer0::state::{Lifetime, MemoryLink, StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
 use serde_json::json;
 use skg_effects_core::Signalable;
-use skg_effects_core::{EffectHandler, EffectOutcome};
+use skg_effects_core::{EffectHandler, EffectOutcome, UnknownEffectPolicy};
 use skg_effects_local::LocalEffectHandler;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -433,5 +435,50 @@ async fn link_memory_effect_creates_graph_link() {
         reachable,
         vec!["decisions/arch"],
         "link must be traversable from source to target"
+    );
+}
+
+/// Progress and Artifact effects are caller-interpreted (routed via
+/// EffectEmitter → DispatchHandle, not EffectHandler). The handler must
+/// skip them cleanly under `IgnoreAndWarn`.
+#[tokio::test]
+async fn progress_and_artifact_effects_skip_cleanly() {
+    let state = Arc::new(InMemoryStore::new());
+    let orch = Arc::new(NoOpOrch);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_unknown_policy(UnknownEffectPolicy::IgnoreAndWarn);
+
+    // Progress effect must be skipped.
+    let progress_outcome = handler
+        .handle(
+            &Effect::Progress {
+                content: Content::text("step 1"),
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("Progress must not error under IgnoreAndWarn");
+
+    assert!(
+        matches!(progress_outcome, EffectOutcome::Skipped),
+        "Progress effect must produce Skipped, got {:?}",
+        progress_outcome,
+    );
+
+    // Artifact effect must be skipped.
+    let artifact_outcome = handler
+        .handle(
+            &Effect::Artifact {
+                artifact: Artifact::new("art-1", vec![Content::text("hello")]),
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("Artifact must not error under IgnoreAndWarn");
+
+    assert!(
+        matches!(artifact_outcome, EffectOutcome::Skipped),
+        "Artifact effect must produce Skipped, got {:?}",
+        artifact_outcome,
     );
 }

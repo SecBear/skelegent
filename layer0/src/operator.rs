@@ -199,14 +199,31 @@ pub struct OperatorMetadata {
     pub cost: Decimal,
     /// Number of ReAct loop iterations used.
     pub turns_used: u32,
-    /// Record of each sub-dispatch made.
+    /// Record of each sub-dispatch made during this operator execution.
+    ///
+    /// Each entry is a [`SubDispatchRecord`] describing one dispatch call
+    /// (name, duration, success). The `Vec` collects all sub-dispatches
+    /// in invocation order.
+    ///
+    /// The `tools_called` serde alias exists for backwards compatibility —
+    /// early serialized data used that field name before the rename to
+    /// `sub_dispatches`. Existing persisted JSON with `"tools_called"`
+    /// deserializes correctly thanks to this alias.
     #[serde(alias = "tools_called")]
     pub sub_dispatches: Vec<SubDispatchRecord>,
     /// Wall-clock duration of the operator invocation.
     pub duration: DurationMs,
 }
 
-/// Record of a single sub-dispatch within an operator execution.
+/// Metadata for a **single** sub-dispatch made by an operator.
+///
+/// Despite the singular name, instances are collected into
+/// `Vec<SubDispatchRecord>` on [`OperatorMetadata::sub_dispatches`].
+/// The struct is intentionally singular — each value describes exactly
+/// one dispatch call (operator name, wall-clock duration, success flag).
+/// The containing `Vec` represents the full ordered history.
+///
+/// **Not renamed** to preserve semver compatibility.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubDispatchRecord {
