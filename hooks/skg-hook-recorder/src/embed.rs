@@ -1,6 +1,6 @@
 //! [`EmbedRecorder`] — records embedding operations via [`EmbedMiddleware`].
 
-use crate::{Boundary, RecordContext, RecordEntry, RecordSink};
+use crate::{Boundary, RecordEntry, RecordSink, context_from_otel};
 use async_trait::async_trait;
 use skg_turn::embedding::{EmbedRequest, EmbedResponse};
 use skg_turn::infer_middleware::{EmbedMiddleware, EmbedNext};
@@ -18,8 +18,8 @@ use std::time::Instant;
 /// - [`Phase::Pre`](crate::Phase::Pre) — before calling `next`, with the serialized [`EmbedRequest`]
 /// - [`Phase::Post`](crate::Phase::Post) — after `next` returns, with duration and any error
 ///
-/// Uses [`Boundary::Embed`] and [`RecordContext::empty`] since `EmbedMiddleware`
-/// does not receive a dispatch context.
+/// Uses [`Boundary::Embed`] and [`context_from_otel`] to extract trace context
+/// from the ambient OTel span when available, falling back to empty context.
 pub struct EmbedRecorder {
     sink: Arc<dyn RecordSink>,
 }
@@ -45,7 +45,7 @@ impl EmbedMiddleware for EmbedRecorder {
         self.sink
             .record(RecordEntry::pre(
                 Boundary::Embed,
-                RecordContext::empty(),
+                context_from_otel(),
                 payload,
             ))
             .await;
@@ -63,7 +63,7 @@ impl EmbedMiddleware for EmbedRecorder {
         self.sink
             .record(RecordEntry::post(
                 Boundary::Embed,
-                RecordContext::empty(),
+                context_from_otel(),
                 post_payload,
                 duration_ms,
                 error,

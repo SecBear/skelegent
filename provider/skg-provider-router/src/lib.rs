@@ -91,11 +91,20 @@ pub fn box_provider<P: Provider + 'static>(p: P) -> Box<dyn DynProvider> {
 /// Implementations range from static rules (model string → provider index)
 /// to LLM-driven classification (cheap model classifies task, routes to tier).
 pub trait RoutingPolicy: Send + Sync {
-    /// Select a provider index for this request.
+    /// Select a provider index for this infer request.
     ///
     /// Returns an index into the [`RoutingProvider`]'s provider list.
     /// If `None`, the default provider is used.
     fn select(&self, request: &InferRequest) -> Option<usize>;
+
+    /// Select a provider index for this embed request.
+    ///
+    /// Returns an index into the [`RoutingProvider`]'s provider list.
+    /// The default implementation always returns `0`, routing to the first
+    /// provider. Override to route embedding requests to a dedicated backend.
+    fn select_embed(&self, _request: &EmbedRequest) -> usize {
+        0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,12 +208,22 @@ impl RoutingProvider {
         })
     }
 
-    /// Resolve which provider index handles this request.
+    /// Resolve which provider index handles this infer request.
     fn resolve_idx(&self, request: &InferRequest) -> usize {
         self.policy
             .select(request)
             .filter(|&idx| idx < self.providers.len())
             .unwrap_or(self.default_idx)
+    }
+
+    /// Resolve which provider index handles this embed request.
+    fn resolve_embed_idx(&self, request: &EmbedRequest) -> usize {
+        let idx = self.policy.select_embed(request);
+        if idx < self.providers.len() {
+            idx
+        } else {
+            self.default_idx
+        }
     }
 }
 
@@ -216,6 +235,15 @@ impl Provider for RoutingProvider {
         let idx = self.resolve_idx(&request);
         // Safety: idx is bounds-checked in resolve_idx.
         self.providers[idx].infer_boxed(request)
+    }
+
+    fn embed(
+        &self,
+        request: EmbedRequest,
+    ) -> impl Future<Output = Result<EmbedResponse, ProviderError>> + Send {
+        let idx = self.resolve_embed_idx(&request);
+        // Safety: idx is bounds-checked in resolve_embed_idx.
+        self.providers[idx].embed_boxed(request)
     }
 }
 
@@ -494,6 +522,96 @@ mod tests {
 
         let log = calls.lock().unwrap();
         assert_eq!(*log, vec!["only:anything"]);
+    }
+
+    // -- Embed routing -------------------------------------------------------
+
+    /// A provider that supports embedding — records the texts it receives.
+    struct RecordingEmbedProvider {
+        name: String,
+        texts: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingEmbedProvider {
+        fn new(name: impl Into<String>, texts: Arc<Mutex<Vec<String>>>) -> Self {
+            Self {
+                name: name.into(),
+                texts,
+            }
+        }
+    }
+
+    impl Provider for RecordingEmbedProvider {
+        async fn infer(&self, _request: InferRequest) -> Result<InferResponse, ProviderError> {
+            Err(ProviderError::Other("not supported".into()))
+        }
+
+        fn embed(
+            &self,
+            request: EmbedRequest,
+        ) -> impl Future<Output = Result<EmbedResponse, ProviderError>> + Send {
+            use skg_turn::embedding::Embedding;
+            use skg_turn::types::TokenUsage;
+
+            let name = self.name.clone();
+            *self.texts.lock().unwrap() = request.texts.clone();
+            async move {
+                Ok(EmbedResponse {
+                    embeddings: request
+                        .texts
+                        .iter()
+                        .map(|_| Embedding { vector: vec![1.0] })
+                        .collect(),
+                    model: name,
+                    usage: TokenUsage::default(),
+                })
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn routing_provider_routes_embed() {
+        let texts_0 = Arc::new(Mutex::new(Vec::new()));
+        let texts_1 = Arc::new(Mutex::new(Vec::new()));
+
+        let providers: Vec<Box<dyn DynProvider>> = vec![
+            box_provider(RecordingEmbedProvider::new(
+                "embed-backend-0",
+                Arc::clone(&texts_0),
+            )),
+            box_provider(RecordingEmbedProvider::new(
+                "embed-backend-1",
+                Arc::clone(&texts_1),
+            )),
+        ];
+
+        // Policy that routes embed to provider 1 explicitly.
+        struct EmbedToOne;
+        impl RoutingPolicy for EmbedToOne {
+            fn select(&self, _: &InferRequest) -> Option<usize> {
+                None
+            }
+            fn select_embed(&self, _: &EmbedRequest) -> usize {
+                1
+            }
+        }
+
+        let router = RoutingProvider::new(providers, 0, Box::new(EmbedToOne)).unwrap();
+
+        let req = EmbedRequest::new(vec!["hello".into(), "world".into()]);
+        let resp = router.embed(req).await.unwrap();
+
+        // Response should come from provider 1.
+        assert_eq!(resp.model, "embed-backend-1");
+        assert_eq!(resp.embeddings.len(), 2);
+
+        // Provider 0 should NOT have been called.
+        assert!(texts_0.lock().unwrap().is_empty());
+        // Provider 1 should have received our texts.
+        assert_eq!(
+            *texts_1.lock().unwrap(),
+            vec!["hello".to_string(), "world".to_string()]
+        );
     }
 
     // -- MiddlewareProvider tests --------------------------------------------

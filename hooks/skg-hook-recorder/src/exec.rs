@@ -1,6 +1,6 @@
 //! [`ExecRecorder`] — records environment execution operations via [`ExecMiddleware`].
 
-use crate::{Boundary, RecordContext, RecordEntry, RecordSink};
+use crate::{Boundary, RecordEntry, RecordSink, context_from_otel};
 use async_trait::async_trait;
 use layer0::environment::EnvironmentSpec;
 use layer0::error::EnvError;
@@ -19,8 +19,8 @@ use std::time::Instant;
 /// - [`Phase::Pre`](crate::Phase::Pre) — before calling `next`, with the serialized [`OperatorInput`]
 /// - [`Phase::Post`](crate::Phase::Post) — after `next` returns, with duration and any error
 ///
-/// Uses [`Boundary::Exec`] and [`RecordContext::empty`] since exec operations
-/// don't carry a dispatch context.
+/// Uses [`Boundary::Exec`] and [`context_from_otel`] to extract trace context
+/// from the ambient OTel span when available, falling back to empty context.
 pub struct ExecRecorder {
     sink: Arc<dyn RecordSink>,
 }
@@ -47,7 +47,7 @@ impl ExecMiddleware for ExecRecorder {
         self.sink
             .record(RecordEntry::pre(
                 Boundary::Exec,
-                RecordContext::empty(),
+                context_from_otel(),
                 payload,
             ))
             .await;
@@ -64,7 +64,7 @@ impl ExecMiddleware for ExecRecorder {
         self.sink
             .record(RecordEntry::post(
                 Boundary::Exec,
-                RecordContext::empty(),
+                context_from_otel(),
                 post_payload,
                 duration_ms,
                 error,

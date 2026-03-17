@@ -1,6 +1,6 @@
 //! [`StoreRecorder`] — records state store operations via [`StoreMiddleware`].
 
-use crate::{Boundary, RecordContext, RecordEntry, RecordSink};
+use crate::{Boundary, RecordEntry, RecordSink, context_from_otel};
 use async_trait::async_trait;
 use layer0::effect::Scope;
 use layer0::error::StateError;
@@ -20,7 +20,8 @@ use std::time::Instant;
 /// - [`Phase::Post`](crate::Phase::Post) — after `next` returns, with duration and any error
 ///
 /// Writes are recorded with [`Boundary::StoreWrite`]; reads with [`Boundary::StoreRead`].
-/// Both use [`RecordContext::empty`] since store operations don't carry a dispatch context.
+/// Both use [`context_from_otel`] to extract trace context from the ambient OTel span
+/// when available, falling back to empty context.
 pub struct StoreRecorder {
     sink: Arc<dyn RecordSink>,
 }
@@ -51,7 +52,7 @@ impl StoreMiddleware for StoreRecorder {
         self.sink
             .record(RecordEntry::pre(
                 Boundary::StoreWrite,
-                RecordContext::empty(),
+                context_from_otel(),
                 payload,
             ))
             .await;
@@ -68,7 +69,7 @@ impl StoreMiddleware for StoreRecorder {
         self.sink
             .record(RecordEntry::post(
                 Boundary::StoreWrite,
-                RecordContext::empty(),
+                context_from_otel(),
                 post_payload,
                 duration_ms,
                 error,
@@ -92,7 +93,7 @@ impl StoreMiddleware for StoreRecorder {
         self.sink
             .record(RecordEntry::pre(
                 Boundary::StoreRead,
-                RecordContext::empty(),
+                context_from_otel(),
                 payload,
             ))
             .await;
@@ -110,7 +111,7 @@ impl StoreMiddleware for StoreRecorder {
         self.sink
             .record(RecordEntry::post(
                 Boundary::StoreRead,
-                RecordContext::empty(),
+                context_from_otel(),
                 post_payload,
                 duration_ms,
                 error,

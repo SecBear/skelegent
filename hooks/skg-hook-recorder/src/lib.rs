@@ -26,6 +26,8 @@
 //! ```
 
 use async_trait::async_trait;
+use opentelemetry::Context as OtelContext;
+use opentelemetry::trace::TraceContextExt as _;
 use serde::{Deserialize, Serialize};
 
 pub mod dispatch;
@@ -115,6 +117,47 @@ impl RecordContext {
             operator_id: String::new(),
             dispatch_id: String::new(),
         }
+    }
+}
+
+/// Extract a [`RecordContext`] from the ambient OpenTelemetry span.
+///
+/// When an active OTel span exists (e.g. set up by `OtelMiddleware`), this
+/// populates `trace_id` and `dispatch_id` from the span context. The
+/// `operator_id` is left empty because it is not available at the infer/embed
+/// level — only the dispatch-level recorders have that information.
+///
+/// Falls back to [`RecordContext::empty`] when no valid span is active, which
+/// is the common case in unit tests.
+pub fn context_from_otel() -> RecordContext {
+    let cx = OtelContext::current();
+    let span = cx.span();
+    let sc = span.span_context();
+    if sc.is_valid() {
+        RecordContext {
+            trace_id: sc.trace_id().to_string(),
+            operator_id: String::new(), // not available at infer/embed level
+            dispatch_id: sc.span_id().to_string(),
+        }
+    } else {
+        RecordContext::empty()
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TESTS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_from_otel_returns_empty_with_no_active_span() {
+        // In tests there is no active OTel span, so context_from_otel()
+        // must fall back to RecordContext::empty().
+        let ctx = context_from_otel();
+        assert_eq!(ctx, RecordContext::empty());
     }
 }
 
