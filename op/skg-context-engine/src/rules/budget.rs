@@ -87,9 +87,10 @@ impl ContextOp for BudgetGuard {
                 max_cost = %max_cost,
                 "budget guard: cost limit exceeded"
             );
-            return Err(EngineError::Halted {
-                reason: format!("cost budget exceeded: {} > {}", ctx.metrics.cost, max_cost),
-            });
+            return Err(Self::exit(
+                ExitReason::BudgetExhausted,
+                format!("cost budget exceeded: {} > {}", ctx.metrics.cost, max_cost),
+            ));
         }
 
         if let Some(max_turns) = self.config.max_turns
@@ -101,8 +102,9 @@ impl ContextOp for BudgetGuard {
                 max_turns = max_turns,
                 "budget guard: turn limit exceeded"
             );
-            return Err(EngineError::Halted {
-                reason: format!(
+            return Err(Self::exit(
+                ExitReason::MaxTurns,
+                format!(
                     "turn limit exceeded: {} >= {}",
                     ctx.metrics.turns_completed, max_turns
                 ),
@@ -118,8 +120,9 @@ impl ContextOp for BudgetGuard {
                 max_duration_ms = max_duration.as_millis() as u64,
                 "budget guard: duration exceeded"
             );
-            return Err(EngineError::Halted {
-                reason: format!(
+            return Err(Self::exit(
+                ExitReason::Timeout,
+                format!(
                     "duration exceeded: {:?} > {:?}",
                     ctx.metrics.start.elapsed(),
                     max_duration
@@ -136,8 +139,9 @@ impl ContextOp for BudgetGuard {
                 max_tool_calls = max_tool_calls,
                 "budget guard: tool call limit exceeded"
             );
-            return Err(EngineError::Halted {
-                reason: format!(
+            return Err(Self::exit(
+                ExitReason::MaxTurns,
+                format!(
                     "tool call limit exceeded: {} >= {}",
                     ctx.metrics.tool_calls_total, max_tool_calls
                 ),

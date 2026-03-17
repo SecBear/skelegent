@@ -16,45 +16,14 @@ use crate::ops::response::AppendResponse;
 use crate::ops::tool::ExecuteTool;
 use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error};
 use layer0::DispatchContext;
+use layer0::content::Content;
 use layer0::dispatch::EffectEmitter;
 use layer0::duration::DurationMs;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use skg_tool::ToolRegistry;
 use skg_turn::infer::InferResponse;
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
-use std::any::TypeId;
 
-async fn infer_stream_once<P>(
-    ctx: &mut Context,
-    provider: &P,
-    tools: &ToolRegistry,
-    config: &ReactLoopConfig,
-) -> Result<(InferResponse, Vec<StreamEvent>), EngineError>
-where
-    P: StreamProvider,
-{
-    ctx.enter_boundary::<StreamInferBoundary>().await?;
-
-    let compile_config = config.compile_config(tools, ctx);
-    let request = build_stream_request(ctx, &compile_config);
-    let buffered_events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
-    let buffered_for_provider = std::sync::Arc::clone(&buffered_events);
-
-    let response = provider
-        .infer_stream(request, move |event| {
-            buffered_for_provider.lock().unwrap().push(event)
-        })
-        .await
-        .map_err(EngineError::Provider)?;
-
-    ctx.exit_boundary::<StreamInferBoundary>().await?;
-
-    let drained_events = {
-        let mut events = buffered_events.lock().unwrap();
-        std::mem::take(&mut *events)
-    };
-    Ok((response, drained_events))
-}
 ///
 /// Same flow as [`react_loop()`](crate::react_loop) but streams inference
 /// output through `on_event`. Tool dispatch, approval checking, budget guards,
@@ -84,33 +53,40 @@ pub async fn stream_react_loop<P: StreamProvider>(
 ) -> Result<OperatorOutput, EngineError> {
     let on_event = std::sync::Arc::new(on_event);
     loop {
-        // Phase 1: Compile context (re-filter tools each turn)
+        // Enter StreamInferBoundary: drains pending interventions + fires Before rules.
+        // Compile AFTER so any context mutations appear in the request.
+        if let Err(err) = ctx.enter_boundary::<StreamInferBoundary>().await {
+            return structured_exit_output(err, ctx);
+        }
+
+        // Phase 1: Compile context (re-filter tools each turn, after before rules)
         let compile_config = config.compile_config(tools, ctx);
         let request = build_stream_request(ctx, &compile_config);
 
-        // Fire Before<StreamInferBoundary> rules (e.g. budget guard)
-        ctx.fire_before_rules(TypeId::of::<StreamInferBoundary>())
-            .await?;
-
-        // Phase 2: Stream inference
-        let cb = std::sync::Arc::clone(&on_event);
+        // Phase 2: Stream inference — buffer events, emit only after commit.
+        let buffered = std::sync::Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+        let buf_clone = std::sync::Arc::clone(&buffered);
         let response = provider
-            .infer_stream(request, move |e| cb(e))
+            .infer_stream(request, move |e| buf_clone.lock().unwrap().push(e))
             .await
             .map_err(EngineError::Provider)?;
 
-        // Fire After<StreamInferBoundary> rules
-        ctx.fire_after_rules(TypeId::of::<StreamInferBoundary>())
-            .await?;
+        // Exit StreamInferBoundary: fires After rules (before we commit events)
+        if let Err(err) = ctx.exit_boundary::<StreamInferBoundary>().await {
+            return structured_exit_output(err, ctx);
+        }
 
         // Phase 3: Append response to context (rules fire)
         if let Err(err) = ctx.run(AppendResponse::new(response.clone())).await {
             return structured_exit_output(err, ctx);
         }
-        for event in streamed_events {
+        ctx.metrics.turns_completed += 1;
+
+        // Emit buffered events now that the turn is committed
+        let events = std::mem::take(&mut *buffered.lock().unwrap());
+        for event in events {
             on_event(event);
         }
-        ctx.metrics.turns_completed += 1;
 
         // Phase 4: Check if model is done
         if !response.has_tool_calls() {
@@ -199,6 +175,7 @@ mod tests {
     use layer0::{DispatchContext, DispatchId};
     use serde_json::json;
     use skg_tool::{ToolDyn, ToolError, ToolRegistry};
+    use skg_turn::provider::ProviderError;
     use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest, infer_stream_fallback};
     use skg_turn::test_utils::TestProvider;
     use std::pin::Pin;
@@ -343,7 +320,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let output = stream_react_loop(
             &mut ctx,
@@ -352,6 +329,7 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
+            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -385,7 +363,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let output = stream_react_loop(
             &mut ctx,
@@ -394,6 +372,7 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
+            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -448,7 +427,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let events = Arc::new(Mutex::new(Vec::<StreamEvent>::new()));
         let events_clone = Arc::clone(&events);
 
@@ -459,6 +438,7 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             move |event| events_clone.lock().unwrap().push(event),
+            &EffectEmitter::noop(),
         )
         .await
         .expect("append exit should return structured operator output");
@@ -499,7 +479,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let events = Arc::new(Mutex::new(Vec::<StreamEvent>::new()));
         let events_clone = Arc::clone(&events);
 
@@ -510,6 +490,7 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             move |event| events_clone.lock().unwrap().push(event),
+            &EffectEmitter::noop(),
         )
         .await
         .expect("stream exit should return structured operator output");
@@ -535,7 +516,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let err = stream_react_loop(
             &mut ctx,
@@ -544,6 +525,7 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
+            &EffectEmitter::noop(),
         )
         .await
         .unwrap_err();
@@ -579,7 +561,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let output = stream_react_loop(
             &mut ctx,
@@ -588,6 +570,7 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
+            &EffectEmitter::noop(),
         )
         .await
         .expect("budget exits should return structured operator output");
@@ -657,7 +640,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let err = stream_react_loop(
             &mut ctx,
@@ -666,6 +649,7 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
+            &EffectEmitter::noop(),
         )
         .await
         .unwrap_err();

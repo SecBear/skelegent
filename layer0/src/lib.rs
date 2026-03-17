@@ -80,7 +80,7 @@ pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
 pub use id::{DispatchId, OperatorId, SessionId, WorkflowId};
-pub use lifecycle::{BudgetEvent, CompactionEvent, CompactionPolicy};
+pub use lifecycle::CompactionPolicy;
 pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
     StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,

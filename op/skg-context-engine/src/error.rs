@@ -52,6 +52,7 @@ impl std::error::Error for EngineError {
             Self::Tool(e) => Some(e),
             Self::Custom(e) => Some(e.as_ref()),
             Self::Halted { .. } => None,
+            Self::Exit { .. } => None,
         }
     }
 }

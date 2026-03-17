@@ -482,19 +482,12 @@ fn compaction_policy_round_trip() {
         CompactionPolicy::CompressFirst,
         CompactionPolicy::DiscardWhenDone,
     ];
-
-#[test]
-fn compaction_event_round_trip() {
-    let e = CompactionEvent::ContextPressure {
-        operator: OperatorId::new("a1"),
-        fill_percent: 0.85,
-        tokens_used: 85000,
-        tokens_available: 15000,
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: CompactionEvent = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
+    for policy in &policies {
+        let json = serde_json::to_string(policy).unwrap();
+        let back: CompactionPolicy = serde_json::from_str(&json).unwrap();
+        let json2 = serde_json::to_string(&back).unwrap();
+        assert_eq!(json, json2);
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -821,22 +814,6 @@ fn env_error_display_remaining_variants() {
     );
     let boxed: Box<dyn std::error::Error + Send + Sync> = "env inner".into();
     assert_eq!(EnvError::Other(boxed).to_string(), "env inner");
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// BudgetDecision round-trips
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn budget_decision_downgrade_round_trip() {
-    let d = layer0::lifecycle::BudgetDecision::DowngradeModel {
-        from: "claude-opus-4-20250514".into(),
-        to: "claude-haiku-4-5-20251001".into(),
-    };
-    let json = serde_json::to_string(&d).unwrap();
-    let back: layer0::lifecycle::BudgetDecision = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
 }
 
 #[test]

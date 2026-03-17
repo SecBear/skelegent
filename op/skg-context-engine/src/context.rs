@@ -393,28 +393,6 @@ impl Context {
         Ok(())
     }
 
-    /// Drain and execute all pending interventions.
-    ///
-    /// Each intervention is a `Box<dyn ErasedOp>` — any ContextOp sent
-    /// through the intervention channel. They are executed in FIFO order
-    /// as normal context ops (with full `&mut Context` power).
-    async fn drain_interventions(&mut self) -> Result<(), EngineError> {
-        // Take the receiver out to avoid borrow conflict —
-        // execute_erased needs &mut self, but rx is inside self.
-        let mut rx = match self.intervention_rx.take() {
-            Some(rx) => rx,
-            None => return Ok(()),
-        };
-
-        while let Ok(intervention) = rx.try_recv() {
-            intervention.execute_erased(self).await?;
-        }
-
-        // Put it back.
-        self.intervention_rx = Some(rx);
-        Ok(())
-    }
-
     /// Fire rules that match `Before` for the given op type.
     pub(crate) async fn fire_before_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         // Collect indices of matching rules to avoid borrow issues

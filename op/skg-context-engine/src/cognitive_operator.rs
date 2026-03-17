@@ -231,6 +231,9 @@ pub fn map_engine_error(err: EngineError) -> OperatorError {
             }
         }
         EngineError::Halted { reason } => OperatorError::Halted { reason },
+        EngineError::Exit { reason, detail } => OperatorError::Halted {
+            reason: format!("{reason:?}: {detail}"),
+        },
         EngineError::Custom(err) => OperatorError::Other(err),
     }
 }
@@ -348,8 +351,10 @@ mod tests {
             .execute(simple_input("hi"), &test_ctx(), &EffectEmitter::noop())
             .await;
 
-        // Budget guard halts before first inference via Before<InferBoundary>.
-        assert!(result.is_err());
+        // Budget guard returns a structured exit (MaxTurns) — not an error.
+        // ExitReason::MaxTurns is an expected termination, not a failure.
+        let output = result.unwrap();
+        assert_eq!(output.exit_reason, layer0::operator::ExitReason::MaxTurns);
     }
 
     // ── allowed_operators filtering ────────────────────────────────────────
