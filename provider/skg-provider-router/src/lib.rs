@@ -796,4 +796,102 @@ mod tests {
         let texts = recorded_texts.lock().unwrap();
         assert_eq!(*texts, vec!["HELLO WORLD"]);
     }
+
+    // -- StreamProvider middleware integration --------------------------------
+
+    /// Middleware fires on the StreamProvider::infer_stream path.
+    #[tokio::test]
+    async fn stream_infer_fires_middleware() {
+        use async_trait::async_trait;
+        use skg_turn::infer_middleware::InferNext;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // -- Stub DynProvider that returns a fixed InferResponse --------
+        struct StubDynProvider;
+
+        impl DynProvider for StubDynProvider {
+            fn infer_boxed(
+                &self,
+                request: InferRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>>
+            {
+                Box::pin(async move {
+                    Ok(InferResponse {
+                        content: Content::text("streamed-ok"),
+                        tool_calls: vec![],
+                        stop_reason: StopReason::EndTurn,
+                        usage: TokenUsage::default(),
+                        model: request.model.unwrap_or_default(),
+                        cost: None,
+                        truncated: None,
+                    })
+                })
+            }
+        }
+
+        // -- Counting middleware that records invocations ----------------
+        struct CountingMiddleware(Arc<AtomicU32>);
+
+        #[async_trait]
+        impl InferMiddleware for CountingMiddleware {
+            async fn infer(
+                &self,
+                request: InferRequest,
+                next: &dyn InferNext,
+            ) -> Result<InferResponse, ProviderError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                next.infer(request).await
+            }
+        }
+
+        let call_count = Arc::new(AtomicU32::new(0));
+
+        let stack = InferStack::builder()
+            .observe(Arc::new(CountingMiddleware(Arc::clone(&call_count))))
+            .build();
+
+        let mp = MiddlewareProvider::new(Box::new(StubDynProvider)).with_infer_stack(stack);
+
+        let infer_req = InferRequest::new(vec![Message::new(Role::User, Content::text("hi"))])
+            .with_model("test-model");
+        let request: StreamRequest = infer_req.into();
+
+        let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+        let events_clone = Arc::clone(&events);
+
+        let response = mp
+            .infer_stream(request, move |event| {
+                let label = match &event {
+                    StreamEvent::TextDelta(t) => format!("text:{t}"),
+                    StreamEvent::Done(_) => "done".into(),
+                    StreamEvent::Usage(_) => "usage".into(),
+                    _ => "other".into(),
+                };
+                events_clone.lock().unwrap().push(label);
+            })
+            .await
+            .unwrap();
+
+        // Middleware was called exactly once.
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+
+        // Response came through.
+        assert_eq!(response.model, "test-model");
+        assert_eq!(response.text().unwrap(), "streamed-ok");
+
+        // Stream events were emitted.
+        let captured = events.lock().unwrap();
+        assert!(
+            captured.iter().any(|e| e.starts_with("text:")),
+            "expected a TextDelta event, got: {captured:?}"
+        );
+        assert!(
+            captured.iter().any(|e| e == "done"),
+            "expected a Done event, got: {captured:?}"
+        );
+        assert!(
+            captured.iter().any(|e| e == "usage"),
+            "expected a Usage event, got: {captured:?}"
+        );
+    }
 }
