@@ -27,5 +27,5 @@ pub use infer_middleware::{
     EmbedMiddleware, EmbedNext, EmbedStack, EmbedStackBuilder, InferMiddleware, InferNext,
     InferStack, InferStackBuilder,
 };
-pub use provider::{Provider, ProviderError};
+pub use provider::{DynProvider, Provider, ProviderError, box_provider};
 pub use types::*;

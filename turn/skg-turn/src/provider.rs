@@ -9,6 +9,7 @@
 use crate::embedding::{EmbedRequest, EmbedResponse};
 use crate::infer::{InferRequest, InferResponse};
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -104,6 +105,71 @@ pub trait Provider: Send + Sync {
             ))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// DynProvider — object-safe companion trait
+// ---------------------------------------------------------------------------
+
+/// Object-safe wrapper for [`Provider`].
+///
+/// You almost never implement this directly — implement [`Provider`] instead.
+/// The blanket impl automatically provides `DynProvider` for any `Provider`.
+///
+/// Use `DynProvider` when you need:
+/// - Heterogeneous collections: `Vec<Box<dyn DynProvider>>`
+/// - Middleware stacks: `MiddlewareProvider` wraps `Box<dyn DynProvider>`
+/// - Runtime provider selection: match on config, get different provider
+pub trait DynProvider: Send + Sync {
+    /// Run inference, returning a boxed future.
+    fn infer_boxed(
+        &self,
+        request: InferRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>>;
+
+    /// Run embedding, returning a boxed future.
+    ///
+    /// Default implementation returns an unsupported error. Override for
+    /// providers that support embedding.
+    fn embed_boxed(
+        &self,
+        _request: EmbedRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<EmbedResponse, ProviderError>> + Send + '_>> {
+        Box::pin(async {
+            Err(ProviderError::Other(
+                "embedding not supported by this provider".into(),
+            ))
+        })
+    }
+}
+
+/// Blanket impl: any [`Provider`] is automatically a [`DynProvider`].
+impl<T: Provider> DynProvider for T {
+    fn infer_boxed(
+        &self,
+        request: InferRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>> {
+        Box::pin(self.infer(request))
+    }
+
+    fn embed_boxed(
+        &self,
+        request: EmbedRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<EmbedResponse, ProviderError>> + Send + '_>> {
+        Box::pin(self.embed(request))
+    }
+}
+
+/// Wrap a concrete [`Provider`] into a `Box<dyn DynProvider>`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use skg_turn::box_provider;
+/// let boxed = box_provider(my_anthropic_provider);
+/// ```
+pub fn box_provider<P: Provider + 'static>(p: P) -> Box<dyn DynProvider> {
+    Box::new(p)
 }
 
 #[cfg(test)]

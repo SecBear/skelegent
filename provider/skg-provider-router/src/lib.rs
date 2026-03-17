@@ -22,7 +22,6 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::pin::Pin;
 
 use async_trait::async_trait;
 use skg_turn::embedding::{EmbedRequest, EmbedResponse};
@@ -31,57 +30,8 @@ use skg_turn::infer_middleware::{EmbedNext, EmbedStack, InferNext, InferStack};
 use skg_turn::provider::{Provider, ProviderError};
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 
-// ---------------------------------------------------------------------------
-// DynProvider — object-safe wrapper
-// ---------------------------------------------------------------------------
-
-/// Object-safe wrapper around [`Provider`].
-///
-/// [`Provider`] uses RPITIT (`-> impl Future`) which prevents `dyn Provider`.
-/// This trait boxes the future so we can store heterogeneous providers in a `Vec`.
-pub trait DynProvider: Send + Sync {
-    /// Run inference, returning a boxed future.
-    fn infer_boxed(
-        &self,
-        request: InferRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>>;
-
-    /// Run embedding, returning a boxed future.
-    ///
-    /// Default implementation returns an unsupported error. Override for
-    /// providers that support embedding.
-    fn embed_boxed(
-        &self,
-        _request: EmbedRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<EmbedResponse, ProviderError>> + Send + '_>> {
-        Box::pin(async {
-            Err(ProviderError::Other(
-                "embedding not supported by this provider".into(),
-            ))
-        })
-    }
-}
-
-impl<P: Provider> DynProvider for P {
-    fn infer_boxed(
-        &self,
-        request: InferRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>> {
-        Box::pin(self.infer(request))
-    }
-
-    fn embed_boxed(
-        &self,
-        request: EmbedRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<EmbedResponse, ProviderError>> + Send + '_>> {
-        Box::pin(self.embed(request))
-    }
-}
-
-/// Wrap a concrete [`Provider`] into a `Box<dyn DynProvider>`.
-pub fn box_provider<P: Provider + 'static>(p: P) -> Box<dyn DynProvider> {
-    Box::new(p)
-}
+// Re-export DynProvider and box_provider for backwards compatibility.
+pub use skg_turn::provider::{DynProvider, box_provider};
 
 // ---------------------------------------------------------------------------
 // RoutingPolicy
@@ -804,6 +754,8 @@ mod tests {
     async fn stream_infer_fires_middleware() {
         use async_trait::async_trait;
         use skg_turn::infer_middleware::InferNext;
+        use std::future::Future;
+        use std::pin::Pin;
         use std::sync::atomic::{AtomicU32, Ordering};
 
         // -- Stub DynProvider that returns a fixed InferResponse --------
