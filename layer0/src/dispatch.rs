@@ -805,4 +805,57 @@ mod tests {
         assert_eq!(counter_a.load(Ordering::SeqCst), 2);
         assert_eq!(counter_b.load(Ordering::SeqCst), 2);
     }
+
+    #[tokio::test]
+    async fn handle_intercept_propagates_cancellation() {
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("cancel-test"));
+        let s = sender.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let _ = s
+                .send(DispatchEvent::Completed {
+                    output: OperatorOutput::new(
+                        Content::text("should not reach"),
+                        crate::operator::ExitReason::Complete,
+                    ),
+                })
+                .await;
+        });
+        let intercepted = handle.intercept(|_| {});
+        intercepted.cancel();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            sender.is_cancelled(),
+            "inner sender should be cancelled after outer cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_intercept_exits_when_consumer_drops() {
+        let events_seen = Arc::new(AtomicU32::new(0));
+        let seen = events_seen.clone();
+        let handle = make_handle_with_events(vec![
+            progress_event("a"),
+            progress_event("b"),
+            progress_event("c"),
+            completed_event(),
+        ]);
+        let intercepted = handle.intercept(move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        drop(intercepted);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn handle_intercept_panicking_callback_does_not_hang() {
+        let handle = make_handle_with_events(vec![progress_event("a"), completed_event()]);
+        let intercepted = handle.intercept(|_| panic!("boom"));
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(2), intercepted.collect()).await;
+        assert!(
+            result.is_ok(),
+            "collect should not hang when callback panics"
+        );
+    }
 }
