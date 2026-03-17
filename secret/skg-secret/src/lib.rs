@@ -14,10 +14,10 @@
 //!   composition pattern as `ToolRegistry`.
 
 pub mod middleware;
+pub use middleware::{SecretMiddleware, SecretNext, SecretStack, SecretStackBuilder};
 
 use async_trait::async_trait;
 use layer0::secret::SecretSource;
-use middleware::SecretNext;
 use std::sync::Arc;
 use std::time::SystemTime;
 use thiserror::Error;
