@@ -167,7 +167,7 @@ pub fn format_tool_error(e: &EngineError) -> String {
     format!("Error: {e}")
 }
 
-fn structured_exit_output(err: EngineError, ctx: &Context) -> Result<OperatorOutput, EngineError> {
+fn structured_exit_output(err: EngineError, ctx: &mut Context) -> Result<OperatorOutput, EngineError> {
     match err {
         EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
         other => Err(other),
@@ -180,7 +180,7 @@ enum ToolDispatchOutcome {
     Exit(ExitReason),
 }
 
-fn make_context_output(message: Content, exit: ExitReason, ctx: &Context) -> OperatorOutput {
+fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
     let mut output = OperatorOutput::new(message, exit);
     let mut meta = OperatorMetadata::default();
     meta.tokens_in = ctx.metrics.tokens_in;
@@ -189,7 +189,7 @@ fn make_context_output(message: Content, exit: ExitReason, ctx: &Context) -> Ope
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = vec![];
+    output.effects = ctx.drain_effects();
     output
 }
 
@@ -1600,6 +1600,73 @@ mod tests {
         }
     }
 
+    struct AlwaysFailingTool;
+
+    impl ToolDyn for AlwaysFailingTool {
+        fn name(&self) -> &str {
+            "fail"
+        }
+        fn description(&self) -> &str {
+            "always fails"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({ "type": "object" })
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &DispatchContext,
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
+        > {
+            Box::pin(async { Err(ToolError::ExecutionFailed("boom".into())) })
+        }
+    }
+
+    /// Failed tool calls must count toward the tool budget, otherwise a tool
+    /// that always fails causes an infinite loop when `max_tool_calls` is set.
+    #[tokio::test]
+    async fn react_loop_failed_tool_calls_count_toward_budget() {
+        let provider = TestProvider::new();
+        // Provide more responses than needed; budget guard must halt before all are consumed.
+        provider.respond_with_tool_call("fail", "c1", json!({}));
+        provider.respond_with_tool_call("fail", "c2", json!({}));
+        provider.respond_with_tool_call("fail", "c3", json!({}));
+        provider.respond_with_text("should never reach");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(AlwaysFailingTool));
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "budget_guard",
+            100,
+            BudgetGuard::with_config(BudgetGuardConfig {
+                max_cost: None,
+                max_turns: None,
+                max_duration: None,
+                max_tool_calls: Some(3),
+            }),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            output.exit_reason,
+            ExitReason::BudgetExhausted,
+            "loop must exit with BudgetExhausted after 3 failed tool calls"
+        );
+        // Provider was called exactly 3 times (once per tool-call response consumed).
+        assert_eq!(provider.call_count(), 3);
+        assert_eq!(ctx.metrics.tool_calls_total, 3);
+        assert_eq!(ctx.metrics.tool_calls_failed, 3);
+    }
+
     #[test]
     fn test_check_exit_content_filter() {
         let exit = check_exit(&StopReason::ContentFilter);
@@ -1668,5 +1735,55 @@ mod tests {
         let formatted = format_tool_error(&err);
         assert!(formatted.starts_with("Error: "));
         assert!(formatted.contains("something broke"));
+    }
+
+    // Regression test: effects pushed to ctx before a budget-exhausted exit must
+    // appear in the output. Previously make_context_output hardcoded vec![] and
+    // silently dropped them.
+    #[tokio::test]
+    async fn react_loop_budget_exit_preserves_pending_effects() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("should never be used");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "budget_guard",
+            100,
+            BudgetGuard::with_config(BudgetGuardConfig {
+                max_cost: None,
+                max_turns: Some(1),
+                max_duration: None,
+                max_tool_calls: None,
+            }),
+        )]);
+        // Pre-seed an effect that must survive the exit path.
+        ctx.push_effect(Effect::Progress {
+            content: Content::text("sentinel-effect"),
+        });
+        // Trip the budget guard: turns_completed already at limit.
+        ctx.metrics.turns_completed = 1;
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::MaxTurns);
+        assert_eq!(
+            output.effects.len(),
+            1,
+            "effect pushed before budget exit must not be dropped"
+        );
+        match &output.effects[0] {
+            Effect::Progress { content } => {
+                assert_eq!(content.as_text(), Some("sentinel-effect"));
+            }
+            other => panic!("expected Progress effect, got {other:?}"),
+        }
+        // Provider must not have been called — the budget guard fired before inference.
+        assert_eq!(provider.call_count(), 0);
     }
 }

@@ -59,11 +59,9 @@ impl ContextOp for ExecuteTool {
                 reason: format!("unknown tool: {}", self.call.name),
             })?;
 
+        ctx.metrics.tool_calls_total += 1;
         match tool.call(self.call.input.clone(), &self.dispatch_ctx).await {
-            Ok(result_json) => {
-                ctx.metrics.tool_calls_total += 1;
-                Ok(format_tool_result(&result_json))
-            }
+            Ok(result_json) => Ok(format_tool_result(&result_json)),
             Err(e) => {
                 ctx.metrics.tool_calls_failed += 1;
                 Err(e.into())
@@ -183,7 +181,7 @@ mod tests {
         let result = op.execute(&mut ctx).await;
         assert!(result.is_err());
         assert_eq!(ctx.metrics.tool_calls_failed, 1);
-        assert_eq!(ctx.metrics.tool_calls_total, 0);
+        assert_eq!(ctx.metrics.tool_calls_total, 1);
     }
 
     #[tokio::test]

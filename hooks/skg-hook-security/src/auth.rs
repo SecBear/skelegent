@@ -116,7 +116,7 @@ impl AuthGuard {
 ///
 /// Useful for development, testing, or simple deployments where keys are
 /// configured at startup.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StaticKeyValidator {
     keys: HashMap<String, AuthIdentity>,
 }
@@ -145,6 +145,16 @@ impl StaticKeyValidator {
 impl TokenValidator for StaticKeyValidator {
     async fn validate(&self, token: &str) -> Result<AuthIdentity, AuthError> {
         self.keys.get(token).cloned().ok_or(AuthError::InvalidToken)
+    }
+}
+
+impl fmt::Debug for StaticKeyValidator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Deliberately omit key contents — they are secrets.
+        // Only the count is printed so debug output remains diagnostic.
+        f.debug_struct("StaticKeyValidator")
+            .field("keys", &format_args!("<{} keys>", self.keys.len()))
+            .finish()
     }
 }
 
@@ -187,6 +197,17 @@ mod tests {
     async fn static_validator_empty_rejects_all() {
         let v = StaticKeyValidator::empty();
         assert!(v.validate("anything").await.is_err());
+    }
+
+    #[test]
+    fn static_validator_debug_redacts_keys() {
+        let v = test_validator();
+        let s = format!("{v:?}");
+        // Must show key count for diagnostics.
+        assert!(s.contains("<2 keys>"), "expected count in debug: {s}");
+        // Must not leak any actual key material.
+        assert!(!s.contains("valid-key-1"), "key material leaked in debug: {s}");
+        assert!(!s.contains("valid-key-2"), "key material leaked in debug: {s}");
     }
 
     // -- AuthGuard header parsing -------------------------------------------

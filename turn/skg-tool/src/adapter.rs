@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use layer0::operator::Operator;
 use layer0::{
-    Content, DispatchContext, DispatchId, DurationMs, ExitReason, OperatorError, OperatorId,
+    Content, DispatchContext, DurationMs, ExitReason, OperatorError,
     OperatorInput, OperatorOutput, OrchError, SubDispatchRecord, ToolMetadata,
 };
 
@@ -53,14 +53,13 @@ impl Operator for ToolOperator {
     async fn execute(
         &self,
         input: OperatorInput,
-        _ctx: &DispatchContext,
+        ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("null");
         let tool_input: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| OperatorError::non_retryable(format!("invalid tool input JSON: {e}")))?;
 
-        let ctx = DispatchContext::new(DispatchId::new("tool-call"), OperatorId::new("agent"));
-        match self.tool.call(tool_input, &ctx).await {
+        match self.tool.call(tool_input, ctx).await {
             Ok(result) => {
                 let mut output =
                     OperatorOutput::new(Content::text(result.to_string()), ExitReason::Complete);
@@ -149,7 +148,7 @@ mod tests {
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     // ── Minimal test tools ────────────────────────────────────────────────────
 
@@ -202,6 +201,41 @@ mod tests {
 
     fn make_input(json_text: &str) -> OperatorInput {
         OperatorInput::new(Content::text(json_text), TriggerType::Task)
+    }
+
+    /// Records the DispatchContext ids seen by its `call` implementation.
+    /// Used to verify that `ToolOperator::execute` forwards the received ctx.
+    struct CtxCaptureTool {
+        seen: Arc<Mutex<Option<(String, String)>>>,
+    }
+
+    impl ToolDyn for CtxCaptureTool {
+        fn name(&self) -> &str {
+            "capture"
+        }
+        fn description(&self) -> &str {
+            "Captures the DispatchContext it received"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            ctx: &DispatchContext,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
+        {
+            let dispatch_id = ctx.dispatch_id.to_string();
+            let operator_id = ctx.operator_id.to_string();
+            let seen = Arc::clone(&self.seen);
+            Box::pin(async move {
+                *seen.lock().unwrap() = Some((dispatch_id, operator_id));
+                Ok(json!(null))
+            })
+        }
+        fn concurrency_hint(&self) -> ToolConcurrencyHint {
+            ToolConcurrencyHint::Shared
+        }
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -300,5 +334,22 @@ mod tests {
             }
             other => panic!("expected OperatorNotFound, got {other:?}"),
         }
+    }
+
+    /// Regression: ToolOperator::execute must forward the received DispatchContext to
+    /// tool.call(), not fabricate a new one with hardcoded ids.
+    #[tokio::test]
+    async fn tool_operator_forwards_ctx_to_tool() {
+        let seen = Arc::new(Mutex::new(None));
+        let tool = Arc::new(CtxCaptureTool { seen: Arc::clone(&seen) });
+        let op = ToolOperator::new(tool);
+
+        let ctx = DispatchContext::new(DispatchId::new("my-dispatch"), OperatorId::new("my-op"));
+        let input = make_input("{}");
+        op.execute(input, &ctx).await.expect("should succeed");
+
+        let captured = seen.lock().unwrap().take().expect("tool must have been called");
+        assert_eq!(captured.0, "my-dispatch", "dispatch_id was not forwarded");
+        assert_eq!(captured.1, "my-op", "operator_id was not forwarded");
     }
 }
