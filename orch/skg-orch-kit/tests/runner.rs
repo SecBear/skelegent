@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher, EffectEmitter};
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
@@ -52,8 +52,7 @@ impl Dispatcher for SimpleOrch {
         let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
         let ctx = ctx.clone();
         tokio::spawn(async move {
-            let emitter = EffectEmitter::new(sender.clone());
-            match op.execute(input, &ctx, &emitter).await {
+            match op.execute(input, &ctx).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
@@ -149,27 +148,22 @@ impl Operator for WriterOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-        emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
-        let output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
-        emitter
-            .effect(Effect::WriteMemory {
-                scope: Scope::Global,
-                key: "k1".into(),
-                value: json!({"v": 1}),
-                tier: None,
-                lifetime: None,
-                content_kind: None,
-                salience: None,
-                ttl: None,
-            })
-            .await;
-        emitter
-            .effect(Effect::Signal {
-                target: WorkflowId::new("wf1"),
-                payload: SignalPayload::new("sig.type", json!({"ok": true})),
-            })
-            .await;
+        let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
+        output.effects.push(Effect::WriteMemory {
+            scope: Scope::Global,
+            key: "k1".into(),
+            value: json!({"v": 1}),
+            tier: None,
+            lifetime: None,
+            content_kind: None,
+            salience: None,
+            ttl: None,
+        });
+        output.effects.push(Effect::Signal {
+            target: WorkflowId::new("wf1"),
+            payload: SignalPayload::new("sig.type", json!({"ok": true})),
+        });
         Ok(output)
     }
 }
@@ -182,18 +176,15 @@ impl Operator for DelegateOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-        emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
-        let output = OperatorOutput::new(Content::text("delegating"), ExitReason::Complete);
-        emitter
-            .effect(Effect::Delegate {
-                operator: OperatorId::new("child"),
-                input: Box::new(OperatorInput::new(
-                    Content::text("child task"),
-                    TriggerType::Task,
-                )),
-            })
-            .await;
+        let mut output = OperatorOutput::new(Content::text("delegating"), ExitReason::Complete);
+        output.effects.push(Effect::Delegate {
+            operator: OperatorId::new("child"),
+            input: Box::new(OperatorInput::new(
+                Content::text("child task"),
+                TriggerType::Task,
+            )),
+        });
         Ok(output)
     }
 }
@@ -206,7 +197,6 @@ impl Operator for ChildOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         assert_eq!(input.message.as_text().unwrap_or_default(), "child task");
         Ok(OperatorOutput::new(
@@ -224,15 +214,12 @@ impl Operator for HandoffOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-        emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
-        let output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
-        emitter
-            .effect(Effect::Handoff {
-                operator: OperatorId::new("handoff_target"),
-                state: json!({"ticket": 123}),
-            })
-            .await;
+        let mut output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
+        output.effects.push(Effect::Handoff {
+            operator: OperatorId::new("handoff_target"),
+            state: json!({"ticket": 123}),
+        });
         Ok(output)
     }
 }
@@ -245,7 +232,6 @@ impl Operator for HandoffTargetOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         // LocalEffectHandler serializes the JSON state to a string and puts it in message text.
         let text = input.message.as_text().unwrap_or_default();
@@ -265,48 +251,37 @@ impl Operator for FullPipelineRootOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-        emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
-        let output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
-        emitter
-            .effect(Effect::WriteMemory {
-                scope: Scope::Global,
-                key: "k-pipeline".into(),
-                value: json!({"v": 42}),
-                tier: None,
-                lifetime: None,
-                content_kind: None,
-                salience: None,
-                ttl: None,
-            })
-            .await;
-        emitter
-            .effect(Effect::Delegate {
-                operator: OperatorId::new("child"),
-                input: Box::new(OperatorInput::new(
-                    Content::text("child task"),
-                    TriggerType::Task,
-                )),
-            })
-            .await;
-        emitter
-            .effect(Effect::Handoff {
-                operator: OperatorId::new("handoff_target"),
-                state: json!({"ticket": 123}),
-            })
-            .await;
-        emitter
-            .effect(Effect::Signal {
-                target: WorkflowId::new("wf-pipeline"),
-                payload: SignalPayload::new("pipeline.signal", json!({"ok": true})),
-            })
-            .await;
-        emitter
-            .effect(Effect::DeleteMemory {
-                scope: Scope::Global,
-                key: "k-pipeline".into(),
-            })
-            .await;
+        let mut output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
+        output.effects.push(Effect::WriteMemory {
+            scope: Scope::Global,
+            key: "k-pipeline".into(),
+            value: json!({"v": 42}),
+            tier: None,
+            lifetime: None,
+            content_kind: None,
+            salience: None,
+            ttl: None,
+        });
+        output.effects.push(Effect::Delegate {
+            operator: OperatorId::new("child"),
+            input: Box::new(OperatorInput::new(
+                Content::text("child task"),
+                TriggerType::Task,
+            )),
+        });
+        output.effects.push(Effect::Handoff {
+            operator: OperatorId::new("handoff_target"),
+            state: json!({"ticket": 123}),
+        });
+        output.effects.push(Effect::Signal {
+            target: WorkflowId::new("wf-pipeline"),
+            payload: SignalPayload::new("pipeline.signal", json!({"ok": true})),
+        });
+        output.effects.push(Effect::DeleteMemory {
+            scope: Scope::Global,
+            key: "k-pipeline".into(),
+        });
         Ok(output)
     }
 }
@@ -437,15 +412,12 @@ async fn runner_has_safety_bound_for_infinite_followups() {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-            emitter: &EffectEmitter,
         ) -> Result<OperatorOutput, OperatorError> {
-            let output = OperatorOutput::new(Content::text("loop"), ExitReason::Complete);
-            emitter
-                .effect(Effect::Delegate {
-                    operator: OperatorId::new("root"),
-                    input: Box::new(OperatorInput::new(Content::text("loop"), TriggerType::Task)),
-                })
-                .await;
+            let mut output = OperatorOutput::new(Content::text("loop"), ExitReason::Complete);
+            output.effects.push(Effect::Delegate {
+                operator: OperatorId::new("root"),
+                input: Box::new(OperatorInput::new(Content::text("loop"), TriggerType::Task)),
+            });
             Ok(output)
         }
     }

@@ -13,7 +13,6 @@
 
 use async_trait::async_trait;
 use layer0::context::{Message, Role};
-use layer0::dispatch::EffectEmitter;
 use layer0::error::OperatorError;
 use layer0::id::OperatorId;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
@@ -144,7 +143,6 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut ctx = self.create_context();
 
@@ -270,7 +268,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("Hi"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("Hi"), &test_ctx())
             .await
             .unwrap();
 
@@ -284,7 +282,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("Query"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("Query"), &test_ctx())
             .await
             .unwrap();
 
@@ -297,7 +295,7 @@ mod tests {
         let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config());
 
         let result = op
-            .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("test"), &test_ctx())
             .await;
         assert!(matches!(
             result,
@@ -317,7 +315,6 @@ mod tests {
             op.as_ref(),
             simple_input("Hi"),
             &test_ctx(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -347,7 +344,7 @@ mod tests {
             });
 
         let result = op
-            .execute(simple_input("hi"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("hi"), &test_ctx())
             .await;
 
         // Budget guard returns a structured exit (MaxTurns) — not an error.
@@ -406,7 +403,7 @@ mod tests {
         input.config = Some(op_config);
 
         let output = op
-            .execute(input, &test_ctx(), &EffectEmitter::noop())
+            .execute(input, &test_ctx())
             .await
             .unwrap();
 

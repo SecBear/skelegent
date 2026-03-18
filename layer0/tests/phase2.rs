@@ -3,7 +3,6 @@
 
 #![cfg(feature = "test-utils")]
 
-use layer0::dispatch::EffectEmitter;
 use layer0::dispatch_context::DispatchContext;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::test_utils::{EchoOperator, InMemoryStore, LocalEnvironment, LocalOrchestrator};
@@ -32,7 +31,6 @@ async fn echo_operator_returns_input_as_output() {
         .execute(
             input,
             &DispatchContext::new(DispatchId::new("t"), OperatorId::new("echo")),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -48,7 +46,6 @@ async fn echo_operator_metadata_is_default() {
         .execute(
             input,
             &DispatchContext::new(DispatchId::new("t"), OperatorId::new("echo")),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -65,7 +62,6 @@ async fn echo_operator_is_usable_as_dyn_operator() {
         .execute(
             input,
             &DispatchContext::new(DispatchId::new("t"), OperatorId::new("echo")),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();

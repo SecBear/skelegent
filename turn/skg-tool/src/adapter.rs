@@ -8,7 +8,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use layer0::dispatch::EffectEmitter;
 use layer0::operator::Operator;
 use layer0::{
     Content, DispatchContext, DispatchId, DurationMs, ExitReason, OperatorError, OperatorId,
@@ -55,7 +54,6 @@ impl Operator for ToolOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("null");
         let tool_input: serde_json::Value = serde_json::from_str(text)
@@ -121,7 +119,7 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
         let (handle, sender) = layer0::DispatchHandle::channel(ctx.dispatch_id.clone());
         tokio::spawn(async move {
             match operator
-                .execute(input, &ctx_owned, &EffectEmitter::noop())
+                .execute(input, &ctx_owned)
                 .await
             {
                 Ok(output) => {
@@ -232,7 +230,7 @@ mod tests {
         let input = make_input(r#"{"msg": "hello"}"#);
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let output = op
-            .execute(input, &ctx, &EffectEmitter::noop())
+            .execute(input, &ctx)
             .await
             .expect("should succeed");
 
@@ -258,7 +256,7 @@ mod tests {
         let input = make_input("{}");
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let err = op
-            .execute(input, &ctx, &EffectEmitter::noop())
+            .execute(input, &ctx)
             .await
             .expect_err("should fail");
 

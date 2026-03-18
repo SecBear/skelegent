@@ -1,6 +1,5 @@
 //! EchoOperator — returns the input message as the output.
 
-use crate::dispatch::EffectEmitter;
 use crate::dispatch_context::DispatchContext;
 use crate::error::OperatorError;
 use crate::operator::{ExitReason, OperatorInput, OperatorOutput};
@@ -16,7 +15,6 @@ impl crate::operator::Operator for EchoOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         Ok(OperatorOutput::new(input.message, ExitReason::Complete))
     }

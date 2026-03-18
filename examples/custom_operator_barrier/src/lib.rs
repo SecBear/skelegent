@@ -13,7 +13,6 @@
 //! ```rust
 //! use std::sync::Arc;
 //! use layer0::content::{Content, ContentBlock};
-//! use layer0::dispatch::EffectEmitter;
 //! use layer0::operator::{Operator, OperatorInput, TriggerType, ExitReason};
 //! use skg_tool::{ToolRegistry, ToolDyn, ToolError};
 //! use serde_json::{json, Value};
@@ -45,7 +44,7 @@
 //! );
 //!
 //! let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("example"), layer0::id::OperatorId::new("barrier"));
-//! let out = op.execute(input, &ctx, &EffectEmitter::noop()).await.unwrap();
+//! let out = op.execute(input, &ctx).await.unwrap();
 //! assert_eq!(out.exit_reason, ExitReason::Complete);
 //! if let Content::Blocks(blocks) = out.message {
 //!     let results = blocks.iter().filter(|b| matches!(b, ContentBlock::ToolResult{..})).count();
@@ -57,9 +56,7 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::{Content, ContentBlock};
-use layer0::dispatch::EffectEmitter;
 use layer0::duration::DurationMs;
-use layer0::effect::Effect;
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, SubDispatchRecord};
@@ -82,7 +79,6 @@ impl Operator for BarrierOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut out_blocks: Vec<ContentBlock> = Vec::new();
         let mut batch: Vec<(String, String, serde_json::Value)> = Vec::new();
@@ -181,13 +177,6 @@ impl Operator for BarrierOperator {
 
         let mut output = OperatorOutput::new(Content::Blocks(out_blocks), ExitReason::Complete);
         output.metadata = metadata;
-        // Demonstrate effect declaration boundary
-        emitter
-            .effect(Effect::Custom {
-                effect_type: "barrier_log".into(),
-                data: serde_json::json!({"message": "barrier operator executed"}),
-            })
-            .await;
         Ok(output)
     }
 }
@@ -253,7 +242,7 @@ mod tests {
 
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("barrier"));
         let out = op
-            .execute(input, &ctx, &EffectEmitter::noop())
+            .execute(input, &ctx)
             .await
             .unwrap();
         match out.message {
@@ -276,7 +265,7 @@ mod tests {
         assert_eq!(out.exit_reason, ExitReason::Complete);
         assert!(
             out.effects.is_empty(),
-            "effects now go through emitter, not output.effects"
+            "no effects expected from barrier operator"
         );
     }
 }

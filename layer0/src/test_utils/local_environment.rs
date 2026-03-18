@@ -1,6 +1,5 @@
 //! LocalEnvironment — no isolation, just passthrough to the operator.
 
-use crate::dispatch::EffectEmitter;
 use crate::dispatch_context::DispatchContext;
 use crate::environment::EnvironmentSpec;
 use crate::error::EnvError;
@@ -32,7 +31,7 @@ impl crate::environment::Environment for LocalEnvironment {
     ) -> Result<OperatorOutput, EnvError> {
         let ctx = DispatchContext::new(DispatchId::new("local-env"), OperatorId::new("local"));
         self.operator
-            .execute(input, &ctx, &EffectEmitter::noop())
+            .execute(input, &ctx)
             .await
             .map_err(EnvError::OperatorError)
     }

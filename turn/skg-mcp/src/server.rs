@@ -69,7 +69,7 @@ impl ToolDyn for OperatorToolAdapter {
             )
             .with_trace(ctx.trace.child_span());
             let output = operator
-                .execute(op_input, &ctx, &layer0::dispatch::EffectEmitter::noop())
+                .execute(op_input, &ctx)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
             let text = output.message.as_text().unwrap_or("null").to_owned();
@@ -750,7 +750,6 @@ mod tests {
                 &self,
                 input: OperatorInput,
                 _ctx: &layer0::DispatchContext,
-                _emitter: &layer0::dispatch::EffectEmitter,
             ) -> Result<OperatorOutput, OperatorError> {
                 Ok(OperatorOutput::new(input.message, ExitReason::Complete))
             }
@@ -787,7 +786,6 @@ mod tests {
                 &self,
                 _input: OperatorInput,
                 _ctx: &layer0::DispatchContext,
-                _emitter: &layer0::dispatch::EffectEmitter,
             ) -> Result<OperatorOutput, OperatorError> {
                 let text = self.response.to_string();
                 Ok(OperatorOutput::new(

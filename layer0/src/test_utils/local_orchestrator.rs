@@ -1,6 +1,6 @@
 //! LocalOrchestrator — in-process orchestrator with a HashMap of operators.
 
-use crate::dispatch::{DispatchEvent, DispatchHandle, DispatchSender, EffectEmitter};
+use crate::dispatch::{DispatchEvent, DispatchHandle, DispatchSender};
 use crate::dispatch_context::DispatchContext;
 use crate::error::OrchError;
 use crate::id::OperatorId;
@@ -66,8 +66,7 @@ async fn run_dispatch(
     if sender.is_cancelled() {
         return;
     }
-    let emitter = EffectEmitter::new(sender.clone());
-    match op.execute(input, &ctx, &emitter).await {
+    match op.execute(input, &ctx).await {
         Ok(output) => {
             let _ = sender.send(DispatchEvent::Completed { output }).await;
         }

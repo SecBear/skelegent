@@ -53,7 +53,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use layer0::{
-        Content, DispatchContext, EffectEmitter, ExitReason, OperatorError, OperatorInput,
+        Content, DispatchContext, ExitReason, OperatorError, OperatorInput,
         OperatorOutput,
     };
 
@@ -65,7 +65,6 @@ mod tests {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-            _emitter: &EffectEmitter,
         ) -> Result<OperatorOutput, OperatorError> {
             Ok(OperatorOutput::new(
                 Content::text("ok"),

@@ -12,7 +12,6 @@
 
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
-use layer0::dispatch::EffectEmitter;
 use layer0::effect::Scope;
 use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -136,11 +135,11 @@ async fn provider_swap_same_config_different_backend() {
 
     let ctx = test_ctx();
     let output_a = op_a
-        .execute(input_a, &ctx, &EffectEmitter::noop())
+        .execute(input_a, &ctx)
         .await
         .unwrap();
     let output_b = op_b
-        .execute(input_b, &ctx, &EffectEmitter::noop())
+        .execute(input_b, &ctx)
         .await
         .unwrap();
 
@@ -169,11 +168,11 @@ async fn provider_swap_same_config_different_backend() {
     ));
 
     let out_a = dyn_a
-        .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
+        .execute(simple_input("test"), &test_ctx())
         .await
         .unwrap();
     let out_b = dyn_b
-        .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
+        .execute(simple_input("test"), &test_ctx())
         .await
         .unwrap();
     assert_eq!(out_a.exit_reason, ExitReason::Complete);
@@ -316,11 +315,11 @@ async fn operator_swap_react_vs_single_shot() {
     let input = simple_input("Say hello");
 
     let react_output = react_op
-        .execute(input.clone(), &test_ctx(), &EffectEmitter::noop())
+        .execute(input.clone(), &test_ctx())
         .await
         .unwrap();
     let ss_output = single_shot_op
-        .execute(input, &test_ctx(), &EffectEmitter::noop())
+        .execute(input, &test_ctx())
         .await
         .unwrap();
 
@@ -354,7 +353,7 @@ async fn operator_swap_react_vs_single_shot() {
 
     for (i, op) in operators.iter().enumerate() {
         let output = op
-            .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("test"), &test_ctx())
             .await
             .unwrap();
         assert_eq!(
@@ -377,7 +376,7 @@ async fn operator_swap_echo_operator() {
 
     let input = simple_input("This exact text should come back");
     let output = echo
-        .execute(input, &test_ctx(), &EffectEmitter::noop())
+        .execute(input, &test_ctx())
         .await
         .unwrap();
 

@@ -12,7 +12,6 @@
 
 use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::dispatch::EffectEmitter;
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -117,7 +116,7 @@ impl BuiltAgent {
         let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
         let output = self
             .operator
-            .execute(input, &ctx, &EffectEmitter::noop())
+            .execute(input, &ctx)
             .await?;
         if output.has_unhandled_effects() {
             eprintln!(
@@ -267,7 +266,7 @@ mod tests {
 
         let input = OperatorInput::new(Content::text("hi"), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
-        let result = op.execute(input, &ctx, &EffectEmitter::noop()).await;
+        let result = op.execute(input, &ctx).await;
 
         // Budget guard fires before first inference, surfacing as an error.
         assert!(result.is_err());

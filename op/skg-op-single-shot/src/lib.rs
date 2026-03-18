@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::dispatch::EffectEmitter;
 use layer0::duration::DurationMs;
 use layer0::error::OperatorError;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorMetadata, OperatorOutput};
@@ -90,7 +89,6 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let start = Instant::now();
         tracing::info!("single-shot executing");
@@ -180,7 +178,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("Hi"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("Hi"), &test_ctx())
             .await
             .unwrap();
 
@@ -194,7 +192,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("Query"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("Query"), &test_ctx())
             .await
             .unwrap();
 
@@ -206,7 +204,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
         let op = make_op(provider);
 
-        op.execute(simple_input("Test"), &test_ctx(), &EffectEmitter::noop())
+        op.execute(simple_input("Test"), &test_ctx())
             .await
             .unwrap();
 
@@ -224,7 +222,7 @@ mod tests {
         let op = SingleShotOperator::new(provider, SingleShotConfig::default());
 
         let result = op
-            .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("test"), &test_ctx())
             .await;
         assert!(matches!(
             result,
@@ -257,7 +255,7 @@ mod tests {
         let op = make_op(provider);
 
         let output = op
-            .execute(simple_input("test"), &test_ctx(), &EffectEmitter::noop())
+            .execute(simple_input("test"), &test_ctx())
             .await
             .unwrap();
 
@@ -279,7 +277,6 @@ mod tests {
             op.as_ref(),
             simple_input("Hi"),
             &ctx,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();

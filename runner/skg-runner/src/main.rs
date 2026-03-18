@@ -11,7 +11,7 @@
 mod http_adapter;
 mod registry;
 
-use layer0::dispatch::{DispatchEvent, DispatchHandle, EffectEmitter};
+use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::{DispatchContext, DispatchId, OperatorId};
 use std::sync::Arc;
 
@@ -132,8 +132,8 @@ impl RunnerServiceImpl {
 
     /// Execute an operator and return the structured output.
     ///
-    /// Creates a real dispatch channel so that effects emitted via
-    /// [`EffectEmitter`] during execution are captured in the output.
+    /// Creates a real dispatch channel so that effects emitted
+    /// during execution are captured in the output.
     /// After execution, logs a warning if the output contains unhandled
     /// effects. The runner is a deployment harness, **not** an
     /// orchestrator — effect interpretation is the caller's responsibility.
@@ -147,13 +147,12 @@ impl RunnerServiceImpl {
 
         // Create a dispatch channel to capture effects emitted during execution.
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("runner"));
-        let emitter = EffectEmitter::new(sender.clone());
 
         // Spawn in a task to catch panics from operator implementations.
         let op_id = operator_id.to_owned();
         tokio::task::spawn(async move {
             let ctx = DispatchContext::new(DispatchId::new("runner"), OperatorId::new(op_id));
-            match operator.execute(input, &ctx, &emitter).await {
+            match operator.execute(input, &ctx).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
@@ -242,7 +241,6 @@ impl Runner for RunnerServiceImpl {
         tokio::task::spawn(async move {
             // Create a dispatch channel for real-time event streaming.
             let (mut handle, sender) = DispatchHandle::channel(DispatchId::new("runner-grpc"));
-            let emitter = EffectEmitter::new(sender.clone());
 
             // Spawn the operator execution.
             let op_id_inner = op_id.clone();
@@ -251,7 +249,7 @@ impl Runner for RunnerServiceImpl {
                     DispatchId::new("runner-grpc"),
                     OperatorId::new(op_id_inner),
                 );
-                match operator.execute(input, &ctx, &emitter).await {
+                match operator.execute(input, &ctx).await {
                     Ok(output) => {
                         let _ = sender.send(DispatchEvent::Completed { output }).await;
                     }

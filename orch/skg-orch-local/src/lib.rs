@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher, EffectEmitter};
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::SignalPayload;
 use layer0::error::OrchError;
 use layer0::id::{OperatorId, WorkflowId};
@@ -83,10 +83,9 @@ impl DispatchNext for OperatorDispatch<'_> {
             .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
             .clone();
         let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
-        let emitter = EffectEmitter::new(sender.clone());
         let ctx = ctx.clone();
         tokio::spawn(async move {
-            match op.execute(input, &ctx, &emitter).await {
+            match op.execute(input, &ctx).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
@@ -128,7 +127,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use layer0::content::Content;
-    use layer0::dispatch::{DispatchHandle, Dispatcher, EffectEmitter};
+    use layer0::dispatch::{DispatchHandle, Dispatcher};
     use layer0::effect::SignalPayload;
     use layer0::error::{OperatorError, OrchError};
     use layer0::id::{DispatchId, OperatorId, WorkflowId};
@@ -147,7 +146,6 @@ mod tests {
             &self,
             input: OperatorInput,
             _ctx: &DispatchContext,
-            _emitter: &EffectEmitter,
         ) -> Result<OperatorOutput, OperatorError> {
             Ok(OperatorOutput::new(input.message, ExitReason::Complete))
         }

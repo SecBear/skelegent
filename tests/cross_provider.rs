@@ -10,7 +10,6 @@
 
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::dispatch::EffectEmitter;
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
 use layer0::{DispatchContext, DispatchId, OperatorId};
 use skg_context_engine::{Context, ReactLoopConfig, react_loop};
@@ -72,7 +71,6 @@ async fn anthropic_react_simple_prompt() {
         &tools,
         &dispatch_ctx,
         &config,
-        &EffectEmitter::noop(),
     )
     .await
     .expect("react_loop should succeed");
@@ -95,7 +93,6 @@ async fn anthropic_single_shot() {
         .execute(
             simple_input("Say hello in exactly 3 words."),
             &DispatchContext::new(DispatchId::new("test"), OperatorId::from("test")),
-            &EffectEmitter::noop(),
         )
         .await
         .expect("Anthropic SingleShotOperator should succeed");
@@ -203,7 +200,6 @@ async fn openai_react_simple_prompt() {
         &tools,
         &dispatch_ctx,
         &config,
-        &EffectEmitter::noop(),
     )
     .await
     .expect("react_loop should succeed");
@@ -226,7 +222,6 @@ async fn openai_single_shot() {
         .execute(
             simple_input("Say hello in exactly 3 words."),
             &DispatchContext::new(DispatchId::new("test"), OperatorId::from("test")),
-            &EffectEmitter::noop(),
         )
         .await
         .expect("OpenAI SingleShotOperator should succeed");
@@ -320,7 +315,6 @@ async fn ollama_react_simple_prompt() {
         &tools,
         &dispatch_ctx,
         &config,
-        &EffectEmitter::noop(),
     )
     .await
     .expect("react_loop should succeed");
@@ -580,7 +574,6 @@ async fn pi_auth_anthropic_inference() {
         .execute(
             simple_input("Reply with exactly the word 'pong'"),
             &DispatchContext::new(DispatchId::new("pi-test"), OperatorId::from("pi-test")),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -608,7 +601,6 @@ async fn pi_auth_openai_inference() {
         .execute(
             simple_input("Reply with exactly the word 'pong'"),
             &DispatchContext::new(DispatchId::new("pi-test"), OperatorId::from("pi-test")),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();

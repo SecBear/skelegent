@@ -58,7 +58,6 @@ impl layer0::operator::Operator for FailingOperator {
         &self,
         _input: OperatorInput,
         _ctx: &layer0::DispatchContext,
-        _emitter: &layer0::dispatch::EffectEmitter,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         Err(layer0::error::OperatorError::non_retryable("always fails"))
     }

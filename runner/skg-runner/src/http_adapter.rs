@@ -32,7 +32,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::prelude::*;
-use layer0::dispatch::{DispatchEvent, DispatchHandle, EffectEmitter};
+use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::{DispatchContext, DispatchId, OperatorId};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::ReceiverStream;
@@ -228,14 +228,13 @@ async fn execute_stream_handler(
         // Create a dispatch channel so the operator can emit real-time events.
         let dispatch_id = DispatchId::new("runner-sse");
         let (mut handle, sender) = DispatchHandle::channel(dispatch_id);
-        let emitter = EffectEmitter::new(sender.clone());
 
         // Spawn the operator execution, then send the terminal event.
         let op_id_inner = op_id.clone();
         tokio::spawn(async move {
             let ctx =
                 DispatchContext::new(DispatchId::new("runner-sse"), OperatorId::new(op_id_inner));
-            match operator.execute(input, &ctx, &emitter).await {
+            match operator.execute(input, &ctx).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }

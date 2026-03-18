@@ -1,7 +1,6 @@
 //! The Operator protocol — what one operator does per cycle.
 
 use crate::context::Message;
-use crate::dispatch::EffectEmitter;
 use crate::dispatch_context::DispatchContext;
 use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
 use async_trait::async_trait;
@@ -403,7 +402,7 @@ impl OperatorOutput {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let output = op.execute(input, &ctx, &EffectEmitter::noop()).await?
+    /// let output = op.execute(input, &ctx).await?
     /// if output.has_unhandled_effects() {
     ///     tracing::warn!("effects will not be executed: {:?}", output.effects);
     /// }
@@ -513,7 +512,6 @@ pub trait Operator: Send + Sync {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-        emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError>;
 }
 
@@ -695,7 +693,6 @@ mod tests {
     #[tokio::test]
     async fn operator_with_meta() {
         use crate::content::Content;
-        use crate::dispatch::EffectEmitter;
         use crate::dispatch_context::DispatchContext;
         use crate::error::OperatorError;
         use crate::id::{DispatchId, OperatorId};
@@ -708,7 +705,6 @@ mod tests {
                 &self,
                 input: OperatorInput,
                 _ctx: &DispatchContext,
-                _emitter: &EffectEmitter,
             ) -> Result<OperatorOutput, OperatorError> {
                 Ok(OperatorOutput::new(input.message, ExitReason::Complete))
             }
@@ -744,8 +740,7 @@ mod tests {
         // Verify it still works as an Operator
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
-        let emitter = EffectEmitter::noop();
-        let output = echo.execute(input, &ctx, &emitter).await.unwrap();
+        let output = echo.execute(input, &ctx).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
 
         // Both traits as trait objects
