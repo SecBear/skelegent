@@ -67,13 +67,12 @@
 //!
 //! #[async_trait]
 //! impl<P: Provider> Operator for MyOperator<P> {
-//!     async fn execute(&self, input: OperatorInput, _ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError> {
-//!         let mut ctx = Context::new();
-//!         ctx.inject_message(Message::new(Role::User, input.message))
+//!     async fn execute(&self, input: OperatorInput, ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError> {
+//!         let mut context = Context::new();
+//!         context.inject_message(Message::new(Role::User, input.message))
 //!             .await
 //!             .map_err(OperatorError::context_assembly)?;
-//!         let dispatch_ctx = DispatchContext::new(DispatchId::new("my-op"), self.operator_id.clone());
-//!         react_loop(&mut ctx, &self.provider, &self.tools, &dispatch_ctx, &self.config)
+//!         react_loop(&mut context, &self.provider, &self.tools, ctx, &self.config)
 //!             .await
 //!             .map_err(|e| OperatorError::non_retryable(e.to_string()))
 //!     }

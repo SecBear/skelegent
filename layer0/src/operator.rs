@@ -202,13 +202,13 @@ pub struct OperatorOutput {
 
     /// Side-effects the operator wants executed.
     ///
-    /// **Preferred path:** call [`EffectEmitter::effect`](crate::dispatch::EffectEmitter::effect)
-    /// during execution. The dispatch handle's [`collect`](crate::dispatch::DispatchHandle::collect)
-    /// method gathers emitted effects into this field automatically.
+    /// **Preferred path:** declare effects via `Context::push_effect()` /
+    /// `Context::extend_effects()` during execution. The context engine's
+    /// `make_output()` drains declared effects into this field.
     ///
-    /// **Legacy path:** operators may still populate this field directly.
-    /// When no [`DispatchEvent::EffectEmitted`](crate::dispatch::DispatchEvent::EffectEmitted)
-    /// events are received, `collect()` preserves whatever the operator placed here.
+    /// **Dispatch-channel path:** `EffectEmitter` exists for dispatch-layer
+    /// wiring of progress/artifact events to `DispatchHandle`, but operators
+    /// do not receive it — it is NOT a parameter on `Operator::execute`.
     ///
     /// CRITICAL DESIGN DECISION: The operator declares effects but does
     /// not execute them. The calling layer (orchestrator, lifecycle

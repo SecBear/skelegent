@@ -33,7 +33,7 @@
 //! }
 //!
 //! impl Operator for CoordinatorOp {
-//!     async fn execute(&self, input: OperatorInput, _ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError> {
+//!     async fn execute(&self, input: OperatorInput, ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError> {
 //!         // delegate to a sibling — goes through orchestrator middleware
 //!         let child_output = self.dispatcher
 //!             .dispatch(&ctx, child_input)
