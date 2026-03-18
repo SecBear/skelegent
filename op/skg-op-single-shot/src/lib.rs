@@ -141,7 +141,6 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         // Always ExitReason::Complete for single-shot
         let mut output = OperatorOutput::new(message, ExitReason::Complete);
         output.metadata = metadata;
-        output.effects = vec![];
 
         Ok(output)
     }

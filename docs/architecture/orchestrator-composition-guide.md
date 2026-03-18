@@ -119,7 +119,7 @@ the architectural position: "deployment choice, not code change."
 | Tool execution              | Operator (within turn)                          | Orchestrator |
 | Context assembly            | Operator (via `Context` + `inject_*` methods + compaction) | Orchestrator |
 | Effect declaration          | Operator                                        | Orchestrator |
-| Effect execution            | Orchestrator (via EffectInterpreter)            | Operator     |
+| Effect execution            | Orchestrator (via EffectHandler)                | Operator     |
 | Operator sequencing         | Orchestrator / application code                 | Operator     |
 | Data flow between operators | Orchestrator / application code                 | Operator     |
 | Credential injection        | Environment (mediated by Orchestrator)          | Operator     |
