@@ -249,9 +249,7 @@ pub async fn react_loop<P: Provider>(
         let approval_effects = check_approval(&tool_calls, tools);
 
         if !approval_effects.is_empty() {
-            for effect in &approval_effects {
-                emitter.effect(effect.clone()).await;
-            }
+            ctx.extend_effects(approval_effects);
             return Ok(make_output(
                 result.response,
                 ExitReason::AwaitingApproval,
@@ -293,7 +291,7 @@ pub async fn react_loop<P: Provider>(
     }
 }
 
-fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> OperatorOutput {
+fn make_output(response: InferResponse, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
     let mut output = OperatorOutput::new(response.content, exit);
     let mut meta = OperatorMetadata::default();
     meta.tokens_in = ctx.metrics.tokens_in;
@@ -302,7 +300,7 @@ fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> Oper
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = vec![];
+    output.effects = ctx.drain_effects();
     output
 }
 
@@ -459,10 +457,9 @@ pub async fn react_loop_structured<P: Provider>(
                 .await?;
                 match dispatch {
                     ToolDispatchOutcome::Continue => continue,
-                    ToolDispatchOutcome::AwaitingApproval(effects) => {
-                        let mut op_output =
+                    ToolDispatchOutcome::AwaitingApproval(_) => {
+                        let op_output =
                             make_output(result.response, ExitReason::AwaitingApproval, ctx);
-                        op_output.effects = effects;
                         return Ok((None, op_output));
                     }
                     ToolDispatchOutcome::Exit(reason) => {
@@ -485,10 +482,9 @@ pub async fn react_loop_structured<P: Provider>(
                     .await?;
                     match dispatch {
                         ToolDispatchOutcome::Continue => continue,
-                        ToolDispatchOutcome::AwaitingApproval(effects) => {
-                            let mut op_output =
+                        ToolDispatchOutcome::AwaitingApproval(_) => {
+                            let op_output =
                                 make_output(result.response, ExitReason::AwaitingApproval, ctx);
-                            op_output.effects = effects;
                             return Ok((None, op_output));
                         }
                         ToolDispatchOutcome::Exit(reason) => {
@@ -532,9 +528,7 @@ async fn dispatch_function_tools(
     let approval_effects = check_approval(&function_calls, tools);
 
     if !approval_effects.is_empty() {
-        for effect in &approval_effects {
-            emitter.effect(effect.clone()).await;
-        }
+        ctx.extend_effects(approval_effects.clone());
         return Ok(ToolDispatchOutcome::AwaitingApproval(approval_effects));
     }
 
@@ -1566,9 +1560,8 @@ mod tests {
         // Should exit with AwaitingApproval
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
 
-        // With noop emitter, effects flow through emitter, not output.effects.
-        // Verify exit reason is sufficient to signal approval required.
-        assert!(output.effects.is_empty());
+        // Effects now flow through Context into output.effects
+        assert!(!output.effects.is_empty());
 
         // Provider should have been called exactly once
 
@@ -1641,8 +1634,47 @@ mod tests {
 
         // Should exit with AwaitingApproval (approval check happens before dispatch)
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
-        // Effects flow through the emitter, not output.effects with noop.
-        assert!(output.effects.is_empty());
+        // Effects now flow through Context into output.effects
+        assert!(!output.effects.is_empty());
+    }
+
+    #[tokio::test]
+    async fn react_loop_approval_effects_appear_in_output() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("dangerous_tool", "c1", json!({ "cmd": "rm -rf /" }));
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(ApprovalTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("delete everything")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+
+        let output = react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &simple_config(),
+            &EffectEmitter::noop(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
+        assert!(!output.effects.is_empty(), "approval effects must appear in OperatorOutput");
+
+        // Verify the effect is the expected ToolApprovalRequired variant
+        match &output.effects[0] {
+            Effect::ToolApprovalRequired { tool_name, call_id, .. } => {
+                assert_eq!(tool_name, "dangerous_tool");
+                assert_eq!(call_id, "c1");
+            }
+            other => panic!("expected ToolApprovalRequired, got {other:?}"),
+        }
     }
 
     #[test]
