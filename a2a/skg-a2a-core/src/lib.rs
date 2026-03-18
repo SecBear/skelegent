@@ -30,10 +30,13 @@ pub mod types;
 
 // Re-export key types for convenience.
 pub use card::{
-    AgentCapabilities, AgentCard, AgentCardBuilder, AgentExtension, AgentInterface,
-    AgentProvider, AgentSkill, OAuthFlows, SecurityRequirement, SecurityScheme,
+    AgentCapabilities, AgentCard, AgentCardBuilder, AgentExtension, AgentInterface, AgentProvider,
+    AgentSkill, OAuthFlows, SecurityRequirement, SecurityScheme,
 };
-pub use convert::{a2a_artifact_to_artifact, artifact_to_a2a_artifact};
+pub use convert::{
+    ConvertError, a2a_artifact_to_artifact, approval_request_to_a2a_metadata,
+    approval_response_from_a2a_metadata, artifact_to_a2a_artifact,
+};
 pub use error::A2aError;
 pub use jsonrpc::{JsonRpcError, JsonRpcErrorResponse, JsonRpcRequest, JsonRpcResponse};
 pub use push::{InMemoryPushStore, PushNotificationConfig, PushNotificationStore, PushStoreError};

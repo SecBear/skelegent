@@ -49,6 +49,7 @@
 
 #![deny(missing_docs)]
 
+pub mod approval;
 pub mod content;
 pub mod context;
 pub mod dispatch;
@@ -68,6 +69,10 @@ pub mod state;
 pub mod test_utils;
 
 // Re-exports for convenience
+pub use approval::{
+    ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
+    ToolCallDecision,
+};
 pub use content::{Content, ContentBlock};
 pub use context::{Message, MessageMeta, Role};
 pub use dispatch::{

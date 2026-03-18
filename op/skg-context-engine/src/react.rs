@@ -15,6 +15,7 @@ use crate::ops::response::AppendResponse;
 use crate::ops::tool::ExecuteTool;
 use crate::output::{OutputError, OutputMode, OutputSchema};
 use layer0::DispatchContext;
+use layer0::approval::{ApprovalResponse, ToolCallAction};
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
@@ -157,6 +158,196 @@ pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<E
         .collect()
 }
 
+/// Result of resolving an [`ApprovalResponse`] against pending tool calls.
+#[derive(Debug)]
+pub struct ResolvedApproval {
+    /// Tool calls approved for dispatch (possibly with modified inputs).
+    pub approved: Vec<ApprovedToolCall>,
+    /// Tool calls rejected by the human.
+    pub rejected: Vec<RejectedToolCall>,
+}
+
+/// A tool call that has been approved for dispatch.
+#[derive(Debug, Clone)]
+pub struct ApprovedToolCall {
+    /// Provider-assigned call ID for correlation.
+    pub call_id: String,
+    /// Tool name.
+    pub tool_name: String,
+    /// Tool input (may have been modified by the human).
+    pub tool_input: serde_json::Value,
+}
+
+/// A tool call that was rejected by the human.
+#[derive(Debug, Clone)]
+pub struct RejectedToolCall {
+    /// Provider-assigned call ID for correlation.
+    pub call_id: String,
+    /// Tool name.
+    pub tool_name: String,
+    /// Human-supplied rejection reason.
+    pub reason: String,
+}
+
+/// Reconstruct pending tool calls from effects and resolve against an [`ApprovalResponse`].
+///
+/// Extracts [`Effect::ToolApprovalRequired`] from the effects slice, matches them
+/// against the approval response, and returns which calls to dispatch and which
+/// were rejected.
+///
+/// Unknown `call_id`s referenced in the response (not present in `effects`) are
+/// silently ignored — only pending calls participate in the resolution.
+pub fn resolve_approval(effects: &[Effect], response: &ApprovalResponse) -> ResolvedApproval {
+    // Collect pending tool calls from ToolApprovalRequired effects.
+    let pending: Vec<(&str, &str, &serde_json::Value)> = effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::ToolApprovalRequired {
+                tool_name,
+                call_id,
+                input,
+            } => Some((call_id.as_str(), tool_name.as_str(), input)),
+            _ => None,
+        })
+        .collect();
+
+    let mut approved = Vec::new();
+    let mut rejected = Vec::new();
+
+    match response {
+        ApprovalResponse::ApproveAll => {
+            for (call_id, tool_name, input) in &pending {
+                approved.push(ApprovedToolCall {
+                    call_id: (*call_id).to_string(),
+                    tool_name: (*tool_name).to_string(),
+                    tool_input: (*input).clone(),
+                });
+            }
+        }
+        ApprovalResponse::RejectAll { reason } => {
+            for (call_id, tool_name, _) in &pending {
+                rejected.push(RejectedToolCall {
+                    call_id: (*call_id).to_string(),
+                    tool_name: (*tool_name).to_string(),
+                    reason: reason.clone(),
+                });
+            }
+        }
+        ApprovalResponse::Approve { call_ids } => {
+            // Calls in the list are approved; all others are rejected.
+            for (call_id, tool_name, input) in &pending {
+                if call_ids.iter().any(|id| id.as_str() == *call_id) {
+                    approved.push(ApprovedToolCall {
+                        call_id: (*call_id).to_string(),
+                        tool_name: (*tool_name).to_string(),
+                        tool_input: (*input).clone(),
+                    });
+                } else {
+                    rejected.push(RejectedToolCall {
+                        call_id: (*call_id).to_string(),
+                        tool_name: (*tool_name).to_string(),
+                        reason: "not approved".into(),
+                    });
+                }
+            }
+        }
+        ApprovalResponse::Reject { call_ids, reason } => {
+            // Calls in the list are rejected; all others are approved.
+            for (call_id, tool_name, input) in &pending {
+                if call_ids.iter().any(|id| id.as_str() == *call_id) {
+                    rejected.push(RejectedToolCall {
+                        call_id: (*call_id).to_string(),
+                        tool_name: (*tool_name).to_string(),
+                        reason: reason.clone(),
+                    });
+                } else {
+                    approved.push(ApprovedToolCall {
+                        call_id: (*call_id).to_string(),
+                        tool_name: (*tool_name).to_string(),
+                        tool_input: (*input).clone(),
+                    });
+                }
+            }
+        }
+        ApprovalResponse::Modify {
+            call_id: target_id,
+            new_input,
+        } => {
+            // Target call is approved with new_input; all other calls approved with original.
+            for (call_id, tool_name, input) in &pending {
+                let tool_input = if call_id == target_id {
+                    new_input.clone()
+                } else {
+                    (*input).clone()
+                };
+                approved.push(ApprovedToolCall {
+                    call_id: (*call_id).to_string(),
+                    tool_name: (*tool_name).to_string(),
+                    tool_input,
+                });
+            }
+        }
+        ApprovalResponse::Batch { decisions } => {
+            // Per-call resolution. Calls with no decision are rejected (conservative).
+            for (call_id, tool_name, input) in &pending {
+                match decisions.iter().find(|d| d.call_id.as_str() == *call_id) {
+                    Some(d) => match &d.action {
+                        ToolCallAction::Approve => {
+                            approved.push(ApprovedToolCall {
+                                call_id: (*call_id).to_string(),
+                                tool_name: (*tool_name).to_string(),
+                                tool_input: (*input).clone(),
+                            });
+                        }
+                        ToolCallAction::Reject { reason } => {
+                            rejected.push(RejectedToolCall {
+                                call_id: (*call_id).to_string(),
+                                tool_name: (*tool_name).to_string(),
+                                reason: reason.clone(),
+                            });
+                        }
+                        ToolCallAction::Modify { new_input } => {
+                            approved.push(ApprovedToolCall {
+                                call_id: (*call_id).to_string(),
+                                tool_name: (*tool_name).to_string(),
+                                tool_input: new_input.clone(),
+                            });
+                        }
+                        // Non-exhaustive: future actions default to reject.
+                        _ => {
+                            rejected.push(RejectedToolCall {
+                                call_id: (*call_id).to_string(),
+                                tool_name: (*tool_name).to_string(),
+                                reason: "unrecognized action".into(),
+                            });
+                        }
+                    },
+                    // No decision for this call — reject conservatively.
+                    None => {
+                        rejected.push(RejectedToolCall {
+                            call_id: (*call_id).to_string(),
+                            tool_name: (*tool_name).to_string(),
+                            reason: "no decision provided".into(),
+                        });
+                    }
+                }
+            }
+        }
+        // Non-exhaustive: unknown response variants reject all pending (defensive).
+        _ => {
+            for (call_id, tool_name, _) in &pending {
+                rejected.push(RejectedToolCall {
+                    call_id: (*call_id).to_string(),
+                    tool_name: (*tool_name).to_string(),
+                    reason: "unrecognized approval response".into(),
+                });
+            }
+        }
+    }
+
+    ResolvedApproval { approved, rejected }
+}
+
 /// Format a tool execution error as a string for the model.
 ///
 /// Default: `format!("Error: {e}")`. This is the formatting used by
@@ -167,7 +358,10 @@ pub fn format_tool_error(e: &EngineError) -> String {
     format!("Error: {e}")
 }
 
-fn structured_exit_output(err: EngineError, ctx: &mut Context) -> Result<OperatorOutput, EngineError> {
+fn structured_exit_output(
+    err: EngineError,
+    ctx: &mut Context,
+) -> Result<OperatorOutput, EngineError> {
     match err {
         EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
         other => Err(other),
@@ -1785,5 +1979,230 @@ mod tests {
         }
         // Provider must not have been called — the budget guard fired before inference.
         assert_eq!(provider.call_count(), 0);
+    }
+
+    // --- resolve_approval unit tests ---
+
+    #[test]
+    fn resolve_approve_all() {
+        use layer0::approval::ApprovalResponse;
+        let effects = vec![
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_a".into(),
+                call_id: "call_1".into(),
+                input: json!({ "x": 1 }),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_b".into(),
+                call_id: "call_2".into(),
+                input: json!({ "x": 2 }),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_c".into(),
+                call_id: "call_3".into(),
+                input: json!({ "x": 3 }),
+            },
+        ];
+        let result = resolve_approval(&effects, &ApprovalResponse::ApproveAll);
+        assert_eq!(result.approved.len(), 3, "all three should be approved");
+        assert_eq!(result.rejected.len(), 0);
+        let ids: Vec<_> = result.approved.iter().map(|a| a.call_id.as_str()).collect();
+        assert!(ids.contains(&"call_1") && ids.contains(&"call_2") && ids.contains(&"call_3"));
+    }
+
+    #[test]
+    fn resolve_reject_all() {
+        use layer0::approval::ApprovalResponse;
+        let effects = vec![
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_a".into(),
+                call_id: "call_1".into(),
+                input: json!({}),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_b".into(),
+                call_id: "call_2".into(),
+                input: json!({}),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_c".into(),
+                call_id: "call_3".into(),
+                input: json!({}),
+            },
+        ];
+        let result = resolve_approval(
+            &effects,
+            &ApprovalResponse::RejectAll {
+                reason: "too dangerous".into(),
+            },
+        );
+        assert_eq!(result.approved.len(), 0);
+        assert_eq!(result.rejected.len(), 3, "all three should be rejected");
+        assert!(result.rejected.iter().all(|r| r.reason == "too dangerous"));
+    }
+
+    #[test]
+    fn resolve_partial() {
+        use layer0::approval::ApprovalResponse;
+        let effects = vec![
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_a".into(),
+                call_id: "call_1".into(),
+                input: json!({}),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_b".into(),
+                call_id: "call_2".into(),
+                input: json!({}),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_c".into(),
+                call_id: "call_3".into(),
+                input: json!({}),
+            },
+        ];
+        let result = resolve_approval(
+            &effects,
+            &ApprovalResponse::Approve {
+                call_ids: vec!["call_1".into(), "call_2".into()],
+            },
+        );
+        assert_eq!(result.approved.len(), 2);
+        assert_eq!(result.rejected.len(), 1);
+        let approved_ids: Vec<_> = result.approved.iter().map(|a| a.call_id.as_str()).collect();
+        assert!(approved_ids.contains(&"call_1") && approved_ids.contains(&"call_2"));
+        assert_eq!(result.rejected[0].call_id, "call_3");
+    }
+
+    #[test]
+    fn resolve_modify() {
+        use layer0::approval::ApprovalResponse;
+        let effects = vec![
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_a".into(),
+                call_id: "call_1".into(),
+                input: json!({ "path": "/etc/passwd" }),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_b".into(),
+                call_id: "call_2".into(),
+                input: json!({ "path": "/tmp/safe" }),
+            },
+        ];
+        let new_input = json!({ "path": "/tmp/approved" });
+        let result = resolve_approval(
+            &effects,
+            &ApprovalResponse::Modify {
+                call_id: "call_1".into(),
+                new_input: new_input.clone(),
+            },
+        );
+        assert_eq!(result.approved.len(), 2);
+        assert_eq!(result.rejected.len(), 0);
+        let modified = result
+            .approved
+            .iter()
+            .find(|a| a.call_id == "call_1")
+            .unwrap();
+        assert_eq!(
+            modified.tool_input, new_input,
+            "call_1 should use new_input"
+        );
+        let unchanged = result
+            .approved
+            .iter()
+            .find(|a| a.call_id == "call_2")
+            .unwrap();
+        assert_eq!(
+            unchanged.tool_input,
+            json!({ "path": "/tmp/safe" }),
+            "call_2 input unchanged"
+        );
+    }
+
+    #[test]
+    fn resolve_batch() {
+        use layer0::approval::{ApprovalResponse, ToolCallAction, ToolCallDecision};
+        let effects = vec![
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_a".into(),
+                call_id: "call_1".into(),
+                input: json!({ "x": 1 }),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_b".into(),
+                call_id: "call_2".into(),
+                input: json!({ "x": 2 }),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_c".into(),
+                call_id: "call_3".into(),
+                input: json!({ "x": 3 }),
+            },
+        ];
+        let new_input = json!({ "x": 99 });
+        let result = resolve_approval(
+            &effects,
+            &ApprovalResponse::Batch {
+                decisions: vec![
+                    ToolCallDecision {
+                        call_id: "call_1".into(),
+                        action: ToolCallAction::Approve,
+                    },
+                    ToolCallDecision {
+                        call_id: "call_2".into(),
+                        action: ToolCallAction::Reject {
+                            reason: "no".into(),
+                        },
+                    },
+                    ToolCallDecision {
+                        call_id: "call_3".into(),
+                        action: ToolCallAction::Modify {
+                            new_input: new_input.clone(),
+                        },
+                    },
+                ],
+            },
+        );
+        assert_eq!(result.approved.len(), 2, "call_1 and call_3 approved");
+        assert_eq!(result.rejected.len(), 1, "call_2 rejected");
+        assert!(result.approved.iter().any(|a| a.call_id == "call_1"));
+        let modified = result
+            .approved
+            .iter()
+            .find(|a| a.call_id == "call_3")
+            .unwrap();
+        assert_eq!(modified.tool_input, new_input);
+        assert_eq!(result.rejected[0].call_id, "call_2");
+        assert_eq!(result.rejected[0].reason, "no");
+    }
+
+    #[test]
+    fn resolve_unknown_call_id() {
+        use layer0::approval::ApprovalResponse;
+        // Response includes a call_id not present in pending — silently ignored.
+        let effects = vec![
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_a".into(),
+                call_id: "call_1".into(),
+                input: json!({}),
+            },
+            Effect::ToolApprovalRequired {
+                tool_name: "tool_b".into(),
+                call_id: "call_2".into(),
+                input: json!({}),
+            },
+        ];
+        let result = resolve_approval(
+            &effects,
+            &ApprovalResponse::Approve {
+                call_ids: vec!["call_1".into(), "call_ghost".into()],
+            },
+        );
+        // call_ghost is not in pending, ignored. call_1 approved, call_2 not in list → rejected.
+        assert_eq!(result.approved.len(), 1);
+        assert_eq!(result.approved[0].call_id, "call_1");
+        assert_eq!(result.rejected.len(), 1);
+        assert_eq!(result.rejected[0].call_id, "call_2");
     }
 }

@@ -5,6 +5,7 @@
 //! `Cancelled`, base64 images with no clean A2A mapping, ToolUse/ToolResult
 //! blocks that don't exist in the A2A content model.
 
+use layer0::approval::{ApprovalRequest, ApprovalResponse};
 use layer0::content::{Content, ContentBlock, ContentSource};
 use layer0::dispatch::Artifact;
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
@@ -330,6 +331,59 @@ pub fn operator_output_to_a2a_message(output: &OperatorOutput) -> A2aMessage {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ApprovalRequest / ApprovalResponse ↔ A2A metadata
+// ---------------------------------------------------------------------------
+
+/// Errors produced when converting approval types to/from A2A metadata.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum ConvertError {
+    /// A required metadata key was not present.
+    #[error("missing metadata key: {key}")]
+    MissingKey {
+        /// The key that was absent.
+        key: &'static str,
+    },
+    /// The metadata value could not be deserialized.
+    #[error("failed to deserialize metadata key `{key}`: {reason}")]
+    Deserialize {
+        /// The key whose value failed to deserialize.
+        key: &'static str,
+        /// Why deserialization failed.
+        reason: String,
+    },
+}
+
+/// Encode an [`ApprovalRequest`] as A2A-compatible metadata.
+///
+/// The A2A task should be given state `InputRequired`; the approval request is
+/// serialized into the task's metadata under key `approval_request`.
+pub fn approval_request_to_a2a_metadata(request: &ApprovalRequest) -> serde_json::Value {
+    serde_json::json!({
+        "approval_request": serde_json::to_value(request).unwrap_or_default()
+    })
+}
+
+/// Extract an [`ApprovalResponse`] from an A2A message's metadata.
+///
+/// Looks for key `approval_response` in `metadata`. Returns
+/// [`ConvertError::MissingKey`] if the key is absent, or
+/// [`ConvertError::Deserialize`] if the value cannot be decoded.
+pub fn approval_response_from_a2a_metadata(
+    metadata: &serde_json::Value,
+) -> Result<ApprovalResponse, ConvertError> {
+    let value = metadata
+        .get("approval_response")
+        .ok_or(ConvertError::MissingKey {
+            key: "approval_response",
+        })?;
+    serde_json::from_value(value.clone()).map_err(|e| ConvertError::Deserialize {
+        key: "approval_response",
+        reason: e.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,4 +547,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn approval_request_round_trips_through_metadata() {
+        use layer0::approval::{ApprovalReason, ApprovalRequest, PendingToolCall};
+
+        let request = ApprovalRequest::new(
+            "run-1",
+            "wp-after-bash",
+            vec![PendingToolCall {
+                call_id: "call-abc".into(),
+                tool_name: "bash".into(),
+                tool_input: serde_json::json!({"cmd": "rm -rf /"}),
+                reason: ApprovalReason::PolicyAlways,
+            }],
+        )
+        .with_prompt("Please review this command.");
+
+        let metadata = approval_request_to_a2a_metadata(&request);
+        assert!(metadata.get("approval_request").is_some());
+
+        // Deserialize back and check key fields.
+        let back: ApprovalRequest =
+            serde_json::from_value(metadata["approval_request"].clone()).unwrap();
+        assert_eq!(back.run_id, "run-1");
+        assert_eq!(back.wait_point, "wp-after-bash");
+        assert_eq!(back.pending.len(), 1);
+        assert_eq!(back.pending[0].tool_name, "bash");
+    }
+
+    #[test]
+    fn approval_response_round_trips_through_metadata() {
+        use layer0::approval::ApprovalResponse;
+
+        let response = ApprovalResponse::ApproveAll;
+        let metadata = serde_json::json!({
+            "approval_response": serde_json::to_value(&response).unwrap()
+        });
+
+        let back = approval_response_from_a2a_metadata(&metadata).unwrap();
+        assert!(matches!(back, ApprovalResponse::ApproveAll));
+    }
+
+    #[test]
+    fn approval_response_missing_key_returns_error() {
+        let metadata = serde_json::json!({"unrelated": true});
+        let err = approval_response_from_a2a_metadata(&metadata).unwrap_err();
+        assert!(matches!(
+            err,
+            ConvertError::MissingKey {
+                key: "approval_response"
+            }
+        ));
+    }
 }

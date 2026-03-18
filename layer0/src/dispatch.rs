@@ -149,6 +149,15 @@ pub enum DispatchEvent {
         /// The error.
         error: OrchError,
     },
+
+    /// Operator is awaiting human approval for pending tool calls.
+    ///
+    /// Emitted when the dispatch layer suspends a run because one or more
+    /// tool calls require a human decision before execution can proceed.
+    /// The calling layer routes the [`crate::approval::ApprovalRequest`] to an approver
+    /// (human, policy engine, or automated gate) and resumes the run with
+    /// an [`crate::approval::ApprovalResponse`].
+    AwaitingApproval(crate::approval::ApprovalRequest),
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -887,20 +896,21 @@ mod tests {
                 })
                 .await;
             // Complete with an output that already carries its own effect.
-            let mut output = OperatorOutput::new(
-                Content::text("done"),
-                crate::operator::ExitReason::Complete,
-            );
+            let mut output =
+                OperatorOutput::new(Content::text("done"), crate::operator::ExitReason::Complete);
             output.effects.push(output_effect);
-            let _ = sender
-                .send(DispatchEvent::Completed { output })
-                .await;
+            let _ = sender.send(DispatchEvent::Completed { output }).await;
         });
 
         let result = handle.collect().await.unwrap();
 
         // Both effects must survive — channel effects extend, not replace.
-        assert_eq!(result.effects.len(), 2, "expected both effects; got {:?}", result.effects);
+        assert_eq!(
+            result.effects.len(),
+            2,
+            "expected both effects; got {:?}",
+            result.effects
+        );
         let types: Vec<&str> = result
             .effects
             .iter()
