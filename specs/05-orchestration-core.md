@@ -15,7 +15,7 @@ It owns:
 
 ## Protocol
 
-`layer0::Dispatcher`, `layer0::Signalable`, and `layer0::Queryable` together form the orchestration boundary:
+`layer0::Dispatcher`, `skg_effects_core::Signalable`, and `skg_effects_core::Queryable` together form the orchestration boundary:
 
 
 
