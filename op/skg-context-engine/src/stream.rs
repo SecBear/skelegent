@@ -70,6 +70,9 @@ pub enum ContextMutation {
 
     /// A streaming inference token/chunk arrived.
     InferenceDelta(StreamEvent),
+
+    /// An effect was declared on the context.
+    EffectDeclared(layer0::effect::Effect),
 }
 
 /// A timestamped context mutation event.

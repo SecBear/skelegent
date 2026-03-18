@@ -9,6 +9,7 @@ use crate::rule::Rule;
 use crate::stream::{ContextEvent, ContextMutation};
 
 use layer0::context::Message;
+use layer0::effect::Effect;
 use rust_decimal::Decimal;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -141,6 +142,9 @@ pub struct Context {
     pub metrics: TurnMetrics,
     /// Reactive rules. Sorted by priority (highest first).
     rules: Vec<Rule>,
+    /// Effects declared during this operator invocation.
+    /// Drained into `OperatorOutput::effects` by the caller.
+    effects: Vec<Effect>,
     /// True when executing a rule — prevents recursive rule firing.
     in_rule: bool,
     /// Observation stream sender. When present, every mutation emits a
@@ -162,6 +166,7 @@ impl Context {
             in_rule: false,
             stream_tx: None,
             intervention_rx: None,
+            effects: Vec::new(),
         }
     }
 
@@ -286,6 +291,31 @@ impl Context {
                 mutation,
             });
         }
+    }
+
+    // ── Effects ─────────────────────────────────────────────────────
+
+    /// Declare an effect. Stored until drained into OperatorOutput.
+    pub fn push_effect(&mut self, effect: Effect) {
+        self.emit(ContextMutation::EffectDeclared(effect.clone()));
+        self.effects.push(effect);
+    }
+
+    /// Declare multiple effects.
+    pub fn extend_effects(&mut self, effects: impl IntoIterator<Item = Effect>) {
+        for effect in effects {
+            self.push_effect(effect);
+        }
+    }
+
+    /// Read current effects without draining.
+    pub fn effects(&self) -> &[Effect] {
+        &self.effects
+    }
+
+    /// Drain all effects (transfers ownership to caller).
+    pub fn drain_effects(&mut self) -> Vec<Effect> {
+        std::mem::take(&mut self.effects)
     }
 
     // ── Rules and structure ──────────────────────────────────────────
@@ -872,5 +902,36 @@ mod tests {
             }
             other => panic!("expected MessagePushed from intervention, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn push_effect_stores_and_drains() {
+        use layer0::effect::Effect;
+        let mut ctx = Context::new();
+        let effect = Effect::DeleteMemory {
+            scope: layer0::effect::Scope::Global,
+            key: "test_key".into(),
+        };
+        ctx.push_effect(effect.clone());
+        assert_eq!(ctx.effects().len(), 1);
+        let drained = ctx.drain_effects();
+        assert_eq!(drained.len(), 1);
+        assert!(ctx.effects().is_empty());
+    }
+
+    #[tokio::test]
+    async fn extend_effects_stores_multiple() {
+        use layer0::effect::Effect;
+        let mut ctx = Context::new();
+        let e1 = Effect::DeleteMemory {
+            scope: layer0::effect::Scope::Global,
+            key: "a".into(),
+        };
+        let e2 = Effect::DeleteMemory {
+            scope: layer0::effect::Scope::Global,
+            key: "b".into(),
+        };
+        ctx.extend_effects(vec![e1, e2]);
+        assert_eq!(ctx.effects().len(), 2);
     }
 }
