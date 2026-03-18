@@ -94,6 +94,7 @@ nix develop --command cargo doc --workspace --no-deps
 |-------|------|
 | skg-context-engine | [op/skg-context-engine](op/skg-context-engine/) |
 | skg-op-single-shot | [op/skg-op-single-shot](op/skg-op-single-shot/) |
+
 ### Layer 1 — Providers
 
 | Crate | Path |
@@ -103,6 +104,7 @@ nix develop --command cargo doc --workspace --no-deps
 | skg-provider-ollama | [provider/skg-provider-ollama](provider/skg-provider-ollama/) |
 | skg-provider-codex | [provider/skg-provider-codex](provider/skg-provider-codex/) |
 | skg-provider-router | [provider/skg-provider-router](provider/skg-provider-router/) |
+
 ### Layer 2 — Orchestration
 
 | Crate | Path |
@@ -126,6 +128,7 @@ nix develop --command cargo doc --workspace --no-deps
 | skg-state-memory | [state/skg-state-memory](state/skg-state-memory/) |
 | skg-state-fs | [state/skg-state-fs](state/skg-state-fs/) |
 | skg-state-proxy | [state/skg-state-proxy](state/skg-state-proxy/) |
+
 ### Layer 4 — Environment
 
 | Crate | Path |
@@ -137,6 +140,7 @@ nix develop --command cargo doc --workspace --no-deps
 | skg-auth | [auth/skg-auth](auth/skg-auth/) |
 | skg-auth-omp | [auth/skg-auth-omp](auth/skg-auth-omp/) |
 | skg-crypto | [crypto/skg-crypto](crypto/skg-crypto/) |
+
 ### Layer 5 — Cross-cutting (Hooks)
 
 | Crate | Path |
@@ -144,6 +148,7 @@ nix develop --command cargo doc --workspace --no-deps
 | skg-hook-security | [hooks/skg-hook-security](hooks/skg-hook-security/) |
 | skg-hook-retry | [hooks/skg-hook-retry](hooks/skg-hook-retry/) |
 | skg-hook-recorder | [hooks/skg-hook-recorder](hooks/skg-hook-recorder/) |
+
 ### Runner
 
 | Crate | Path |
@@ -162,11 +167,6 @@ nix develop --command cargo doc --workspace --no-deps
 |-------|------|
 | skelegent | [skelegent/](skelegent/) |
 
-### Testing
-
-| Crate | Path |
-|-------|------|
-| test-utils | [test-utils/](test-utils/) |
 
 ### Examples
 

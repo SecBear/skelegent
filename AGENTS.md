@@ -21,7 +21,7 @@ You must understand these 6 types to work in this codebase:
 
 | Type | Crate | Role |
 |------|-------|------|
-| `Operator` | layer0 | Object-safe trait. `execute(input, ctx) -> Result<OperatorOutput>`. The unit of agent behavior. |
+| `Operator` | layer0 | Object-safe trait. `execute(input, ctx) -> Result<OperatorOutput, OperatorError>`. The unit of agent behavior. |
 | `DispatchContext` | layer0 | Execution metadata threaded through every boundary: dispatch ID, trace context, auth, typed extensions. Every operator, tool, and middleware receives this. |
 | `Context` | skg-context-engine | Mutable conversation substrate: messages, rules, metrics, effects. All mutations go through `ctx.run(op)` which fires rules. Effects are declared here via `push_effect()` / `extend_effects()` and drained into `OperatorOutput::effects`. |
 | `Effect` | layer0 | Declarative side-effects (Delegate, Handoff, Log, WriteMemory, etc.). Operators declare intent; orchestrators and environments execute. |

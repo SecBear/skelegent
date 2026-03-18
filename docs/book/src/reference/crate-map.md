@@ -100,6 +100,5 @@ All crates in the skelegent workspace, organized by architectural layer.
 | 5 | 3 |
 | Umbrella | 1 |
 | A2A | 1 |
-| Testing | 1 |
 | Examples | 5 |
-| **Total** | **42** |
+| **Total** | **41** |
