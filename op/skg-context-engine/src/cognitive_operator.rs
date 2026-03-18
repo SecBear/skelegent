@@ -144,7 +144,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-        emitter: &EffectEmitter,
+        _emitter: &EffectEmitter,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut ctx = self.create_context();
 
@@ -195,7 +195,6 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             &self.tools,
             &dispatch_ctx,
             &config,
-            emitter,
         )
         .await
         .map_err(map_engine_error)

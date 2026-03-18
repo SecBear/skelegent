@@ -17,7 +17,6 @@ use crate::output::{OutputError, OutputMode, OutputSchema};
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::dispatch::EffectEmitter;
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
@@ -165,7 +164,7 @@ fn structured_exit_output(err: EngineError, ctx: &Context) -> Result<OperatorOut
 
 enum ToolDispatchOutcome {
     Continue,
-    AwaitingApproval(Vec<Effect>),
+    AwaitingApproval,
     Exit(ExitReason),
 }
 
@@ -208,7 +207,6 @@ pub async fn react_loop<P: Provider>(
     tools: &ToolRegistry,
     dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
-    emitter: &EffectEmitter,
 ) -> Result<OperatorOutput, EngineError> {
     loop {
         // Enter InferBoundary: drains pending interventions + fires Before rules.
@@ -358,7 +356,6 @@ pub async fn react_loop_structured<P: Provider>(
     dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
     output: &OutputSchema,
-    emitter: &EffectEmitter,
 ) -> Result<(Option<Value>, OperatorOutput), EngineError> {
     let output_tool_schema = if output.mode == OutputMode::ToolCall {
         Some(output.tool_schema())
@@ -452,12 +449,11 @@ pub async fn react_loop_structured<P: Provider>(
                     tools,
                     dispatch_ctx,
                     &output.tool_name,
-                    emitter,
                 )
                 .await?;
                 match dispatch {
                     ToolDispatchOutcome::Continue => continue,
-                    ToolDispatchOutcome::AwaitingApproval(_) => {
+                    ToolDispatchOutcome::AwaitingApproval => {
                         let op_output =
                             make_output(result.response, ExitReason::AwaitingApproval, ctx);
                         return Ok((None, op_output));
@@ -477,12 +473,11 @@ pub async fn react_loop_structured<P: Provider>(
                         tools,
                         dispatch_ctx,
                         &output.tool_name,
-                        emitter,
                     )
                     .await?;
                     match dispatch {
                         ToolDispatchOutcome::Continue => continue,
-                        ToolDispatchOutcome::AwaitingApproval(_) => {
+                        ToolDispatchOutcome::AwaitingApproval => {
                             let op_output =
                                 make_output(result.response, ExitReason::AwaitingApproval, ctx);
                             return Ok((None, op_output));
@@ -507,8 +502,8 @@ pub async fn react_loop_structured<P: Provider>(
 
 /// Dispatch function tool calls, skipping the output tool.
 ///
-/// If any tool requires approval, emits [`Effect::ToolApprovalRequired`]
-/// effects via the emitter and returns `true` (caller should exit with
+/// If any tool requires approval, stores [`Effect::ToolApprovalRequired`]
+/// effects in the context and returns `AwaitingApproval` (caller should exit with
 /// [`ExitReason::AwaitingApproval`]).
 async fn dispatch_function_tools(
     ctx: &mut Context,
@@ -516,7 +511,6 @@ async fn dispatch_function_tools(
     tools: &ToolRegistry,
     dispatch_ctx: &DispatchContext,
     output_tool_name: &str,
-    emitter: &EffectEmitter,
 ) -> Result<ToolDispatchOutcome, EngineError> {
     // Check for approval-required tools first (excluding output tool)
     let function_calls: Vec<_> = response
@@ -529,7 +523,7 @@ async fn dispatch_function_tools(
 
     if !approval_effects.is_empty() {
         ctx.extend_effects(approval_effects.clone());
-        return Ok(ToolDispatchOutcome::AwaitingApproval(approval_effects));
+        return Ok(ToolDispatchOutcome::AwaitingApproval);
     }
 
     for call in &response.tool_calls {
@@ -686,7 +680,6 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -727,7 +720,6 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -773,7 +765,6 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap_err();
@@ -813,7 +804,6 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap_err();
@@ -848,7 +838,6 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -886,7 +875,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -982,7 +970,6 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1027,7 +1014,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1071,7 +1057,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1110,7 +1095,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap_err();
@@ -1143,7 +1127,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1175,7 +1158,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap_err();
@@ -1218,7 +1200,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1255,7 +1236,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1324,7 +1304,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1366,7 +1345,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1397,7 +1375,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             &schema,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1490,7 +1467,6 @@ mod tests {
             &tools,
             &dispatch_ctx,
             &config,
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1552,7 +1528,6 @@ mod tests {
             &tools,
             &dispatch_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1591,7 +1566,6 @@ mod tests {
             &tools,
             &dispatch_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1627,7 +1601,6 @@ mod tests {
             &tools,
             &dispatch_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -1659,7 +1632,6 @@ mod tests {
             &tools,
             &dispatch_ctx,
             &simple_config(),
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();

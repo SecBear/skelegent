@@ -17,7 +17,6 @@ use crate::ops::tool::ExecuteTool;
 use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error};
 use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::dispatch::EffectEmitter;
 use layer0::duration::DurationMs;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use skg_tool::ToolRegistry;
@@ -49,7 +48,6 @@ pub async fn stream_react_loop<P: StreamProvider>(
     dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
     on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-    emitter: &EffectEmitter,
 ) -> Result<OperatorOutput, EngineError> {
     let on_event = std::sync::Arc::new(on_event);
     loop {
@@ -99,9 +97,7 @@ pub async fn stream_react_loop<P: StreamProvider>(
         let approval_effects = check_approval(&tool_calls, tools);
 
         if !approval_effects.is_empty() {
-            for effect in &approval_effects {
-                emitter.effect(effect.clone()).await;
-            }
+            ctx.extend_effects(approval_effects);
             return Ok(make_output(response, ExitReason::AwaitingApproval, ctx));
         }
 
@@ -131,14 +127,14 @@ pub async fn stream_react_loop<P: StreamProvider>(
     }
 }
 
-fn structured_exit_output(err: EngineError, ctx: &Context) -> Result<OperatorOutput, EngineError> {
+fn structured_exit_output(err: EngineError, ctx: &mut Context) -> Result<OperatorOutput, EngineError> {
     match err {
         EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
         other => Err(other),
     }
 }
 
-fn make_context_output(message: Content, exit: ExitReason, ctx: &Context) -> OperatorOutput {
+fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
     let mut output = OperatorOutput::new(message, exit);
     let mut meta = OperatorMetadata::default();
     meta.tokens_in = ctx.metrics.tokens_in;
@@ -147,11 +143,11 @@ fn make_context_output(message: Content, exit: ExitReason, ctx: &Context) -> Ope
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = vec![];
+    output.effects = ctx.drain_effects();
     output
 }
 
-fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> OperatorOutput {
+fn make_output(response: InferResponse, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
     make_context_output(response.content, exit, ctx)
 }
 
@@ -329,7 +325,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -372,7 +367,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -438,7 +432,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             move |event| events_clone.lock().unwrap().push(event),
-            &EffectEmitter::noop(),
         )
         .await
         .expect("append exit should return structured operator output");
@@ -490,7 +483,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             move |event| events_clone.lock().unwrap().push(event),
-            &EffectEmitter::noop(),
         )
         .await
         .expect("stream exit should return structured operator output");
@@ -525,7 +517,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap_err();
@@ -570,7 +561,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
-            &EffectEmitter::noop(),
         )
         .await
         .expect("budget exits should return structured operator output");
@@ -649,7 +639,6 @@ mod tests {
             &tool_ctx,
             &simple_config(),
             |_| {},
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap_err();
@@ -688,7 +677,6 @@ mod tests {
                 };
                 events_clone.lock().unwrap().push(label);
             },
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
@@ -725,7 +713,6 @@ mod tests {
             &dispatch_ctx,
             &simple_config(),
             |_| {},
-            &EffectEmitter::noop(),
         )
         .await
         .unwrap();
