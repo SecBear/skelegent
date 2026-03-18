@@ -16,7 +16,7 @@ use layer0::context::{Message, Role};
 use layer0::error::OperatorError;
 use layer0::id::OperatorId;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
-use layer0::{DispatchContext, DispatchId};
+use layer0::DispatchContext;
 use skg_tool::ToolRegistry;
 use skg_turn::provider::Provider;
 use std::collections::HashSet;
@@ -78,6 +78,8 @@ impl Default for CognitiveOperatorConfig {
 pub struct CognitiveOperator<P: Provider> {
     provider: P,
     tools: ToolRegistry,
+    /// Accepted from callers for identity/tracing; not yet read internally.
+    #[allow(dead_code)]
     operator_id: OperatorId,
     config: CognitiveOperatorConfig,
     /// Factory for rules injected into each execution context.
@@ -142,7 +144,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
     async fn execute(
         &self,
         input: OperatorInput,
-        _ctx: &DispatchContext,
+        dispatch_ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut ctx = self.create_context();
 
@@ -176,22 +178,11 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             ));
         }
 
-        // Construct a DispatchContext for this execution.
-        // When Operator::execute receives &DispatchContext from the
-        // dispatcher (Phase 3), this construction moves to the caller.
-        let dispatch_ctx = DispatchContext::new(
-            DispatchId::new(format!(
-                "cogop-{}-{}",
-                self.operator_id, ctx.metrics.turns_completed
-            )),
-            self.operator_id.clone(),
-        );
-
         react_loop(
             &mut ctx,
             &self.provider,
             &self.tools,
-            &dispatch_ctx,
+            dispatch_ctx,
             &config,
         )
         .await
@@ -238,6 +229,7 @@ pub fn map_engine_error(err: EngineError) -> OperatorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::id::DispatchId;
     use layer0::content::Content;
     use layer0::operator::{ExitReason, OperatorConfig, TriggerType};
     use skg_turn::test_utils::{TestProvider, make_text_response};
