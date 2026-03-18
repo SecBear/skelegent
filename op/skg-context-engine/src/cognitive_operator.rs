@@ -33,7 +33,6 @@ use crate::{Rule, react_loop};
 /// needs a factory to create fresh rules for each `execute()` call.
 pub type RuleFactory = Arc<dyn Fn() -> Vec<Rule> + Send + Sync>;
 
-
 /// An [`Operator`] that runs a ReAct loop via the context engine.
 ///
 /// Wraps [`react_loop()`](crate::react_loop) with proper error classification,
@@ -92,7 +91,6 @@ impl<P: Provider> CognitiveOperator<P> {
         self.rule_factory = Some(Arc::new(factory));
         self
     }
-
 
     fn create_context(&self) -> Context {
         match &self.rule_factory {

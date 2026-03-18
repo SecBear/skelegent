@@ -32,7 +32,7 @@ You must understand these 6 types to work in this codebase:
 
 ```
 User message
-  → Dispatcher.dispatch(operator_id, input, DispatchContext)
+  → Dispatcher.dispatch(ctx: &DispatchContext, input)
     → Operator.execute(input, &DispatchContext)
       → react_loop(Context, Provider, Tools, &DispatchContext, config)
         → Context.run(ops) fires Rules

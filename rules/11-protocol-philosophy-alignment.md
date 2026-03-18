@@ -83,7 +83,7 @@ For each protocol trait, the philosophy is captured in this checklist. Implement
 ## Examples
 
 - Good: `skg-state-memory` implements `search()` via substring matching, stores metadata from `write_hinted()`, returns empty vec when query matches nothing.
-- Good: `skg-state-fs` implements `search()` as empty vec (no search capability), `write_hinted()` delegates to `write()` by default.
+- Good: `skg-state-fs` implements `search()` via substring matching on file content, `write_hinted()` delegates to `write()` by default.
 - Good: `SweepOperator` takes `Box<dyn ResearchProvider>` — never imports `SweepProvider` directly.
 - Bad: A state store that throws `StateError::NotSupported` when `search()` is called (should return empty vec).
 - Bad: An operator that `use reqwest::Client` to call an API directly (should go through injected provider trait).
