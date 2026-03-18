@@ -180,7 +180,7 @@ fn build_cognitive_operator<P: Provider + 'static>(
     max_tokens: u32,
 ) -> Box<dyn Operator> {
     use skg_context_engine::{
-        CognitiveOperator, CognitiveOperatorConfig,
+        CognitiveOperator, ReactLoopConfig,
         rule::{Rule, Trigger},
         rules::{BudgetGuard, BudgetGuardConfig},
     };
@@ -189,7 +189,7 @@ fn build_cognitive_operator<P: Provider + 'static>(
         "agent",
         provider,
         tools,
-        CognitiveOperatorConfig {
+        ReactLoopConfig {
             system_prompt,
             model: None, // model already selected by provider
             max_tokens: Some(max_tokens),
@@ -212,7 +212,7 @@ fn build_cognitive_operator<P: Provider + 'static>(
 mod tests {
     use super::*;
     use skg_context_engine::{
-        CognitiveOperator, CognitiveOperatorConfig,
+        CognitiveOperator, ReactLoopConfig,
         rules::{BudgetGuard, BudgetGuardConfig},
     };
     use skg_turn::infer::InferResponse;
@@ -240,7 +240,7 @@ mod tests {
             "test",
             provider,
             ToolRegistry::new(),
-            CognitiveOperatorConfig {
+            ReactLoopConfig {
                 system_prompt: "system".into(),
                 ..Default::default()
             },
@@ -277,7 +277,7 @@ mod tests {
             "test",
             provider,
             ToolRegistry::new(),
-            CognitiveOperatorConfig {
+            ReactLoopConfig {
                 system_prompt: "You are helpful.".into(),
                 ..Default::default()
             },

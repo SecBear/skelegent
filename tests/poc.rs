@@ -19,7 +19,7 @@ use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
 use layer0::{DispatchContext, DispatchId};
 use rust_decimal::Decimal;
-use skg_context_engine::{CognitiveOperator, CognitiveOperatorConfig};
+use skg_context_engine::{CognitiveOperator, ReactLoopConfig};
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_orch_local::LocalOrch;
 use skg_state_fs::FsStore;
@@ -82,8 +82,8 @@ fn dispatch_ctx(name: &str) -> DispatchContext {
     DispatchContext::new(DispatchId::new(name), OperatorId::new(name))
 }
 
-fn cognitive_config() -> CognitiveOperatorConfig {
-    CognitiveOperatorConfig {
+fn cognitive_config() -> ReactLoopConfig {
+    ReactLoopConfig {
         system_prompt: "You are a helpful assistant.".into(),
         model: Some("mock-model".into()),
         max_tokens: Some(256),

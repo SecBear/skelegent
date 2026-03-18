@@ -104,7 +104,7 @@ impl<P: Provider> CognitiveOperator<P> {
 
 #[async_trait]
 impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
-    #[tracing::instrument(skip_all, fields(operator_id = %self.operator_id, trigger = ?input.trigger))]
+    #[tracing::instrument(skip_all, fields(operator_id = ?self.operator_id, trigger = ?input.trigger))]
     async fn execute(
         &self,
         input: OperatorInput,
@@ -124,7 +124,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             .await
             .map_err(OperatorError::context_assembly)?;
 
-        let mut config = self.react_loop_config();
+        let mut config = self.config.clone();
 
         // Apply allowed_operators from dispatch input as a tool filter.
         // When a parent sets allowed_operators, only those tools are visible
@@ -200,8 +200,8 @@ mod tests {
         OperatorInput::new(Content::text(text), TriggerType::User)
     }
 
-    fn make_config() -> CognitiveOperatorConfig {
-        CognitiveOperatorConfig {
+    fn make_config() -> ReactLoopConfig {
+        ReactLoopConfig {
             system_prompt: "You are helpful.".into(),
             model: Some("test-model".into()),
             ..Default::default()

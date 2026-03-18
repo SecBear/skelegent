@@ -97,7 +97,7 @@ pub mod stream_react;
 
 // Re-exports
 pub use boundary::{InferBoundary, StreamInferBoundary};
-pub use cognitive_operator::{CognitiveOperator, CognitiveOperatorConfig, map_engine_error};
+pub use cognitive_operator::{CognitiveOperator, map_engine_error};
 pub use compile::{CompileConfig, CompiledContext, InferResult};
 pub use context::{Context, Extensions, TurnMetrics};
 pub use error::EngineError;
