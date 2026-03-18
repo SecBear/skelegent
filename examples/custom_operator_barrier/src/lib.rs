@@ -58,7 +58,6 @@ use layer0::DispatchContext;
 use layer0::content::{Content, ContentBlock};
 use layer0::duration::DurationMs;
 use layer0::error::OperatorError;
-use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, SubDispatchRecord};
 use skg_tool::ToolRegistry;
 /// A minimal operator that batches tool calls between barriers.
@@ -78,7 +77,7 @@ impl Operator for BarrierOperator {
     async fn execute(
         &self,
         input: OperatorInput,
-        _ctx: &DispatchContext,
+        ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut out_blocks: Vec<ContentBlock> = Vec::new();
         let mut batch: Vec<(String, String, serde_json::Value)> = Vec::new();
@@ -90,6 +89,7 @@ impl Operator for BarrierOperator {
             batch: &mut Vec<(String, String, serde_json::Value)>,
             out_blocks: &mut Vec<ContentBlock>,
             metadata: &mut layer0::operator::OperatorMetadata,
+            ctx: &DispatchContext,
         ) {
             if batch.is_empty() {
                 return;
@@ -98,11 +98,7 @@ impl Operator for BarrierOperator {
             for (id, name, params) in batch.drain(..) {
                 let start = std::time::Instant::now();
                 if let Some(tool) = tools.get(&name) {
-                    let ctx = DispatchContext::new(
-                        DispatchId::new("barrier"),
-                        OperatorId::new("barrier"),
-                    );
-                    match tool.call(params, &ctx).await {
+                    match tool.call(params, ctx).await {
                         Ok(val) => {
                             let content = val.to_string();
                             out_blocks.push(ContentBlock::ToolResult {
@@ -161,7 +157,7 @@ impl Operator for BarrierOperator {
                             batch.push((id, name, input));
                         }
                         ContentBlock::Text { text } if text.trim() == "BARRIER" => {
-                            flush(&self.tools, &mut batch, &mut out_blocks, &mut metadata).await;
+                            flush(&self.tools, &mut batch, &mut out_blocks, &mut metadata, ctx).await;
                         }
                         other => {
                             // Pass-through any other content blocks
@@ -170,7 +166,7 @@ impl Operator for BarrierOperator {
                     }
                 }
                 // Final flush
-                flush(&self.tools, &mut batch, &mut out_blocks, &mut metadata).await;
+                flush(&self.tools, &mut batch, &mut out_blocks, &mut metadata, ctx).await;
             }
             _ => { /* ignore unknown content kinds */ }
         }
@@ -187,6 +183,7 @@ mod tests {
     use serde_json::json;
     use skg_tool::{ToolDyn, ToolError};
     use std::sync::Arc;
+    use layer0::id::{DispatchId, OperatorId};
 
     struct Echo;
     impl ToolDyn for Echo {

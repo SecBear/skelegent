@@ -1,6 +1,6 @@
 # Protocol Traits
 
-Layer 0 defines six protocol traits and two cross-cutting interfaces. Every trait is object-safe (`Box<dyn Trait>` is `Send + Sync`), uses `#[async_trait]`, and is designed to be operation-defined rather than mechanism-defined.
+Layer 0 defines four protocol traits and two cross-cutting interfaces. `Signalable` and `Queryable` are defined in Layer 2 (`skg-effects-core`), not Layer 0. Every trait is object-safe (`Box<dyn Trait>` is `Send + Sync`), uses `#[async_trait]`, and is designed to be operation-defined rather than mechanism-defined.
 
 "Operation-defined" means the trait says *what* happens, not *how*. `Operator::execute` means "cause this agent to process one cycle" -- not "make an API call" or "run a subprocess." This is what makes implementations swappable.
 
@@ -154,7 +154,7 @@ pub trait Dispatcher: Send + Sync {
 
 
 
-**Crate:** `layer0::signal`
+**Crate:** `skg-effects-core`
 
 
 
@@ -192,7 +192,7 @@ pub trait Signalable: Send + Sync {
 
 
 
-**Crate:** `layer0::query`
+**Crate:** `skg-effects-core`
 
 
 

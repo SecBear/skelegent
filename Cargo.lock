@@ -2390,6 +2390,7 @@ dependencies = [
  "opentelemetry",
  "serde",
  "serde_json",
+ "skg-secret",
  "skg-turn",
  "tokio",
 ]
@@ -2400,6 +2401,7 @@ version = "0.4.1"
 dependencies = [
  "async-trait",
  "layer0",
+ "rand 0.8.5",
  "tokio",
  "tracing",
 ]

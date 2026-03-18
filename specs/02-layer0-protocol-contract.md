@@ -14,14 +14,12 @@ It must be easy for any implementation to adopt and must avoid coupling to any s
 
 ## Protocol Traits
 
-Layer 0 defines six primary protocol traits:
+Layer 0 defines four primary protocol traits:
 
 - `Operator`: one unit of agent work
 - `Dispatcher`: dispatch/invoke operators
 
-- `Signalable`: fire-and-forget inter-workflow messaging
-
-- `Queryable`: read-only workflow state queries
+`Signalable` (fire-and-forget inter-workflow messaging) and `Queryable` (read-only workflow state queries) are defined in Layer 2 (`skg-effects-core`), not Layer 0.
 
 - `StateStore` + `StateReader`: persistence and retrieval
 

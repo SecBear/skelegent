@@ -357,11 +357,11 @@ impl DispatchHandle {
         if let Some(error) = terminal_error {
             Err(error)
         } else if let Some(mut output) = terminal_output {
-            // Effects emitted via the channel take priority.
-            // Legacy operators that set output.effects directly
-            // still work when no EffectEmitted events are received.
+            // Effects from the channel are merged with any effects already set
+            // on the output (e.g. by make_output()). extend() rather than
+            // replace() ensures neither source is silently discarded.
             if !collected_effects.is_empty() {
-                output.effects = collected_effects;
+                output.effects.extend(collected_effects);
             }
             Ok(output)
         } else {
@@ -467,7 +467,7 @@ impl DispatchHandle {
             .collect();
 
         if !collected_effects.is_empty() {
-            output.effects = collected_effects;
+            output.effects.extend(collected_effects);
         }
 
         Ok(CollectedDispatch { output, events })
@@ -657,16 +657,19 @@ impl EffectEmitter {
 
     /// Check whether the dispatch caller has requested cancellation.
     ///
-    /// Operators should poll this periodically during long-running
-    /// work and exit early when cancelled.
+    /// Used by the dispatch layer to observe caller-side cancellation.
+    /// `EffectEmitter` is not passed to operators — they use
+    /// [`DispatchContext`](crate::dispatch_context::DispatchContext).
     pub fn is_cancelled(&self) -> bool {
         self.sender.as_ref().is_some_and(|s| s.is_cancelled())
     }
 
     /// Wait until the dispatch caller requests cancellation.
     ///
-    /// Useful in `tokio::select!` to race cancellation against work.
-    /// Returns immediately if no consumer exists (no-op emitter).
+    /// Used by the dispatch layer to race cancellation against ongoing work via
+    /// `tokio::select!`. Returns immediately when no consumer exists (no-op emitter).
+    /// `EffectEmitter` is not passed to operators — they use
+    /// [`DispatchContext`](crate::dispatch_context::DispatchContext).
     pub async fn cancelled(&self) {
         if let Some(ref sender) = self.sender {
             // Clone the cancel_rx to get a mutable receiver without
@@ -855,5 +858,58 @@ mod tests {
             result.is_ok(),
             "collect should not hang when callback panics"
         );
+    }
+
+    /// collect() must extend output.effects rather than replace them.
+    ///
+    /// Scenario: the operator sets output.effects in make_output() (e.g. WriteMemory),
+    /// and ALSO emits effects via the EffectEmitted channel (e.g. a Signal). Both
+    /// must appear in the final output — neither should shadow the other.
+    #[tokio::test]
+    async fn collect_extends_output_effects_not_replaces() {
+        use crate::effect::Effect;
+
+        let channel_effect = Effect::Custom {
+            effect_type: "channel-effect".into(),
+            data: serde_json::json!({}),
+        };
+        let output_effect = Effect::Custom {
+            effect_type: "output-effect".into(),
+            data: serde_json::json!({}),
+        };
+
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("extend-test"));
+        tokio::spawn(async move {
+            // Emit an effect via the channel.
+            let _ = sender
+                .send(DispatchEvent::EffectEmitted {
+                    effect: channel_effect,
+                })
+                .await;
+            // Complete with an output that already carries its own effect.
+            let mut output = OperatorOutput::new(
+                Content::text("done"),
+                crate::operator::ExitReason::Complete,
+            );
+            output.effects.push(output_effect);
+            let _ = sender
+                .send(DispatchEvent::Completed { output })
+                .await;
+        });
+
+        let result = handle.collect().await.unwrap();
+
+        // Both effects must survive — channel effects extend, not replace.
+        assert_eq!(result.effects.len(), 2, "expected both effects; got {:?}", result.effects);
+        let types: Vec<&str> = result
+            .effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Custom { effect_type, .. } => Some(effect_type.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(types.contains(&"output-effect"), "output-effect missing");
+        assert!(types.contains(&"channel-effect"), "channel-effect missing");
     }
 }

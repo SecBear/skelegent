@@ -14,7 +14,6 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
-use layer0::id::DispatchId;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
 use layer0::secret::{SecretAccessEvent, SecretAccessOutcome};
 use skg_secret::{SecretError, SecretLease, SecretResolver};
@@ -208,19 +207,16 @@ impl LocalEnv {
 impl Environment for LocalEnv {
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
         let correlation = CorrelationContext::from_metadata(&input.metadata);
         let cleanup = self.resolve_and_inject(spec, &correlation).await?;
 
-        let ctx = DispatchContext::new(
-            DispatchId::new("env-local"),
-            layer0::id::OperatorId::new("local-env"),
-        );
         let result = self
             .op
-            .execute(input, &ctx)
+            .execute(input, ctx)
             .await
             .map_err(EnvError::OperatorError);
         drop(cleanup);
@@ -435,7 +431,7 @@ mod tests {
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let output = env.run(input, &spec).await.unwrap();
+        let output = env.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.message.as_text().unwrap(), "hello");
     }
@@ -448,7 +444,7 @@ mod tests {
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let result = env.run(input, &spec).await;
+        let result = env.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec).await;
         assert!(result.is_err());
     }
 

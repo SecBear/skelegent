@@ -116,6 +116,7 @@ pub trait ExecNext: Send + Sync {
     /// Forward the execution to the next layer.
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError>;
@@ -129,6 +130,7 @@ pub trait ExecMiddleware: Send + Sync {
     /// Intercept an environment execution.
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
         next: &dyn ExecNext,
@@ -446,19 +448,20 @@ impl ExecStack {
     /// Execute through the middleware chain, ending at `terminal`.
     pub async fn run_with(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
         terminal: &dyn ExecNext,
     ) -> Result<OperatorOutput, EnvError> {
         if self.layers.is_empty() {
-            return terminal.run(input, spec).await;
+            return terminal.run(ctx, input, spec).await;
         }
         let chain = ExecChain {
             layers: &self.layers,
             index: 0,
             terminal,
         };
-        chain.run(input, spec).await
+        chain.run(ctx, input, spec).await
     }
 }
 
@@ -501,18 +504,19 @@ struct ExecChain<'a> {
 impl ExecNext for ExecChain<'_> {
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
         if self.index >= self.layers.len() {
-            return self.terminal.run(input, spec).await;
+            return self.terminal.run(ctx, input, spec).await;
         }
         let next = ExecChain {
             layers: self.layers,
             index: self.index + 1,
             terminal: self.terminal,
         };
-        self.layers[self.index].run(input, spec, &next).await
+        self.layers[self.index].run(ctx, input, spec, &next).await
     }
 }
 
@@ -580,11 +584,12 @@ mod tests {
         impl ExecMiddleware for CredentialInjector {
             async fn run(
                 &self,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
                 spec: &EnvironmentSpec,
                 next: &dyn ExecNext,
             ) -> Result<OperatorOutput, EnvError> {
-                next.run(input, spec).await
+                next.run(_ctx, input, spec).await
             }
         }
 
@@ -764,11 +769,12 @@ mod tests {
         impl ExecMiddleware for LogExec {
             async fn run(
                 &self,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
                 spec: &EnvironmentSpec,
                 next: &dyn ExecNext,
             ) -> Result<OperatorOutput, EnvError> {
-                next.run(input, spec).await
+                next.run(_ctx, input, spec).await
             }
         }
 
@@ -778,6 +784,7 @@ mod tests {
         impl ExecNext for EchoExec {
             async fn run(
                 &self,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
                 _spec: &EnvironmentSpec,
             ) -> Result<OperatorOutput, EnvError> {
@@ -795,7 +802,7 @@ mod tests {
             crate::operator::TriggerType::User,
         );
         let spec = EnvironmentSpec::default();
-        let result = stack.run_with(input, &spec, &EchoExec).await;
+        let result = stack.run_with(&DispatchContext::new(crate::id::DispatchId::new("test"), crate::id::OperatorId::new("test")), input, &spec, &EchoExec).await;
         assert!(result.is_ok());
     }
 }

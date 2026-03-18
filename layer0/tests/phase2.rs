@@ -199,7 +199,7 @@ async fn local_environment_passes_through_to_turn() {
     let env = LocalEnvironment::new(Arc::new(EchoOperator));
     let input = simple_input("through environment");
     let spec = EnvironmentSpec::default();
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&test_ctx("local-env"), input, &spec).await.unwrap();
     assert_eq!(output.message, Content::text("through environment"));
     assert_eq!(output.exit_reason, ExitReason::Complete);
 }
@@ -209,7 +209,7 @@ async fn local_environment_is_usable_as_dyn_environment() {
     let env: Box<dyn Environment> = Box::new(LocalEnvironment::new(Arc::new(EchoOperator)));
     let input = simple_input("dynamic env");
     let spec = EnvironmentSpec::default();
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&test_ctx("local-env"), input, &spec).await.unwrap();
     assert_eq!(output.message, Content::text("dynamic env"));
 }
 
@@ -325,7 +325,7 @@ async fn integration_compose_all_implementations() {
 
     // 8. Run a turn through the environment (passthrough)
     let env_output = env
-        .run(simple_input("env-wrapped"), &EnvironmentSpec::default())
+        .run(&test_ctx("env-wrapped"), simple_input("env-wrapped"), &EnvironmentSpec::default())
         .await
         .unwrap();
     assert_eq!(env_output.message, Content::text("env-wrapped"));

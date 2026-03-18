@@ -95,8 +95,9 @@ impl Dispatcher for EnvOrch {
         };
 
         let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
+        let ctx = ctx.clone();
         tokio::spawn(async move {
-            match env.run(input, &spec).await {
+            match env.run(&ctx, input, &spec).await {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }

@@ -197,13 +197,13 @@ for backends that do not support hints.
 
 Two executors in this workspace demonstrate the pattern:
 
-- **`LocalEffectExecutor`** (`skg-effects-local`) — standalone executor implementing
-  the `EffectExecutor` trait. Constructs `StoreOptions` from all five advisory fields,
+- **`LocalEffectHandler`** (`skg-effects-local`) — standalone handler implementing
+  the `EffectHandler` trait. Constructs `StoreOptions` from all five advisory fields,
   runs the `StoreMiddleware` chain (which may halt or modify the value), then
   calls `write_hinted()`.
 
-- **`LocalEffectInterpreter`** (`skg-orch-kit`) — per-effect interpreter used by
-  `OrchestratedRunner`. Identical advisory-field threading as `LocalEffectExecutor`.
+- **`LocalEffectHandler`** (`skg-orch-kit`) — per-effect handler used by
+  `OrchestratedRunner`. Identical advisory-field threading as `LocalEffectHandler`.
   Additionally records a `MemoryWritten` event to the `ExecutionTrace`.
 
 Both follow the same pattern. New executors for durable or remote backends must do the

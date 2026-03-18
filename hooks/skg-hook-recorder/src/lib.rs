@@ -36,6 +36,7 @@ pub mod exec;
 pub mod infer;
 pub mod sink;
 pub mod store;
+pub mod secret;
 
 pub use dispatch::DispatchRecorder;
 pub use embed::EmbedRecorder;
@@ -43,6 +44,7 @@ pub use exec::ExecRecorder;
 pub use infer::InferRecorder;
 pub use sink::InMemorySink;
 pub use store::StoreRecorder;
+pub use secret::SecretRecorder;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // SCHEMA VERSION
@@ -75,6 +77,8 @@ pub enum Boundary {
     Infer,
     /// An embedding call crossing `EmbedMiddleware`.
     Embed,
+    /// A secret resolution crossing `SecretMiddleware`.
+    Secret,
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

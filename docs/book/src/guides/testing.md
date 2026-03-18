@@ -43,7 +43,7 @@ fn dispatcher_is_object_safe_and_send_sync() {
 
 fn signalable_is_object_safe_and_send_sync() {
 
-    _assert_send_sync::<Box<dyn layer0::Signalable>>();
+    _assert_send_sync::<Box<dyn skg_effects_core::Signalable>>();
 
 }
 
@@ -53,7 +53,7 @@ fn signalable_is_object_safe_and_send_sync() {
 
 fn queryable_is_object_safe_and_send_sync() {
 
-    _assert_send_sync::<Box<dyn layer0::Queryable>>();
+    _assert_send_sync::<Box<dyn skg_effects_core::Queryable>>();
 
 }
 

@@ -268,6 +268,8 @@ mod exec_contract {
     use layer0::content::Content;
     use layer0::environment::EnvironmentSpec;
     use layer0::error::EnvError;
+    use layer0::dispatch_context::DispatchContext;
+    use layer0::id::{DispatchId, OperatorId};
     use layer0::middleware::{ExecMiddleware, ExecNext, ExecStack};
     use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 
@@ -281,6 +283,7 @@ mod exec_contract {
     impl ExecNext for CountingTerminal {
         async fn run(
             &self,
+            _ctx: &DispatchContext,
             input: OperatorInput,
             _spec: &EnvironmentSpec,
         ) -> Result<OperatorOutput, EnvError> {
@@ -296,7 +299,7 @@ mod exec_contract {
         let terminal = CountingTerminal(terminal_count.clone());
 
         let result = stack
-            .run_with(make_input(), &EnvironmentSpec::default(), &terminal)
+            .run_with(&DispatchContext::new(DispatchId::new("contract"), OperatorId::from("op")), make_input(), &EnvironmentSpec::default(), &terminal)
             .await;
         assert!(result.is_ok());
         assert_eq!(terminal_count.load(Ordering::SeqCst), 1);
@@ -313,12 +316,13 @@ mod exec_contract {
         impl ExecMiddleware for Observer {
             async fn run(
                 &self,
+                ctx: &DispatchContext,
                 input: OperatorInput,
                 spec: &EnvironmentSpec,
                 next: &dyn ExecNext,
             ) -> Result<OperatorOutput, EnvError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                next.run(input, spec).await
+                next.run(ctx, input, spec).await
             }
         }
 
@@ -328,7 +332,7 @@ mod exec_contract {
         let terminal = CountingTerminal(terminal_count.clone());
 
         let result = stack
-            .run_with(make_input(), &EnvironmentSpec::default(), &terminal)
+            .run_with(&DispatchContext::new(DispatchId::new("contract"), OperatorId::from("op")), make_input(), &EnvironmentSpec::default(), &terminal)
             .await;
         assert!(result.is_ok());
         assert_eq!(observe_count.load(Ordering::SeqCst), 1);
@@ -345,6 +349,7 @@ mod exec_contract {
         impl ExecMiddleware for DenyGuard {
             async fn run(
                 &self,
+                _ctx: &DispatchContext,
                 _input: OperatorInput,
                 _spec: &EnvironmentSpec,
                 _next: &dyn ExecNext,
@@ -357,7 +362,7 @@ mod exec_contract {
         let terminal = CountingTerminal(terminal_count.clone());
 
         let result = stack
-            .run_with(make_input(), &EnvironmentSpec::default(), &terminal)
+            .run_with(&DispatchContext::new(DispatchId::new("contract"), OperatorId::from("op")), make_input(), &EnvironmentSpec::default(), &terminal)
             .await;
         assert!(result.is_err());
         assert_eq!(

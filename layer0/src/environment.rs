@@ -1,5 +1,6 @@
 //! The Environment protocol — isolation, credentials, and resource constraints.
 
+use crate::dispatch_context::DispatchContext;
 use crate::{
     error::EnvError, operator::OperatorInput, operator::OperatorOutput, secret::SecretSource,
 };
@@ -42,6 +43,7 @@ pub trait Environment: Send + Sync {
     /// 6. Tears down the isolation context
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError>;

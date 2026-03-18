@@ -149,7 +149,8 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
 /// Classified mapping from [`EngineError`] to [`OperatorError`].
 ///
 /// Preserves error semantics: retryable provider errors stay retryable,
-/// operator errors pass through, tool errors become sub-dispatch errors.
+/// operator errors pass through, retryable tool errors become `Retryable`,
+/// and non-retryable tool errors become `NonRetryable`.
 pub fn map_engine_error(err: EngineError) -> OperatorError {
     match err {
         EngineError::Provider(err) => {
@@ -164,14 +165,19 @@ pub fn map_engine_error(err: EngineError) -> OperatorError {
         }
         EngineError::Operator(err) => err,
         EngineError::Tool(err) => {
-            // Extract tool identity from the error when available.
-            let label = match &err {
-                skg_tool::ToolError::NotFound(name) => format!("tool:{name}"),
-                _ => "tool".to_string(),
-            };
-            OperatorError::SubDispatch {
-                operator: label,
-                source: Box::new(err),
+            // Preserve retryability signal from the tool layer rather than
+            // always masking it as SubDispatch (which callers cannot retry).
+            let message = err.to_string();
+            if err.is_retryable() {
+                OperatorError::Retryable {
+                    message,
+                    source: Some(Box::new(err)),
+                }
+            } else {
+                OperatorError::NonRetryable {
+                    message,
+                    source: Some(Box::new(err)),
+                }
             }
         }
         EngineError::Halted { reason } => OperatorError::Halted { reason },
@@ -404,5 +410,58 @@ mod tests {
         let tool_a: Arc<dyn skg_tool::ToolDyn> = Arc::new(StubTool("tool_a"));
         let ctx = Context::new();
         assert!(!filter(tool_a.as_ref(), &ctx));
+    }
+
+    // ── map_engine_error: tool retryability ───────────────────────────
+
+    #[test]
+    fn map_engine_error_transient_tool_becomes_retryable() {
+        use layer0::error::OperatorError;
+        use crate::error::EngineError;
+        let err = EngineError::Tool(skg_tool::ToolError::Transient("network blip".into()));
+        let mapped = map_engine_error(err);
+        assert!(
+            matches!(mapped, OperatorError::Retryable { .. }),
+            "transient tool error should map to Retryable, got {mapped:?}"
+        );
+    }
+
+    #[test]
+    fn map_engine_error_rate_limited_tool_becomes_retryable() {
+        use layer0::error::OperatorError;
+        use crate::error::EngineError;
+        let err = EngineError::Tool(skg_tool::ToolError::RateLimited {
+            retry_after: None,
+            message: "429".into(),
+        });
+        let mapped = map_engine_error(err);
+        assert!(
+            matches!(mapped, OperatorError::Retryable { .. }),
+            "rate-limited tool error should map to Retryable, got {mapped:?}"
+        );
+    }
+
+    #[test]
+    fn map_engine_error_execution_failed_tool_becomes_non_retryable() {
+        use layer0::error::OperatorError;
+        use crate::error::EngineError;
+        let err = EngineError::Tool(skg_tool::ToolError::ExecutionFailed("boom".into()));
+        let mapped = map_engine_error(err);
+        assert!(
+            matches!(mapped, OperatorError::NonRetryable { .. }),
+            "execution-failed tool error should map to NonRetryable, got {mapped:?}"
+        );
+    }
+
+    #[test]
+    fn map_engine_error_tool_not_found_becomes_non_retryable() {
+        use layer0::error::OperatorError;
+        use crate::error::EngineError;
+        let err = EngineError::Tool(skg_tool::ToolError::NotFound("my_tool".into()));
+        let mapped = map_engine_error(err);
+        assert!(
+            matches!(mapped, OperatorError::NonRetryable { .. }),
+            "not-found tool error should map to NonRetryable, got {mapped:?}"
+        );
     }
 }

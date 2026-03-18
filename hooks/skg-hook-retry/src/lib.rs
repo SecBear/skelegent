@@ -7,10 +7,11 @@
 use async_trait::async_trait;
 use layer0::dispatch::DispatchHandle;
 use layer0::dispatch_context::DispatchContext;
-use layer0::error::OrchError;
+use layer0::error::{EnvError, OrchError};
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
 use layer0::operator::OperatorInput;
 use std::time::Duration;
+use rand::Rng;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CONFIGURATION
@@ -43,6 +44,14 @@ pub enum BackoffStrategy {
     Fixed,
     /// Exponential backoff: delay * 2^attempt.
     Exponential,
+    /// Full jitter: uniform random in [0, min(max_backoff, base * 2^attempt)).
+    ///
+    /// Eliminates thundering-herd problems by spreading retries randomly across
+    /// the full computed window rather than clustering at its boundary.
+    FullJitter {
+        /// Upper bound on the computed backoff window before sampling.
+        max_backoff: Duration,
+    },
 }
 
 impl BackoffStrategy {
@@ -51,6 +60,16 @@ impl BackoffStrategy {
         match self {
             Self::Fixed => base,
             Self::Exponential => base.saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX)),
+            Self::FullJitter { max_backoff } => {
+                // Exponential window, capped at max_backoff.
+                let window = base
+                    .saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX))
+                    .min(*max_backoff);
+                // Sample uniformly from [0, window]. Nanosecond precision.
+                let cap_nanos =
+                    u64::try_from(window.as_nanos()).unwrap_or(u64::MAX);
+                Duration::from_nanos(rand::thread_rng().gen_range(0..=cap_nanos))
+            }
         }
     }
 }
@@ -67,9 +86,14 @@ fn is_retryable_default(err: &OrchError) -> bool {
         // Transient failures worth retrying.
         OrchError::DispatchFailed(_) | OrchError::SignalFailed(_) => true,
         // Permanent failures — retrying won't help.
-        OrchError::OperatorNotFound(_)
-        | OrchError::WorkflowNotFound(_)
-        | OrchError::EnvironmentError(_) => false,
+        OrchError::OperatorNotFound(_) | OrchError::WorkflowNotFound(_) => false,
+        // Environment errors: provisioning is transient; operator errors delegate;
+        // isolation/credential/resource violations are permanent.
+        OrchError::EnvironmentError(env_err) => match env_err {
+            EnvError::ProvisionFailed(_) => true,
+            EnvError::OperatorError(inner) => inner.is_retryable(),
+            _ => false,
+        },
         // Operator errors: delegate to inner retryability.
         OrchError::OperatorError(op_err) => op_err.is_retryable(),
         // Unknown variants (non_exhaustive): default to not retrying.
@@ -453,5 +477,83 @@ mod tests {
         assert!(result.is_err());
         // Should have been called exactly once — no retries for permanent errors.
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    // ── BackoffStrategy::FullJitter ────────────────────────────
+
+    #[test]
+    fn full_jitter_stays_within_window() {
+        let strategy = BackoffStrategy::FullJitter {
+            max_backoff: Duration::from_millis(500),
+        };
+        let base = Duration::from_millis(100);
+        // 100 samples across several attempts; none must exceed the cap.
+        for attempt in 0..6u32 {
+            let cap = base
+                .saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX))
+                .min(Duration::from_millis(500));
+            for _ in 0..100 {
+                let d = strategy.delay(base, attempt);
+                assert!(
+                    d <= cap,
+                    "attempt {attempt}: jitter {d:?} exceeded cap {cap:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_jitter_respects_max_backoff_cap() {
+        let strategy = BackoffStrategy::FullJitter {
+            max_backoff: Duration::from_millis(200),
+        };
+        // At attempt 10, uncapped window is 100ms * 2^10 = 102.4s >> 200ms cap.
+        let base = Duration::from_millis(100);
+        for _ in 0..200 {
+            let d = strategy.delay(base, 10);
+            assert!(
+                d <= Duration::from_millis(200),
+                "jitter {d:?} exceeded max_backoff 200ms"
+            );
+        }
+    }
+
+    // ── EnvironmentError retryability ────────────────────────────
+
+    #[test]
+    fn provision_failed_is_retryable() {
+        use layer0::error::EnvError;
+        assert!(is_retryable_default(&OrchError::EnvironmentError(
+            EnvError::ProvisionFailed("spawn timeout".into()),
+        )));
+    }
+
+    #[test]
+    fn isolation_violation_is_not_retryable() {
+        use layer0::error::EnvError;
+        assert!(!is_retryable_default(&OrchError::EnvironmentError(
+            EnvError::IsolationViolation("sandbox breach".into()),
+        )));
+    }
+
+    #[test]
+    fn credential_failed_is_not_retryable() {
+        use layer0::error::EnvError;
+        assert!(!is_retryable_default(&OrchError::EnvironmentError(
+            EnvError::CredentialFailed("missing token".into()),
+        )));
+    }
+
+    #[test]
+    fn env_operator_error_delegates_to_inner() {
+        use layer0::error::EnvError;
+        // Retryable inner.
+        assert!(is_retryable_default(&OrchError::EnvironmentError(
+            EnvError::OperatorError(OperatorError::retryable("transient")),
+        )));
+        // Non-retryable inner.
+        assert!(!is_retryable_default(&OrchError::EnvironmentError(
+            EnvError::OperatorError(OperatorError::non_retryable("permanent")),
+        )));
     }
 }

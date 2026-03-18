@@ -64,11 +64,11 @@ impl DispatchMiddleware for DispatchRecorder {
 
         let start = Instant::now();
         let result = next.dispatch(ctx, input).await;
-        let duration_ms = start.elapsed().as_millis() as u64;
 
         match result {
             Err(e) => {
                 // Immediate failure — record Post synchronously with the error.
+                let duration_ms = start.elapsed().as_millis() as u64;
                 let error_str = e.to_string();
                 self.sink
                     .record(RecordEntry::post(
@@ -82,25 +82,39 @@ impl DispatchMiddleware for DispatchRecorder {
                 Err(e)
             }
             Ok(handle) => {
-                // Success — use intercept() to capture the Completed event asynchronously.
-                // The Post-phase entry is written when the terminal event arrives on the handle.
+                // Success — use intercept() to capture the terminal event asynchronously.
+                // The Post-phase entry is written when Completed or Failed arrives on the handle.
                 let sink = self.sink.clone();
+                // `intercept` takes a sync `Fn(&DispatchEvent)` — the callback contract has no
+                // async support. We cannot `.await` sink.record() directly here; a spawned task
+                // is the only option. TODO: if DispatchHandle::intercept gains an async-callback
+                // variant, replace `tokio::spawn` with a direct `.await` on `sink.record(entry)`.
                 let intercepted = handle.intercept(move |event| {
-                    if let DispatchEvent::Completed { output } = event {
-                        let payload =
-                            serde_json::to_value(output).unwrap_or(serde_json::Value::Null);
-                        let entry = RecordEntry {
-                            boundary: Boundary::Dispatch,
-                            phase: crate::Phase::Post,
-                            context: record_ctx.clone(),
-                            payload_json: payload,
-                            duration_ms: Some(duration_ms),
-                            error: None,
-                            version: SCHEMA_VERSION,
-                        };
-                        let sink = sink.clone();
-                        tokio::spawn(async move { sink.record(entry).await });
-                    }
+                    let (payload, error) = match event {
+                        DispatchEvent::Completed { output } => {
+                            let p = serde_json::to_value(output)
+                                .unwrap_or(serde_json::Value::Null);
+                            (p, None)
+                        }
+                        DispatchEvent::Failed { error } => {
+                            let msg = error.to_string();
+                            (serde_json::json!({"error": msg}), Some(msg))
+                        }
+                        _ => return,
+                    };
+                    // Compute duration at terminal event time, not at handle-creation time.
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    let entry = RecordEntry {
+                        boundary: Boundary::Dispatch,
+                        phase: crate::Phase::Post,
+                        context: record_ctx.clone(),
+                        payload_json: payload,
+                        duration_ms: Some(duration_ms),
+                        error,
+                        version: SCHEMA_VERSION,
+                    };
+                    let sink = sink.clone();
+                    tokio::spawn(async move { sink.record(entry).await });
                 });
                 Ok(intercepted)
             }
@@ -238,5 +252,56 @@ mod tests {
         assert_eq!(post.phase, Phase::Post);
         assert!(post.error.is_some());
         assert_eq!(post.payload_json["error"], "dispatch failed: boom");
+    }
+
+    /// A `DispatchNext` that returns a handle which emits `DispatchEvent::Failed`.
+    struct HandleFailNext;
+
+    #[async_trait]
+    impl DispatchNext for HandleFailNext {
+        async fn dispatch(
+            &self,
+            _ctx: &DispatchContext,
+            _input: OperatorInput,
+        ) -> Result<DispatchHandle, OrchError> {
+            let (handle, sender) = DispatchHandle::channel(DispatchId::new("hf-001"));
+            tokio::spawn(async move {
+                let _ = sender
+                    .send(DispatchEvent::Failed {
+                        error: OrchError::DispatchFailed("stream failed".into()),
+                    })
+                    .await;
+            });
+            Ok(handle)
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_recorder_captures_handle_failed_event() {
+        let sink = Arc::new(InMemorySink::new());
+        let recorder = DispatchRecorder::new(sink.clone());
+
+        let ctx = DispatchContext::new(DispatchId::new("d-hf"), OperatorId::from("op"));
+        let input = OperatorInput::new(Content::text("x"), TriggerType::User);
+
+        let handle = recorder.dispatch(&ctx, input, &HandleFailNext).await.unwrap();
+        // collect() drains events; the Failed terminal event triggers the intercept.
+        let result = handle.collect().await;
+        assert!(result.is_err(), "expected Err from Failed event");
+        // Yield to allow the spawned sink.record() task to flush.
+        tokio::task::yield_now().await;
+
+        let entries = sink.entries().await;
+        assert_eq!(entries.len(), 2, "expected pre + post");
+        let post = &entries[1];
+        assert_eq!(post.phase, Phase::Post);
+        assert_eq!(post.boundary, Boundary::Dispatch);
+        assert!(post.error.is_some(), "post error must be set for Failed event");
+        assert!(
+            post.payload_json.get("error").is_some(),
+            "post payload must contain error field, got: {}",
+            post.payload_json
+        );
+        assert!(post.duration_ms.is_some(), "duration must be recorded");
     }
 }

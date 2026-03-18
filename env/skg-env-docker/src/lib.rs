@@ -23,6 +23,7 @@ pub use config::{DockerEnvConfig, PullPolicy, RetryConfig, ReusePolicy, Transpor
 
 use async_trait::async_trait;
 use bollard::Docker;
+use layer0::dispatch_context::DispatchContext;
 use layer0::environment::{CredentialInjection, Environment, EnvironmentSpec, IsolationBoundary};
 use layer0::error::EnvError;
 use layer0::id::OperatorId;
@@ -197,9 +198,11 @@ impl DockerEnvironmentBuilder {
 impl Environment for DockerEnvironment {
     async fn run(
         &self,
+        _ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
+        // TODO: propagate _ctx.trace into the gRPC ExecuteRequest headers for distributed tracing
         // 0) Derive image from spec (IsolationBoundary::Container { image }) or default
         let image = self.resolve_image(spec);
         let container_port = self.container_port();

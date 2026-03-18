@@ -151,7 +151,7 @@ Results are returned in the same order as the input tasks. Individual tasks may 
 Signals provide fire-and-forget messaging to running workflows:
 
 ```rust,no_run
-use layer0::signal::Signalable;
+use skg_effects_core::Signalable;
 use layer0::effect::SignalPayload;
 use layer0::id::WorkflowId;
 
@@ -175,7 +175,7 @@ signalable
 Queries provide read-only inspection of workflow state:
 
 ```rust,no_run
-use layer0::query::{Queryable, QueryPayload};
+use skg_effects_core::{Queryable, QueryPayload};
 use layer0::id::WorkflowId;
 
 # async fn example(queryable: &dyn Queryable) -> Result<(), Box<dyn std::error::Error>> {

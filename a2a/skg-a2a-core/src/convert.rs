@@ -64,8 +64,8 @@ fn part_to_content_block(part: &Part) -> ContentBlock {
 /// Convert a [`ContentBlock`] into a [`Part`].
 ///
 /// Lossy conversions:
-/// - `ContentBlock::Image` with `Base64` source is packed into a `Data` part
-///   carrying `{"base64": "<data>"}` since A2A has no inline-binary part type.
+/// - `ContentBlock::Image` with `Base64` source maps to a `Raw` part carrying
+///   the base64 string directly in `raw`; media type is preserved.
 /// - `ContentBlock::ToolUse` is serialized as a structured `Data` part.
 /// - `ContentBlock::ToolResult` is flattened to a text part.
 /// - `ContentBlock::Custom` is serialized as a `Data` part.
@@ -87,9 +87,7 @@ fn content_block_to_part(block: &ContentBlock) -> Part {
             source: ContentSource::Base64 { data },
             media_type,
         } => Part {
-            content: PartContent::Data {
-                data: json!({ "base64": data }),
-            },
+            content: PartContent::Raw { raw: data.clone() },
             media_type: Some(media_type.clone()),
             filename: None,
             metadata: None,
@@ -111,9 +109,7 @@ fn content_block_to_part(block: &ContentBlock) -> Part {
             media_type,
             filename,
         } => Part {
-            content: PartContent::Data {
-                data: json!({ "base64": data }),
-            },
+            content: PartContent::Raw { raw: data.clone() },
             media_type: Some(media_type.clone()),
             filename: filename.clone(),
             metadata: None,
@@ -480,4 +476,21 @@ mod tests {
         let input = a2a_message_to_operator_input(&msg);
         assert!(matches!(input.trigger, TriggerType::User));
     }
+    #[test]
+    fn base64_image_block_maps_to_raw_part() {
+        // Regression: base64 image must become Raw, not Data({"base64": ...})
+        let block = ContentBlock::Image {
+            source: ContentSource::Base64 {
+                data: "SGVsbG8=".into(),
+            },
+            media_type: "image/png".into(),
+        };
+        let part = content_block_to_part(&block);
+        assert_eq!(part.media_type.as_deref(), Some("image/png"));
+        match part.content {
+            PartContent::Raw { raw } => assert_eq!(raw, "SGVsbG8="),
+            other => panic!("expected Raw, got {other:?}"),
+        }
+    }
+
 }

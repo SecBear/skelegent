@@ -30,7 +30,7 @@ Internal traits like `Provider` are never used behind `dyn` -- they appear as ge
 
 ## Why four protocol concerns plus middleware interfaces
 
-**Decision:** The architecture has six protocol traits (`Operator`, `Dispatcher`, `Signalable`, `Queryable`, `StateStore`, `Environment`) and two cross-cutting interfaces (per-boundary middleware, lifecycle events).
+**Decision:** The architecture has four Layer 0 protocol traits (`Operator`, `Dispatcher`, `StateStore`, `Environment`) plus `Signalable` and `Queryable` at Layer 2 (`skg-effects-core`), and two cross-cutting interfaces (per-boundary middleware, lifecycle events).
 
 **Reasoning:** The four concerns are orthogonal and compose independently:
 

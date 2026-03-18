@@ -3,7 +3,6 @@
 use crate::dispatch_context::DispatchContext;
 use crate::environment::EnvironmentSpec;
 use crate::error::EnvError;
-use crate::id::{DispatchId, OperatorId};
 use crate::operator::{Operator, OperatorInput, OperatorOutput};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -26,12 +25,12 @@ impl LocalEnvironment {
 impl crate::environment::Environment for LocalEnvironment {
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         _spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
-        let ctx = DispatchContext::new(DispatchId::new("local-env"), OperatorId::new("local"));
         self.operator
-            .execute(input, &ctx)
+            .execute(input, ctx)
             .await
             .map_err(EnvError::OperatorError)
     }

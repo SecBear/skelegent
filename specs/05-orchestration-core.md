@@ -39,9 +39,6 @@ It owns:
 
 Related: `dispatch_many()` is a free function in `skg-orch-kit` for concurrent dispatch.
 
-- `dispatch` — invoke an operator by ID
-
-Related: `dispatch_many()` is a free function in `skg-orch-kit` for concurrent dispatch.
 
 Durable run/control lives above Layer 0 in `skg-run-core` via traits such as `RunStarter` and `RunController`. Those surfaces cover starting a run, inspecting status, signalling it, resuming a specific wait point, cancelling it, and reading its terminal outcome.
 

@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 layer0 = { path = "../../layer0", version = "0.4.1" }
+skg-secret = { path = "../../secret/skg-secret", version = "0.4.1" }
 skg-turn = { path = "../../turn/skg-turn", version = "0.4.1" }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }

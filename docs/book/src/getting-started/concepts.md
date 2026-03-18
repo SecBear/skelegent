@@ -1,10 +1,10 @@
 # Core Concepts
 
-skelegent's architecture is built on **six protocol traits** and **two cross-cutting interfaces**, organized into **six layers**. This page explains each concept and how they compose.
+skelegent's architecture is built on **four Layer 0 protocol traits** (plus `Signalable` and `Queryable` at Layer 2) and **two cross-cutting interfaces**, organized into **six layers**. This page explains each concept and how they compose.
 
-## The six protocols
+## Protocol traits
 
-Every agentic system must answer these questions. Each question maps to protocol traits in Layer 0.
+Every agentic system must answer these questions. Each question maps to a protocol trait. The first four traits (`Operator`, `Dispatcher`, `StateStore`, `Environment`) live in `layer0`. `Signalable` and `Queryable` live in Layer 2 (`skg-effects-core`).
 
 ### Protocol 1: Operator -- "What does one agent do per cycle?"
 

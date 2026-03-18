@@ -1,9 +1,10 @@
 //! [`ExecRecorder`] — records environment execution operations via [`ExecMiddleware`].
 
-use crate::{Boundary, RecordEntry, RecordSink, context_from_otel};
+use crate::{Boundary, RecordContext, RecordEntry, RecordSink};
 use async_trait::async_trait;
 use layer0::environment::EnvironmentSpec;
 use layer0::error::EnvError;
+use layer0::dispatch_context::DispatchContext;
 use layer0::middleware::{ExecMiddleware, ExecNext};
 use layer0::operator::{OperatorInput, OperatorOutput};
 use std::sync::Arc;
@@ -19,8 +20,8 @@ use std::time::Instant;
 /// - [`Phase::Pre`](crate::Phase::Pre) — before calling `next`, with the serialized [`OperatorInput`]
 /// - [`Phase::Post`](crate::Phase::Post) — after `next` returns, with duration and any error
 ///
-/// Uses [`Boundary::Exec`] and [`context_from_otel`] to extract trace context
-/// from the ambient OTel span when available, falling back to empty context.
+/// Uses [`Boundary::Exec`] and the passed [`DispatchContext`] to populate trace context,
+/// giving accurate correlation without depending on an ambient OTel span.
 pub struct ExecRecorder {
     sink: Arc<dyn RecordSink>,
 }
@@ -36,10 +37,17 @@ impl ExecRecorder {
 impl ExecMiddleware for ExecRecorder {
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
         next: &dyn ExecNext,
     ) -> Result<OperatorOutput, EnvError> {
+        // Build record context from the dispatch context — accurate correlation without OTel.
+        let record_ctx = RecordContext {
+            trace_id: ctx.trace.trace_id.clone(),
+            operator_id: ctx.operator_id.to_string(),
+            dispatch_id: ctx.dispatch_id.to_string(),
+        };
         // Pre-phase: serialize OperatorInput as payload.
         let payload = serde_json::to_value(&input)
             .unwrap_or_else(|e| serde_json::json!({"serialize_error": e.to_string()}));
@@ -47,13 +55,13 @@ impl ExecMiddleware for ExecRecorder {
         self.sink
             .record(RecordEntry::pre(
                 Boundary::Exec,
-                context_from_otel(),
+                record_ctx.clone(),
                 payload,
             ))
             .await;
 
         let start = Instant::now();
-        let result = next.run(input, spec).await;
+        let result = next.run(ctx, input, spec).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
         let post_payload = match &result {
@@ -64,7 +72,7 @@ impl ExecMiddleware for ExecRecorder {
         self.sink
             .record(RecordEntry::post(
                 Boundary::Exec,
-                context_from_otel(),
+                record_ctx,
                 post_payload,
                 duration_ms,
                 error,
@@ -93,6 +101,7 @@ mod tests {
     impl ExecNext for EchoExec {
         async fn run(
             &self,
+            _ctx: &DispatchContext,
             input: OperatorInput,
             _spec: &EnvironmentSpec,
         ) -> Result<OperatorOutput, EnvError> {
@@ -108,7 +117,7 @@ mod tests {
         let input = OperatorInput::new(Content::text("run this"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let result = recorder.run(input, &spec, &EchoExec).await;
+        let result = recorder.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec, &EchoExec).await;
         assert!(result.is_ok());
 
         let entries = sink.entries().await;
@@ -141,6 +150,7 @@ mod tests {
         impl ExecNext for FailExec {
             async fn run(
                 &self,
+                _ctx: &DispatchContext,
                 _input: OperatorInput,
                 _spec: &EnvironmentSpec,
             ) -> Result<OperatorOutput, EnvError> {
@@ -154,7 +164,7 @@ mod tests {
         let input = OperatorInput::new(Content::text("fail"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let result = recorder.run(input, &spec, &FailExec).await;
+        let result = recorder.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec, &FailExec).await;
         assert!(result.is_err());
 
         let entries = sink.entries().await;
