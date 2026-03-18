@@ -192,8 +192,8 @@ where
             },
             // Forward-compat: Effect is #[non_exhaustive].
             // Progress, Artifact, and ToolApprovalRequired are caller-interpreted
-            // effects (routed via EffectEmitter → DispatchHandle, not EffectHandler).
-            // They intentionally fall through here.
+            // effects routed via EffectEmitter → DispatchHandle (dispatch-channel
+            // wiring, not EffectHandler). They intentionally fall through here.
             _ => match self.unknown_policy {
                 UnknownEffectPolicy::IgnoreAndWarn => {
                     tracing::warn!("ignoring forward-compatible effect variant: {:?}", effect);

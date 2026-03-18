@@ -63,12 +63,20 @@ All crates in the skelegent workspace, organized by architectural layer.
 | Crate | Description |
 |-------|-------------|
 | `skg-hook-security` | Security middleware: `RedactionMiddleware` (pattern-based content redaction) and `ExfilGuardMiddleware` (data-loss-prevention guardrails). |
+| `skg-hook-recorder` | Universal operation recorder middleware. Captures dispatch events for testing and debugging. |
+| `skg-hook-retry` | Retry middleware with configurable backoff and deadline-aware dispatch retries. |
 
 ## Umbrella
 
 | Crate | Description |
 |-------|-------------|
 | `skelegent` | Umbrella crate. Feature-gated re-exports of all layers. |
+
+## A2A
+
+| Crate | Description |
+|-------|-------------|
+| `skg-a2a-core` | A2A protocol wire types and conversions. |
 
 
 ## Examples
@@ -77,6 +85,9 @@ All crates in the skelegent workspace, organized by architectural layer.
 |-------|-------------|
 | `custom-operator-barrier` | Example custom operator with barrier scheduling and steering (workspace member at `examples/custom_operator_barrier`). |
 | `hello-claude` | Minimal example binary that wires OMP auth plus a single-shot Claude operator. |
+| `middleware_approval` | Example demonstrating approval-gated middleware. |
+| `middleware_echo` | Example demonstrating echo middleware. |
+| `middleware_recorder` | Example demonstrating recorder middleware. |
 ## Summary
 
 | Layer | Crates |
@@ -86,7 +97,8 @@ All crates in the skelegent workspace, organized by architectural layer.
 | 2 | 7 |
 | 3 | 3 |
 | 4 | 7 |
-| 5 | 1 |
+| 5 | 3 |
 | Umbrella | 1 |
-| Examples | 2 |
-| **Total** | **35** |
+| A2A | 1 |
+| Examples | 5 |
+| **Total** | **41** |

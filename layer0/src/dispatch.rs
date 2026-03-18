@@ -33,7 +33,7 @@
 //! }
 //!
 //! impl Operator for CoordinatorOp {
-//!     async fn execute(&self, input: OperatorInput, _ctx: &DispatchContext, _emitter: &EffectEmitter) -> Result<OperatorOutput, OperatorError> {
+//!     async fn execute(&self, input: OperatorInput, _ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError> {
 //!         // delegate to a sibling — goes through orchestrator middleware
 //!         let child_output = self.dispatcher
 //!             .dispatch(&ctx, child_input)
@@ -527,7 +527,7 @@ impl DispatchSender {
     ///
     /// ```rust,ignore
     /// tokio::select! {
-    ///     result = operator.execute(input, &ctx, &emitter) => { /* handle result */ }
+    ///     result = operator.execute(input, &ctx) => { /* handle result */ }
     ///     _ = sender.cancelled() => { /* handle cancellation */ }
     /// }
     /// ```
@@ -572,12 +572,10 @@ impl std::fmt::Debug for DispatchSender {
 
 /// Channel for streaming observable events during operator execution.
 ///
-/// Operators receive this as a parameter to [`Operator::execute`] and call
-/// its methods to emit progress updates, artifacts, and other observable
-/// events in real-time. These events are forwarded to the dispatch
-/// caller's [`DispatchHandle`].
-///
-/// For operators that don't stream: ignore the parameter.
+/// Used by the dispatch layer to wire a channel for streaming progress updates,
+/// artifacts, and other observable events to the dispatch caller's [`DispatchHandle`]
+/// in real-time. It is NOT passed to operators — operators declare effects via
+/// `Context::push_effect()` / `Context::extend_effects()` instead.
 ///
 /// # Design
 ///

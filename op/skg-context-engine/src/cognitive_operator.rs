@@ -33,31 +33,6 @@ use crate::{Rule, react_loop};
 /// needs a factory to create fresh rules for each `execute()` call.
 pub type RuleFactory = Arc<dyn Fn() -> Vec<Rule> + Send + Sync>;
 
-/// Configuration for [`CognitiveOperator`].
-pub struct CognitiveOperatorConfig {
-    /// System prompt baked into every turn.
-    pub system_prompt: String,
-    /// Model identifier (e.g. `"claude-sonnet-4-20250514"`).
-    pub model: Option<String>,
-    /// Max output tokens per inference call.
-    pub max_tokens: Option<u32>,
-    /// Sampling temperature.
-    pub temperature: Option<f64>,
-    /// Per-turn tool filter.
-    pub tool_filter: Option<crate::react::ToolFilter>,
-}
-
-impl Default for CognitiveOperatorConfig {
-    fn default() -> Self {
-        Self {
-            system_prompt: String::new(),
-            model: None,
-            max_tokens: Some(4096),
-            temperature: None,
-            tool_filter: None,
-        }
-    }
-}
 
 /// An [`Operator`] that runs a ReAct loop via the context engine.
 ///
@@ -68,7 +43,7 @@ impl Default for CognitiveOperatorConfig {
 /// # Example
 ///
 /// ```rust,ignore
-/// use skg_context_engine::{CognitiveOperator, CognitiveOperatorConfig};
+/// use skg_context_engine::{CognitiveOperator, ReactLoopConfig};
 ///
 /// let op = CognitiveOperator::new("agent", provider, tools, config);
 /// // Register with a dispatcher:
@@ -78,10 +53,8 @@ impl Default for CognitiveOperatorConfig {
 pub struct CognitiveOperator<P: Provider> {
     provider: P,
     tools: ToolRegistry,
-    /// Accepted from callers for identity/tracing; not yet read internally.
-    #[allow(dead_code)]
     operator_id: OperatorId,
-    config: CognitiveOperatorConfig,
+    config: ReactLoopConfig,
     /// Factory for rules injected into each execution context.
     rule_factory: Option<RuleFactory>,
 }
@@ -95,7 +68,7 @@ impl<P: Provider> CognitiveOperator<P> {
         operator_id: impl Into<OperatorId>,
         provider: P,
         tools: ToolRegistry,
-        config: CognitiveOperatorConfig,
+        config: ReactLoopConfig,
     ) -> Self {
         Self {
             provider,
@@ -120,15 +93,6 @@ impl<P: Provider> CognitiveOperator<P> {
         self
     }
 
-    fn react_loop_config(&self) -> ReactLoopConfig {
-        ReactLoopConfig {
-            system_prompt: self.config.system_prompt.clone(),
-            model: self.config.model.clone(),
-            max_tokens: self.config.max_tokens,
-            temperature: self.config.temperature,
-            tool_filter: self.config.tool_filter.clone(),
-        }
-    }
 
     fn create_context(&self) -> Context {
         match &self.rule_factory {
@@ -140,7 +104,7 @@ impl<P: Provider> CognitiveOperator<P> {
 
 #[async_trait]
 impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
-    #[tracing::instrument(skip_all, fields(trigger = ?input.trigger))]
+    #[tracing::instrument(skip_all, fields(operator_id = %self.operator_id, trigger = ?input.trigger))]
     async fn execute(
         &self,
         input: OperatorInput,

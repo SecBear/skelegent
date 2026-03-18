@@ -59,7 +59,8 @@ nix develop --command cargo doc --workspace --no-deps
 ## Key Concepts
 
 - **OperatorId** — typed identity for operators (protocol-level concept)
-- **Operator** — object-safe trait: `async fn execute(input, orch) -> Result<Output, Error>`
+- **DispatchContext** — unified execution context carrying dispatch identity, trace context, auth, and typed extensions through every dispatch boundary
+- **Operator** — object-safe trait: `async fn execute(input: OperatorInput, ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError>`
 - **Dispatcher** — invokes operators by ID via `dispatch()`; `dispatch_many()` as a free function in skg-orch-kit
 - **StateStore** — object-safe key-value state with scopes, hints, and text search
 - **Context** — mutable conversation context with ops, rules, and metrics
@@ -93,7 +94,6 @@ nix develop --command cargo doc --workspace --no-deps
 |-------|------|
 | skg-context-engine | [op/skg-context-engine](op/skg-context-engine/) |
 | skg-op-single-shot | [op/skg-op-single-shot](op/skg-op-single-shot/) |
-
 ### Layer 1 — Providers
 
 | Crate | Path |
@@ -102,13 +102,15 @@ nix develop --command cargo doc --workspace --no-deps
 | skg-provider-openai | [provider/skg-provider-openai](provider/skg-provider-openai/) |
 | skg-provider-ollama | [provider/skg-provider-ollama](provider/skg-provider-ollama/) |
 | skg-provider-codex | [provider/skg-provider-codex](provider/skg-provider-codex/) |
-
+| skg-provider-router | [provider/skg-provider-router](provider/skg-provider-router/) |
 ### Layer 2 — Orchestration
 
 | Crate | Path |
 |-------|------|
+| skg-run-core | [orch/skg-run-core](orch/skg-run-core/) |
 | skg-orch-local | [orch/skg-orch-local](orch/skg-orch-local/) |
 | skg-orch-kit | [orch/skg-orch-kit](orch/skg-orch-kit/) |
+| skg-orch-env | [orch/skg-orch-env](orch/skg-orch-env/) |
 
 ### Layer 2 — Effects
 
@@ -123,22 +125,36 @@ nix develop --command cargo doc --workspace --no-deps
 |-------|------|
 | skg-state-memory | [state/skg-state-memory](state/skg-state-memory/) |
 | skg-state-fs | [state/skg-state-fs](state/skg-state-fs/) |
-
+| skg-state-proxy | [state/skg-state-proxy](state/skg-state-proxy/) |
 ### Layer 4 — Environment
 
 | Crate | Path |
 |-------|------|
 | skg-env-local | [env/skg-env-local](env/skg-env-local/) |
+| skg-env-docker | [env/skg-env-docker](env/skg-env-docker/) |
 | skg-secret | [secret/skg-secret](secret/skg-secret/) |
 | skg-secret-vault | [secret/skg-secret-vault](secret/skg-secret-vault/) |
 | skg-auth | [auth/skg-auth](auth/skg-auth/) |
+| skg-auth-omp | [auth/skg-auth-omp](auth/skg-auth-omp/) |
 | skg-crypto | [crypto/skg-crypto](crypto/skg-crypto/) |
-
 ### Layer 5 — Cross-cutting (Hooks)
 
 | Crate | Path |
 |-------|------|
 | skg-hook-security | [hooks/skg-hook-security](hooks/skg-hook-security/) |
+| skg-hook-retry | [hooks/skg-hook-retry](hooks/skg-hook-retry/) |
+| skg-hook-recorder | [hooks/skg-hook-recorder](hooks/skg-hook-recorder/) |
+### Runner
+
+| Crate | Path |
+|-------|------|
+| skg-runner | [runner/skg-runner](runner/skg-runner/) |
+
+### A2A
+
+| Crate | Path |
+|-------|------|
+| skg-a2a-core | [a2a/skg-a2a-core](a2a/skg-a2a-core/) |
 
 ### Umbrella
 
@@ -157,3 +173,7 @@ nix develop --command cargo doc --workspace --no-deps
 | Example | Path |
 |---------|------|
 | custom_operator_barrier | [examples/custom_operator_barrier](examples/custom_operator_barrier/) |
+| middleware_echo | [examples/middleware_echo](examples/middleware_echo/) |
+| middleware_recorder | [examples/middleware_recorder](examples/middleware_recorder/) |
+| middleware_approval | [examples/middleware_approval](examples/middleware_approval/) |
+| hello-claude | [examples/hello-claude](examples/hello-claude/) |

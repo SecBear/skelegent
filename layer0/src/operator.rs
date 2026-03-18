@@ -501,9 +501,8 @@ pub trait Operator: Send + Sync {
     /// The `ctx` parameter carries dispatch context including identity,
     /// tracing, operator ID, and typed extensions.
     ///
-    /// The `emitter` parameter streams observable events (progress,
-    /// artifacts) to the dispatch caller in real-time. Operators that
-    /// don't stream can ignore it.
+    /// Effects (progress, artifacts) are declared via `Context::push_effect()`
+    /// / `Context::extend_effects()` rather than a streaming parameter.
     ///
     /// Operators that compose (invoke siblings) hold `Arc<dyn Dispatcher>`
     /// as a field via constructor injection. The execute signature stays

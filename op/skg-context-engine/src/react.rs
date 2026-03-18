@@ -65,6 +65,18 @@ impl Clone for ReactLoopConfig {
     }
 }
 
+impl Default for ReactLoopConfig {
+    fn default() -> Self {
+        Self {
+            system_prompt: String::new(),
+            model: None,
+            max_tokens: Some(4096),
+            temperature: None,
+            tool_filter: None,
+        }
+    }
+}
+
 impl fmt::Debug for ReactLoopConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReactLoopConfig")

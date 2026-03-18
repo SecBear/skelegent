@@ -438,8 +438,8 @@ async fn link_memory_effect_creates_graph_link() {
     );
 }
 
-/// Progress and Artifact effects are caller-interpreted (routed via
-/// EffectEmitter → DispatchHandle, not EffectHandler). The handler must
+/// Progress and Artifact effects are caller-interpreted (routed via dispatch-channel
+/// wiring through EffectEmitter → DispatchHandle, not EffectHandler). The handler must
 /// skip them cleanly under `IgnoreAndWarn`.
 #[tokio::test]
 async fn progress_and_artifact_effects_skip_cleanly() {

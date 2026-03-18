@@ -63,7 +63,7 @@ For each protocol trait, the philosophy is captured in this checklist. Implement
 - The new method MUST have a default implementation that preserves backward compatibility.
 - The default MUST follow the trait's established degradation pattern (empty vec, no-op, delegate to basic method).
 - The method MUST be added to the philosophy checklist above.
-- The governing spec MUST be updated before the code change (Rule 03).
+- The governing spec MUST be updated before the code change.
 
 ## When implementing a new backend crate
 
@@ -82,7 +82,7 @@ For each protocol trait, the philosophy is captured in this checklist. Implement
 
 ## Examples
 
-- Good: `skg-state-sqlite` implements `search()` via FTS5, stores metadata from `write_hinted()`, returns empty vec when FTS5 query matches nothing.
+- Good: `skg-state-memory` implements `search()` via substring matching, stores metadata from `write_hinted()`, returns empty vec when query matches nothing.
 - Good: `skg-state-memory` implements `search()` as empty vec (no search capability), `write_hinted()` routes transient entries to separate table.
 - Good: `SweepOperator` takes `Box<dyn ResearchProvider>` — never imports `SweepProvider` directly.
 - Bad: A state store that throws `StateError::NotSupported` when `search()` is called (should return empty vec).

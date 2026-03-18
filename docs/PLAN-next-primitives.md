@@ -1,3 +1,8 @@
+> **ARCHIVED** — This plan was written before the EffectEmitter-to-DispatchContext
+> migration. EffectEmitter references below are historical. The current Operator
+> interface uses `execute(input: OperatorInput, ctx: &DispatchContext)` with effects
+> declared via `Context::push_effect()` / `Context::extend_effects()`.
+
 # Next Primitives Implementation Plan
 
 All work targets skelegent/ and extras/. Breaking changes acceptable. DIY-first.

@@ -67,7 +67,7 @@
 //!
 //! #[async_trait]
 //! impl<P: Provider> Operator for MyOperator<P> {
-//!     async fn execute(&self, input: OperatorInput, _emitter: &EffectEmitter) -> Result<OperatorOutput, OperatorError> {
+//!     async fn execute(&self, input: OperatorInput, _ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError> {
 //!         let mut ctx = Context::new();
 //!         ctx.inject_message(Message::new(Role::User, input.message))
 //!             .await
