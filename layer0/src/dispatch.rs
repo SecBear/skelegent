@@ -126,7 +126,7 @@ pub enum DispatchEvent {
 
     /// An effect was emitted during operator execution.
     ///
-    /// Emitted when an operator calls [`EffectEmitter::effect`].
+    /// Emitted when [`EffectEmitter::effect`] is called by the dispatch layer.
     /// The [`DispatchHandle::collect`] method gathers these into
     /// [`OperatorOutput::effects`].
     EffectEmitted {
@@ -580,8 +580,8 @@ impl std::fmt::Debug for DispatchSender {
 /// # Design
 ///
 /// This is the Rust equivalent of Python's `StreamWriter` (LangGraph)
-/// or `yield` in an async generator (ADK, Autogen). The operator
-/// declares intermediate observable events via the emitter; the
+/// or `yield` in an async generator (ADK, Autogen). The dispatch layer
+/// streams intermediate observable events via the emitter; the
 /// terminal result comes from the function return value. These are
 /// genuinely different categories — intermediate observations vs.
 /// final output — so two mechanisms is correct modeling.
@@ -628,9 +628,9 @@ impl EffectEmitter {
 
     /// Emit an effect through the dispatch channel.
     ///
-    /// This is the primary way operators declare effects during execution.
-    /// The dispatch handle's [`collect`](DispatchHandle::collect) method
-    /// gathers emitted effects into [`OperatorOutput::effects`].
+    /// Used by the dispatch layer to stream effects through the dispatch
+    /// channel. The dispatch handle's [`collect`](DispatchHandle::collect)
+    /// method gathers emitted effects into [`OperatorOutput::effects`].
     ///
     /// No-op if no consumer is listening.
     pub async fn effect(&self, effect: Effect) {
