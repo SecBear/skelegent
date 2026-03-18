@@ -241,10 +241,7 @@ mod tests {
         );
 
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("barrier"));
-        let out = op
-            .execute(input, &ctx)
-            .await
-            .unwrap();
+        let out = op.execute(input, &ctx).await.unwrap();
         match out.message {
             Content::Blocks(blocks) => {
                 // Expect 4 tool results + 2 steering texts (after each flush)

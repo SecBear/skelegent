@@ -65,15 +65,9 @@ async fn anthropic_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(
-        &mut ctx,
-        &provider,
-        &tools,
-        &dispatch_ctx,
-        &config,
-    )
-    .await
-    .expect("react_loop should succeed");
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+        .await
+        .expect("react_loop should succeed");
 
     let text = output.message.as_text().unwrap_or("");
     println!("Anthropic react_loop response: {text}");
@@ -194,15 +188,9 @@ async fn openai_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(
-        &mut ctx,
-        &provider,
-        &tools,
-        &dispatch_ctx,
-        &config,
-    )
-    .await
-    .expect("react_loop should succeed");
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+        .await
+        .expect("react_loop should succeed");
 
     let text = output.message.as_text().unwrap_or("");
     println!("OpenAI react_loop response: {text}");
@@ -309,15 +297,9 @@ async fn ollama_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(
-        &mut ctx,
-        &provider,
-        &tools,
-        &dispatch_ctx,
-        &config,
-    )
-    .await
-    .expect("react_loop should succeed");
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+        .await
+        .expect("react_loop should succeed");
 
     let text = output.message.as_text().unwrap_or("");
     println!("Ollama react_loop response: {text}");

@@ -118,10 +118,7 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
         let operator = ToolOperator::new(Arc::clone(tool));
         let (handle, sender) = layer0::DispatchHandle::channel(ctx.dispatch_id.clone());
         tokio::spawn(async move {
-            match operator
-                .execute(input, &ctx_owned)
-                .await
-            {
+            match operator.execute(input, &ctx_owned).await {
                 Ok(output) => {
                     let _ = sender
                         .send(layer0::DispatchEvent::Completed { output })
@@ -229,10 +226,7 @@ mod tests {
 
         let input = make_input(r#"{"msg": "hello"}"#);
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
-        let output = op
-            .execute(input, &ctx)
-            .await
-            .expect("should succeed");
+        let output = op.execute(input, &ctx).await.expect("should succeed");
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
 
@@ -255,10 +249,7 @@ mod tests {
 
         let input = make_input("{}");
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
-        let err = op
-            .execute(input, &ctx)
-            .await
-            .expect_err("should fail");
+        let err = op.execute(input, &ctx).await.expect_err("should fail");
 
         match err {
             OperatorError::SubDispatch { operator, source } => {

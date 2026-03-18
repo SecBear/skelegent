@@ -114,10 +114,7 @@ impl BuiltAgent {
     pub async fn run(&self, message: &str) -> Result<OperatorOutput, OperatorError> {
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
-        let output = self
-            .operator
-            .execute(input, &ctx)
-            .await?;
+        let output = self.operator.execute(input, &ctx).await?;
         if output.has_unhandled_effects() {
             eprintln!(
                 "warning: OperatorOutput contains {} effect(s) that will not be executed. \

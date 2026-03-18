@@ -53,8 +53,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use layer0::{
-        Content, DispatchContext, ExitReason, OperatorError, OperatorInput,
-        OperatorOutput,
+        Content, DispatchContext, ExitReason, OperatorError, OperatorInput, OperatorOutput,
     };
 
     struct NoOp;

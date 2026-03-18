@@ -127,7 +127,10 @@ pub async fn stream_react_loop<P: StreamProvider>(
     }
 }
 
-fn structured_exit_output(err: EngineError, ctx: &mut Context) -> Result<OperatorOutput, EngineError> {
+fn structured_exit_output(
+    err: EngineError,
+    ctx: &mut Context,
+) -> Result<OperatorOutput, EngineError> {
     match err {
         EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
         other => Err(other),

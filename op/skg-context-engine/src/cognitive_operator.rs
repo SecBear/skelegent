@@ -12,11 +12,11 @@
 //! is `Operator`, which `CognitiveOperator<P>` implements via `#[async_trait]`.
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::context::{Message, Role};
 use layer0::error::OperatorError;
 use layer0::id::OperatorId;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
-use layer0::DispatchContext;
 use skg_tool::ToolRegistry;
 use skg_turn::provider::Provider;
 use std::collections::HashSet;
@@ -178,15 +178,9 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             ));
         }
 
-        react_loop(
-            &mut ctx,
-            &self.provider,
-            &self.tools,
-            dispatch_ctx,
-            &config,
-        )
-        .await
-        .map_err(map_engine_error)
+        react_loop(&mut ctx, &self.provider, &self.tools, dispatch_ctx, &config)
+            .await
+            .map_err(map_engine_error)
     }
 }
 
@@ -229,8 +223,8 @@ pub fn map_engine_error(err: EngineError) -> OperatorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer0::id::DispatchId;
     use layer0::content::Content;
+    use layer0::id::DispatchId;
     use layer0::operator::{ExitReason, OperatorConfig, TriggerType};
     use skg_turn::test_utils::{TestProvider, make_text_response};
 
@@ -259,10 +253,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op = make_op(provider);
 
-        let output = op
-            .execute(simple_input("Hi"), &test_ctx())
-            .await
-            .unwrap();
+        let output = op.execute(simple_input("Hi"), &test_ctx()).await.unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
@@ -286,9 +277,7 @@ mod tests {
         let provider = skg_turn::test_utils::error_provider_rate_limited();
         let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config());
 
-        let result = op
-            .execute(simple_input("test"), &test_ctx())
-            .await;
+        let result = op.execute(simple_input("test"), &test_ctx()).await;
         assert!(matches!(
             result,
             Err(OperatorError::Model {
@@ -303,13 +292,9 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op: std::sync::Arc<dyn Operator> = std::sync::Arc::new(make_op(provider));
 
-        let output = Operator::execute(
-            op.as_ref(),
-            simple_input("Hi"),
-            &test_ctx(),
-        )
-        .await
-        .unwrap();
+        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &test_ctx())
+            .await
+            .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
     }
 
@@ -335,9 +320,7 @@ mod tests {
                 )]
             });
 
-        let result = op
-            .execute(simple_input("hi"), &test_ctx())
-            .await;
+        let result = op.execute(simple_input("hi"), &test_ctx()).await;
 
         // Budget guard returns a structured exit (MaxTurns) — not an error.
         // ExitReason::MaxTurns is an expected termination, not a failure.
@@ -394,10 +377,7 @@ mod tests {
         op_config.allowed_operators = Some(vec!["tool_a".into()]);
         input.config = Some(op_config);
 
-        let output = op
-            .execute(input, &test_ctx())
-            .await
-            .unwrap();
+        let output = op.execute(input, &test_ctx()).await.unwrap();
 
         // The model never saw tool_b or tool_c, so it returned text
         // (no tool calls). The exit is Complete.

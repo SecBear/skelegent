@@ -134,14 +134,8 @@ async fn provider_swap_same_config_different_backend() {
     let input_b = simple_input("Greet me");
 
     let ctx = test_ctx();
-    let output_a = op_a
-        .execute(input_a, &ctx)
-        .await
-        .unwrap();
-    let output_b = op_b
-        .execute(input_b, &ctx)
-        .await
-        .unwrap();
+    let output_a = op_a.execute(input_a, &ctx).await.unwrap();
+    let output_b = op_b.execute(input_b, &ctx).await.unwrap();
 
     // Both produce OperatorOutput with the same structure
     assert_eq!(output_a.exit_reason, ExitReason::Complete);
@@ -314,14 +308,8 @@ async fn operator_swap_react_vs_single_shot() {
     // Same input through both operators
     let input = simple_input("Say hello");
 
-    let react_output = react_op
-        .execute(input.clone(), &test_ctx())
-        .await
-        .unwrap();
-    let ss_output = single_shot_op
-        .execute(input, &test_ctx())
-        .await
-        .unwrap();
+    let react_output = react_op.execute(input.clone(), &test_ctx()).await.unwrap();
+    let ss_output = single_shot_op.execute(input, &test_ctx()).await.unwrap();
 
     // Both produce OperatorOutput with identical structure
     assert_eq!(react_output.exit_reason, ExitReason::Complete);
@@ -352,10 +340,7 @@ async fn operator_swap_react_vs_single_shot() {
     ];
 
     for (i, op) in operators.iter().enumerate() {
-        let output = op
-            .execute(simple_input("test"), &test_ctx())
-            .await
-            .unwrap();
+        let output = op.execute(simple_input("test"), &test_ctx()).await.unwrap();
         assert_eq!(
             output.exit_reason,
             ExitReason::Complete,
@@ -375,10 +360,7 @@ async fn operator_swap_echo_operator() {
     let echo: Arc<dyn Operator> = Arc::new(EchoOperator);
 
     let input = simple_input("This exact text should come back");
-    let output = echo
-        .execute(input, &test_ctx())
-        .await
-        .unwrap();
+    let output = echo.execute(input, &test_ctx()).await.unwrap();
 
     assert_eq!(output.exit_reason, ExitReason::Complete);
     assert_eq!(

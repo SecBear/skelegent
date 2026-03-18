@@ -177,10 +177,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op = make_op(provider);
 
-        let output = op
-            .execute(simple_input("Hi"), &test_ctx())
-            .await
-            .unwrap();
+        let output = op.execute(simple_input("Hi"), &test_ctx()).await.unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
@@ -204,9 +201,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
         let op = make_op(provider);
 
-        op.execute(simple_input("Test"), &test_ctx())
-            .await
-            .unwrap();
+        op.execute(simple_input("Test"), &test_ctx()).await.unwrap();
 
         let requests = op.provider.requests();
         assert_eq!(requests.len(), 1);
@@ -221,9 +216,7 @@ mod tests {
         let provider = error_provider_rate_limited();
         let op = SingleShotOperator::new(provider, SingleShotConfig::default());
 
-        let result = op
-            .execute(simple_input("test"), &test_ctx())
-            .await;
+        let result = op.execute(simple_input("test"), &test_ctx()).await;
         assert!(matches!(
             result,
             Err(OperatorError::Model {
@@ -254,10 +247,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![response]);
         let op = make_op(provider);
 
-        let output = op
-            .execute(simple_input("test"), &test_ctx())
-            .await
-            .unwrap();
+        let output = op.execute(simple_input("test"), &test_ctx()).await.unwrap();
 
         assert_eq!(output.metadata.cost, cost);
         assert_eq!(output.metadata.tokens_in, 100);
@@ -273,13 +263,9 @@ mod tests {
         ));
 
         let ctx = test_ctx();
-        let output = Operator::execute(
-            op.as_ref(),
-            simple_input("Hi"),
-            &ctx,
-        )
-        .await
-        .unwrap();
+        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &ctx)
+            .await
+            .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
     }
 }

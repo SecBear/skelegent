@@ -674,15 +674,9 @@ mod tests {
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &tool_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let request = provider
@@ -714,15 +708,9 @@ mod tests {
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &tool_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let request = provider
@@ -759,15 +747,9 @@ mod tests {
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let err = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &tool_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap_err();
+        let err = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap_err();
 
         assert!(matches!(
             err,
@@ -798,15 +780,9 @@ mod tests {
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let err = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &tool_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap_err();
+        let err = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, EngineError::Halted { .. }));
         assert_eq!(provider.call_count(), 0);
@@ -832,15 +808,9 @@ mod tests {
 
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &tool_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
 
         assert_eq!(output.exit_reason, expected_exit);
         assert_eq!(output.message.as_text(), Some(""));
@@ -964,15 +934,9 @@ mod tests {
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &tool_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(provider.call_count(), 1);
@@ -1461,15 +1425,9 @@ mod tests {
             })),
         };
 
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &dispatch_ctx,
-            &config,
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+            .await
+            .unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         // Verify only "allowed" tool was in the request schemas
@@ -1522,15 +1480,9 @@ mod tests {
 
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &dispatch_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
 
         // Should exit with AwaitingApproval
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
@@ -1560,15 +1512,9 @@ mod tests {
 
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &dispatch_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
 
         // Normal completion — approval_policy defaults to ApprovalPolicy::None
         assert_eq!(output.exit_reason, ExitReason::Complete);
@@ -1595,15 +1541,9 @@ mod tests {
 
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &dispatch_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
 
         // Should exit with AwaitingApproval (approval check happens before dispatch)
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
@@ -1626,22 +1566,21 @@ mod tests {
 
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(
-            &mut ctx,
-            &provider,
-            &tools,
-            &dispatch_ctx,
-            &simple_config(),
-        )
-        .await
-        .unwrap();
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
-        assert!(!output.effects.is_empty(), "approval effects must appear in OperatorOutput");
+        assert!(
+            !output.effects.is_empty(),
+            "approval effects must appear in OperatorOutput"
+        );
 
         // Verify the effect is the expected ToolApprovalRequired variant
         match &output.effects[0] {
-            Effect::ToolApprovalRequired { tool_name, call_id, .. } => {
+            Effect::ToolApprovalRequired {
+                tool_name, call_id, ..
+            } => {
                 assert_eq!(tool_name, "dangerous_tool");
                 assert_eq!(call_id, "c1");
             }
