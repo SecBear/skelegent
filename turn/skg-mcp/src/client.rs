@@ -397,15 +397,28 @@ impl ToolDyn for McpToolWrapper {
     fn call(
         &self,
         input: serde_json::Value,
-        _ctx: &skg_tool::ToolCallContext,
+        ctx: &layer0::DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         let name: Cow<'static, str> = self.tool.name.clone();
         let arguments = input.as_object().cloned();
         let peer = Arc::clone(&self.peer);
+        let traceparent = ctx.trace.as_traceparent();
 
         Box::pin(async move {
+            let meta = traceparent.map(|tp| {
+                let mut m = rmcp::model::Meta::new();
+                m.0.insert("traceparent".to_owned(), serde_json::Value::String(tp));
+                m
+            });
+
+            tracing::debug!(
+                tool = %name,
+                traceparent = ?meta.as_ref().and_then(|m| m.0.get("traceparent")),
+                "MCP tool call"
+            );
+
             let params = CallToolRequestParams {
-                meta: None,
+                meta,
                 name,
                 arguments,
                 task: None,
@@ -669,7 +682,7 @@ mod tests {
             fn call(
                 &self,
                 _: serde_json::Value,
-                _ctx: &skg_tool::ToolCallContext,
+                _ctx: &layer0::DispatchContext,
             ) -> Pin<
                 Box<
                     dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>

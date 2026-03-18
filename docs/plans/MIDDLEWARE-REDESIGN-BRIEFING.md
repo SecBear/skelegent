@@ -143,7 +143,7 @@ not protocol boundaries.
 | File | Concern |
 |------|---------|
 | `extras/orch/skg-orch-kit/src/middleware.rs` | MiddlewareOrchestrator — already does middleware pattern! |
-| `extras/orch/skg-orch-kit/src/runner.rs` | LocalEffectInterpreter — fires PreMemoryWrite hook |
+| `extras/orch/skg-orch-kit/src/runner.rs` | LocalEffectHandler — fires PreMemoryWrite hook |
 | `extras/orch/skg-orch-kit/src/routing.rs` | RoutingOrchestrator — pure delegation |
 | `extras/orch/skg-orch-temporal/src/lib.rs` | TemporalOrch — pure delegation |
 

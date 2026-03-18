@@ -52,6 +52,7 @@
 pub mod content;
 pub mod context;
 pub mod dispatch;
+pub mod dispatch_context;
 pub mod duration;
 pub mod effect;
 pub mod environment;
@@ -69,20 +70,24 @@ pub mod test_utils;
 // Re-exports for convenience
 pub use content::{Content, ContentBlock};
 pub use context::{Message, MessageMeta, Role};
-pub use dispatch::Dispatcher;
+pub use dispatch::{
+    Artifact, CollectedDispatch, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher,
+    EffectEmitter,
+};
+pub use dispatch_context::{AuthIdentity, DispatchContext, Extensions, TraceContext};
 pub use duration::DurationMs;
 pub use effect::{Effect, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
-pub use id::{OperatorId, SessionId, WorkflowId};
+pub use id::{DispatchId, OperatorId, SessionId, WorkflowId};
 pub use lifecycle::CompactionPolicy;
 pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
     StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,
 };
 pub use operator::{
-    ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMetadata, OperatorOutput,
-    SubDispatchRecord, ToolMetadata,
+    ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMeta, OperatorMetadata,
+    OperatorOutput, SubDispatchRecord, ToolMetadata,
 };
 pub use secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 pub use state::{

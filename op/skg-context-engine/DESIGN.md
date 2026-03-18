@@ -72,6 +72,7 @@ pub struct TurnMetrics {
     pub cost: Decimal,
     pub turns_completed: u32,
     pub tool_calls_total: u32,
+    pub tool_calls_failed: u32,
     pub start: Instant,
 }
 ```
@@ -178,7 +179,7 @@ pub async fn react_loop<P: Provider>(
     ctx: &mut Context,
     provider: &P,
     tools: &ToolRegistry,
-    tool_ctx: &ToolCallContext,
+    ctx: &DispatchContext,
     config: &ReactLoopConfig,
 ) -> Result<OperatorOutput, EngineError> {
     // assemble system prompt

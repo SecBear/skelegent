@@ -9,11 +9,12 @@
 //! and "execution happens in containers" (skg-env-docker).
 
 use async_trait::async_trait;
-use layer0::dispatch::Dispatcher;
+use layer0::DispatchContext;
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::environment::{Environment, EnvironmentSpec};
-use layer0::error::{EnvError, OrchError};
+use layer0::error::OrchError;
 use layer0::id::OperatorId;
-use layer0::operator::{OperatorInput, OperatorOutput};
+use layer0::operator::OperatorInput;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -77,37 +78,37 @@ impl Default for EnvOrch {
     }
 }
 
-/// Map [`EnvError`] to [`OrchError`], preserving the inner [`OperatorError`]
-/// when the environment propagated one.
-fn env_err_to_orch(e: EnvError) -> OrchError {
-    match e {
-        EnvError::OperatorError(op_err) => OrchError::OperatorError(op_err),
-        other => OrchError::DispatchFailed(other.to_string()),
-    }
-}
-
 #[async_trait]
 impl Dispatcher for EnvOrch {
-    #[tracing::instrument(skip_all, fields(operator_id = %operator))]
+    #[tracing::instrument(skip_all, fields(operator_id = %ctx.operator_id))]
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
-        if let Some(binding) = self.bindings.get(operator.as_str()) {
-            binding
-                .env
-                .run(input, &binding.spec)
-                .await
-                .map_err(env_err_to_orch)
+    ) -> Result<DispatchHandle, OrchError> {
+        let (env, spec) = if let Some(binding) = self.bindings.get(ctx.operator_id.as_str()) {
+            (binding.env.clone(), binding.spec.clone())
         } else if let Some(ref default) = self.default_env {
-            default
-                .run(input, &self.default_spec)
-                .await
-                .map_err(env_err_to_orch)
+            (default.clone(), self.default_spec.clone())
         } else {
-            Err(OrchError::OperatorNotFound(operator.to_string()))
-        }
+            return Err(OrchError::OperatorNotFound(ctx.operator_id.to_string()));
+        };
+
+        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            match env.run(&ctx, input, &spec).await {
+                Ok(output) => {
+                    let _ = sender.send(DispatchEvent::Completed { output }).await;
+                }
+                Err(err) => {
+                    let _ = sender
+                        .send(DispatchEvent::Failed { error: err.into() })
+                        .await;
+                }
+            }
+        });
+        Ok(handle)
     }
 }
 
@@ -118,6 +119,7 @@ mod tests {
     use layer0::id::OperatorId;
     use layer0::operator::{ExitReason, OperatorInput, TriggerType};
     use layer0::test_utils::{EchoOperator, LocalEnvironment};
+    use layer0::{DispatchContext, DispatchId};
 
     fn echo_env() -> Arc<dyn Environment> {
         Arc::new(LocalEnvironment::new(Arc::new(EchoOperator)))
@@ -136,10 +138,14 @@ mod tests {
             EnvironmentSpec::default(),
         );
 
+        let ctx = DispatchContext::new(DispatchId::new("echo"), OperatorId::new("echo"));
         let result = orch
-            .dispatch(&OperatorId::new("echo"), input("hello"))
+            .dispatch(&ctx, input("hello"))
             .await
-            .expect("dispatch should succeed");
+            .expect("dispatch should succeed")
+            .collect()
+            .await
+            .expect("collect should succeed");
 
         assert_eq!(result.message, Content::Text("hello".to_string()));
         assert!(matches!(result.exit_reason, ExitReason::Complete));
@@ -149,10 +155,14 @@ mod tests {
     async fn dispatch_unbound_with_default_succeeds() {
         let orch = EnvOrch::with_default(echo_env(), EnvironmentSpec::default());
 
+        let ctx = DispatchContext::new(DispatchId::new("anything"), OperatorId::new("anything"));
         let result = orch
-            .dispatch(&OperatorId::new("anything"), input("fallback"))
+            .dispatch(&ctx, input("fallback"))
             .await
-            .expect("default env should handle unbound operator");
+            .expect("default env should handle unbound operator")
+            .collect()
+            .await
+            .expect("collect should succeed");
 
         assert_eq!(result.message, Content::Text("fallback".to_string()));
     }
@@ -161,10 +171,8 @@ mod tests {
     async fn dispatch_unbound_without_default_returns_not_found() {
         let orch = EnvOrch::new();
 
-        let err = orch
-            .dispatch(&OperatorId::new("missing"), input("nope"))
-            .await
-            .unwrap_err();
+        let ctx = DispatchContext::new(DispatchId::new("missing"), OperatorId::new("missing"));
+        let err = orch.dispatch(&ctx, input("nope")).await.unwrap_err();
 
         assert!(
             matches!(err, OrchError::OperatorNotFound(ref name) if name == "missing"),

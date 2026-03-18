@@ -3,6 +3,8 @@
 
 #![cfg(feature = "test-utils")]
 
+use layer0::dispatch_context::DispatchContext;
+use layer0::id::{DispatchId, OperatorId};
 use layer0::test_utils::{EchoOperator, InMemoryStore, LocalEnvironment, LocalOrchestrator};
 use layer0::*;
 use rust_decimal::Decimal;
@@ -13,6 +15,10 @@ fn simple_input(msg: &str) -> OperatorInput {
     OperatorInput::new(Content::text(msg), layer0::operator::TriggerType::User)
 }
 
+fn test_ctx(name: &str) -> DispatchContext {
+    DispatchContext::new(DispatchId::new(name), OperatorId::new(name))
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // EchoOperator
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -21,7 +27,13 @@ fn simple_input(msg: &str) -> OperatorInput {
 async fn echo_operator_returns_input_as_output() {
     let turn = EchoOperator;
     let input = simple_input("hello echo");
-    let output = turn.execute(input).await.unwrap();
+    let output = turn
+        .execute(
+            input,
+            &DispatchContext::new(DispatchId::new("t"), OperatorId::new("echo")),
+        )
+        .await
+        .unwrap();
     assert_eq!(output.message, Content::text("hello echo"));
     assert_eq!(output.exit_reason, ExitReason::Complete);
 }
@@ -30,7 +42,13 @@ async fn echo_operator_returns_input_as_output() {
 async fn echo_operator_metadata_is_default() {
     let turn = EchoOperator;
     let input = simple_input("test");
-    let output = turn.execute(input).await.unwrap();
+    let output = turn
+        .execute(
+            input,
+            &DispatchContext::new(DispatchId::new("t"), OperatorId::new("echo")),
+        )
+        .await
+        .unwrap();
     assert_eq!(output.metadata.tokens_in, 0);
     assert_eq!(output.metadata.cost, Decimal::ZERO);
     assert!(output.effects.is_empty());
@@ -40,7 +58,13 @@ async fn echo_operator_metadata_is_default() {
 async fn echo_operator_is_usable_as_dyn_operator() {
     let turn: Box<dyn Operator> = Box::new(EchoOperator);
     let input = simple_input("dynamic dispatch");
-    let output = turn.execute(input).await.unwrap();
+    let output = turn
+        .execute(
+            input,
+            &DispatchContext::new(DispatchId::new("t"), OperatorId::new("echo")),
+        )
+        .await
+        .unwrap();
     assert_eq!(output.message, Content::text("dynamic dispatch"));
 }
 
@@ -175,7 +199,7 @@ async fn local_environment_passes_through_to_turn() {
     let env = LocalEnvironment::new(Arc::new(EchoOperator));
     let input = simple_input("through environment");
     let spec = EnvironmentSpec::default();
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&test_ctx("local-env"), input, &spec).await.unwrap();
     assert_eq!(output.message, Content::text("through environment"));
     assert_eq!(output.exit_reason, ExitReason::Complete);
 }
@@ -185,7 +209,7 @@ async fn local_environment_is_usable_as_dyn_environment() {
     let env: Box<dyn Environment> = Box::new(LocalEnvironment::new(Arc::new(EchoOperator)));
     let input = simple_input("dynamic env");
     let spec = EnvironmentSpec::default();
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&test_ctx("local-env"), input, &spec).await.unwrap();
     assert_eq!(output.message, Content::text("dynamic env"));
 }
 
@@ -199,7 +223,10 @@ async fn local_orchestrator_dispatch_to_echo() {
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
     let input = simple_input("dispatch test");
     let output = orch
-        .dispatch(&OperatorId::new("echo"), input)
+        .dispatch(&test_ctx("echo"), input)
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("dispatch test"));
@@ -209,7 +236,7 @@ async fn local_orchestrator_dispatch_to_echo() {
 async fn local_orchestrator_dispatch_agent_not_found() {
     let orch = LocalOrchestrator::new();
     let input = simple_input("nobody home");
-    let result = orch.dispatch(&OperatorId::new("missing"), input).await;
+    let result = orch.dispatch(&test_ctx("missing"), input).await;
     assert!(result.is_err());
     assert!(
         result
@@ -225,7 +252,10 @@ async fn local_orchestrator_is_usable_as_dyn_dispatcher() {
     orch.register(OperatorId::new("echo"), Arc::new(EchoOperator));
     let orch: Box<dyn layer0::dispatch::Dispatcher> = Box::new(orch);
     let output = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("dyn"))
+        .dispatch(&test_ctx("echo"), simple_input("dyn"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     assert_eq!(output.message, Content::text("dyn"));
@@ -254,11 +284,17 @@ async fn integration_compose_all_implementations() {
 
     // 5. Dispatch two agents through the orchestrator
     let output_a = orch
-        .dispatch(&OperatorId::new("agent-a"), simple_input("task for A"))
+        .dispatch(&test_ctx("agent-a"), simple_input("task for A"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     let output_b = orch
-        .dispatch(&OperatorId::new("agent-b"), simple_input("task for B"))
+        .dispatch(&test_ctx("agent-b"), simple_input("task for B"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
 
@@ -289,7 +325,7 @@ async fn integration_compose_all_implementations() {
 
     // 8. Run a turn through the environment (passthrough)
     let env_output = env
-        .run(simple_input("env-wrapped"), &EnvironmentSpec::default())
+        .run(&test_ctx("env-wrapped"), simple_input("env-wrapped"), &EnvironmentSpec::default())
         .await
         .unwrap();
     assert_eq!(env_output.message, Content::text("env-wrapped"));

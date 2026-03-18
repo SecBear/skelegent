@@ -7,6 +7,7 @@
 //! extraction, and other single-inference tasks.
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
@@ -84,7 +85,11 @@ impl<P: Provider> SingleShotOperator<P> {
 #[async_trait]
 impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
     #[tracing::instrument(skip_all, fields(trigger = ?input.trigger))]
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
         let start = Instant::now();
         tracing::info!("single-shot executing");
 
@@ -110,9 +115,12 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         // Single model call
         let response = self.provider.infer(request).await.map_err(|e| {
             if e.is_retryable() {
-                OperatorError::Retryable(e.to_string())
+                OperatorError::model_retryable(e)
             } else {
-                OperatorError::Model(e.to_string())
+                OperatorError::Model {
+                    source: Box::new(e),
+                    retryable: false,
+                }
             }
         })?;
 
@@ -133,7 +141,6 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         // Always ExitReason::Complete for single-shot
         let mut output = OperatorOutput::new(message, ExitReason::Complete);
         output.metadata = metadata;
-        output.effects = vec![];
 
         Ok(output)
     }
@@ -142,10 +149,15 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::id::{DispatchId, OperatorId};
     use skg_turn::infer::InferResponse;
     use skg_turn::test_utils::{TestProvider, error_provider_rate_limited, make_text_response};
     use skg_turn::types::{StopReason, TokenUsage};
     use std::sync::Arc;
+
+    fn test_ctx() -> DispatchContext {
+        DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
+    }
 
     // -- Helpers --
 
@@ -164,7 +176,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
         let op = make_op(provider);
 
-        let output = op.execute(simple_input("Hi")).await.unwrap();
+        let output = op.execute(simple_input("Hi"), &test_ctx()).await.unwrap();
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
@@ -175,7 +187,10 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Response")]);
         let op = make_op(provider);
 
-        let output = op.execute(simple_input("Query")).await.unwrap();
+        let output = op
+            .execute(simple_input("Query"), &test_ctx())
+            .await
+            .unwrap();
 
         assert_eq!(output.metadata.turns_used, 1);
     }
@@ -185,7 +200,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
         let op = make_op(provider);
 
-        op.execute(simple_input("Test")).await.unwrap();
+        op.execute(simple_input("Test"), &test_ctx()).await.unwrap();
 
         let requests = op.provider.requests();
         assert_eq!(requests.len(), 1);
@@ -200,8 +215,14 @@ mod tests {
         let provider = error_provider_rate_limited();
         let op = SingleShotOperator::new(provider, SingleShotConfig::default());
 
-        let result = op.execute(simple_input("test")).await;
-        assert!(matches!(result, Err(OperatorError::Retryable(_))));
+        let result = op.execute(simple_input("test"), &test_ctx()).await;
+        assert!(matches!(
+            result,
+            Err(OperatorError::Model {
+                retryable: true,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
@@ -214,7 +235,9 @@ mod tests {
             usage: TokenUsage {
                 input_tokens: 100,
                 output_tokens: 50,
-                ..Default::default()
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                reasoning_tokens: None,
             },
             model: "mock".into(),
             cost: Some(cost),
@@ -223,7 +246,7 @@ mod tests {
         let provider = TestProvider::with_responses(vec![response]);
         let op = make_op(provider);
 
-        let output = op.execute(simple_input("test")).await.unwrap();
+        let output = op.execute(simple_input("test"), &test_ctx()).await.unwrap();
 
         assert_eq!(output.metadata.cost, cost);
         assert_eq!(output.metadata.tokens_in, 100);
@@ -238,7 +261,8 @@ mod tests {
             SingleShotConfig::default(),
         ));
 
-        let output = Operator::execute(op.as_ref(), simple_input("Hi"))
+        let ctx = test_ctx();
+        let output = Operator::execute(op.as_ref(), simple_input("Hi"), &ctx)
             .await
             .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);

@@ -23,11 +23,11 @@ pub use config::{DockerEnvConfig, PullPolicy, RetryConfig, ReusePolicy, Transpor
 
 use async_trait::async_trait;
 use bollard::Docker;
+use layer0::dispatch_context::DispatchContext;
 use layer0::environment::{CredentialInjection, Environment, EnvironmentSpec, IsolationBoundary};
 use layer0::error::EnvError;
 use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput};
-use layer0::secret::SecretAccessEvent;
 use skg_secret::SecretResolver;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,15 +48,6 @@ pub mod proto {
     }
 }
 
-/// Sink for environment audit events.
-///
-/// Allows Docker mode to emit `SecretAccessEvent` audit records
-/// for credential resolution attempts.
-pub trait EnvironmentEventSink: Send + Sync {
-    /// Emit an audit event for secret access activity.
-    fn emit_secret_access(&self, event: SecretAccessEvent);
-}
-
 /// Docker-backed environment that executes operators in isolated containers.
 ///
 /// Owns a bollard `Docker` client and delegates operator execution to a
@@ -72,8 +63,6 @@ pub struct DockerEnvironment {
     host_callback_base: url::Url,
 
     secret_resolver: Option<Arc<dyn SecretResolver>>,
-    #[allow(dead_code)] // Used for audit logging in follow-up
-    event_sink: Option<Arc<dyn EnvironmentEventSink>>,
     cfg: DockerEnvConfig,
 }
 
@@ -91,7 +80,6 @@ impl DockerEnvironment {
             default_image,
             host_callback_base,
             secret_resolver: None,
-            event_sink: None,
             cfg: None,
         }
     }
@@ -177,7 +165,6 @@ pub struct DockerEnvironmentBuilder {
     default_image: String,
     host_callback_base: url::Url,
     secret_resolver: Option<Arc<dyn SecretResolver>>,
-    event_sink: Option<Arc<dyn EnvironmentEventSink>>,
     cfg: Option<DockerEnvConfig>,
 }
 
@@ -185,12 +172,6 @@ impl DockerEnvironmentBuilder {
     /// Set the secret resolver for credential resolution.
     pub fn secret_resolver(mut self, resolver: Arc<dyn SecretResolver>) -> Self {
         self.secret_resolver = Some(resolver);
-        self
-    }
-
-    /// Set the event sink for audit events.
-    pub fn event_sink(mut self, sink: Arc<dyn EnvironmentEventSink>) -> Self {
-        self.event_sink = Some(sink);
         self
     }
 
@@ -208,7 +189,6 @@ impl DockerEnvironmentBuilder {
             default_image: self.default_image,
             host_callback_base: self.host_callback_base,
             secret_resolver: self.secret_resolver,
-            event_sink: self.event_sink,
             cfg: self.cfg.unwrap_or_default(),
         }
     }
@@ -218,9 +198,11 @@ impl DockerEnvironmentBuilder {
 impl Environment for DockerEnvironment {
     async fn run(
         &self,
+        _ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
+        // TODO: propagate _ctx.trace into the gRPC ExecuteRequest headers for distributed tracing
         // 0) Derive image from spec (IsolationBoundary::Container { image }) or default
         let image = self.resolve_image(spec);
         let container_port = self.container_port();

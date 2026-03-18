@@ -1,8 +1,10 @@
 //! LocalOrchestrator — in-process orchestrator with a HashMap of operators.
 
+use crate::dispatch::{DispatchEvent, DispatchHandle, DispatchSender};
+use crate::dispatch_context::DispatchContext;
 use crate::error::OrchError;
 use crate::id::OperatorId;
-use crate::operator::{Operator, OperatorInput, OperatorOutput};
+use crate::operator::{Operator, OperatorInput};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -37,13 +39,43 @@ impl Default for LocalOrchestrator {
 impl crate::dispatch::Dispatcher for LocalOrchestrator {
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         let op = self
             .operators
-            .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input).await.map_err(OrchError::OperatorError)
+            .get(ctx.operator_id.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
+            .clone();
+
+        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
+
+        tokio::spawn(run_dispatch(op, input, ctx.clone(), sender));
+
+        Ok(handle)
+    }
+}
+
+/// Run an operator and send events through the dispatch channel.
+async fn run_dispatch(
+    op: Arc<dyn Operator>,
+    input: OperatorInput,
+    ctx: DispatchContext,
+    sender: DispatchSender,
+) {
+    if sender.is_cancelled() {
+        return;
+    }
+    match op.execute(input, &ctx).await {
+        Ok(output) => {
+            let _ = sender.send(DispatchEvent::Completed { output }).await;
+        }
+        Err(op_err) => {
+            let _ = sender
+                .send(DispatchEvent::Failed {
+                    error: OrchError::OperatorError(op_err),
+                })
+                .await;
+        }
     }
 }

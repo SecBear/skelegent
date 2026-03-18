@@ -108,7 +108,9 @@ Providers are not used directly in most application code. Instead, you pass a pr
 ```rust,no_run
 use skg_context_engine::{Context, react_loop, ReactLoopConfig};
 use skg_provider_anthropic::AnthropicProvider;
-use skg_tool::{ToolRegistry, ToolCallContext};
+use layer0::DispatchContext;
+use layer0::id::{DispatchId, OperatorId};
+use skg_tool::ToolRegistry;
 
 let provider = AnthropicProvider::new("sk-ant-...");
 let config = ReactLoopConfig {
@@ -119,7 +121,7 @@ let config = ReactLoopConfig {
 };
 
 let tools = ToolRegistry::new();
-let tool_context = ToolCallContext::empty();
+let tool_context = DispatchContext::new(DispatchId::new("assistant"), OperatorId::new("assistant"));
 let mut context = Context::new();
 
 // react_loop drives the ReAct loop, calling provider.infer() as needed

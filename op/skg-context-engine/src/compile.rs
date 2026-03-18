@@ -47,7 +47,8 @@ impl CompiledContext {
     /// The response is NOT automatically appended to context. The caller
     /// decides what to do with it — append, route, discard, transform.
     pub async fn infer<P: Provider>(self, provider: &P) -> Result<InferResult, EngineError> {
-        let response = provider.infer(self.request).await?;
+        let span = tracing::debug_span!("compile_infer", messages = self.request.messages.len());
+        let response = tracing::Instrument::instrument(provider.infer(self.request), span).await?;
         Ok(InferResult { response })
     }
 }

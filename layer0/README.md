@@ -31,9 +31,6 @@ Four protocol traits + two cross-cutting protocol surfaces:
 
 **Dispatcher:** `Dispatcher`, `Dispatcher::dispatch`
 
-**Signalable:** `Signalable`, `Signalable::signal`
-
-**Queryable:** `Queryable`, `Queryable::query`
 
 **State:** `StateStore`, `StateReader`, `SearchResult`
 

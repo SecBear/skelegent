@@ -259,8 +259,8 @@ impl OllamaProvider {
             output_tokens: response.eval_count.unwrap_or(0),
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            reasoning_tokens: None,
         };
-
         InferResponse {
             content,
             tool_calls,
@@ -306,7 +306,13 @@ impl Provider for OllamaProvider {
 
             let status = http_response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(ProviderError::RateLimited);
+                let retry_after = http_response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                return Err(ProviderError::RateLimited { retry_after });
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
@@ -375,7 +381,13 @@ impl StreamProvider for OllamaProvider {
 
             let status = http_response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(ProviderError::RateLimited);
+                let retry_after = http_response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                return Err(ProviderError::RateLimited { retry_after });
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
@@ -509,6 +521,7 @@ impl StreamProvider for OllamaProvider {
                             output_tokens,
                             cache_read_tokens: None,
                             cache_creation_tokens: None,
+                            reasoning_tokens: None,
                         };
                         on_event(StreamEvent::Usage(usage));
                     }
@@ -527,6 +540,7 @@ impl StreamProvider for OllamaProvider {
                 output_tokens,
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
+                reasoning_tokens: None,
             };
 
             let response = InferResponse {
@@ -570,6 +584,14 @@ fn content_text(content: &Content) -> String {
 /// responses are treated as transient errors.
 fn map_error_response(status: reqwest::StatusCode, body: &str) -> ProviderError {
     let status_u16 = status.as_u16();
+    // Client errors (4xx except 429, handled earlier) are not retryable.
+    if status.is_client_error() {
+        return ProviderError::InvalidRequest {
+            message: format!("HTTP {status}: {body}"),
+            status: Some(status_u16),
+        };
+    }
+    // Server errors and network issues are transient.
     ProviderError::TransientError {
         message: format!("HTTP {status}: {body}"),
         status: Some(status_u16),

@@ -221,12 +221,12 @@ fn content_to_text(content: &Content) -> String {
     }
 }
 
-fn image_to_url(source: &layer0::content::ImageSource, media_type: &str) -> Option<String> {
+fn image_to_url(source: &layer0::content::ContentSource, media_type: &str) -> Option<String> {
     match source {
-        layer0::content::ImageSource::Base64 { data } => {
+        layer0::content::ContentSource::Base64 { data } => {
             Some(format!("data:{media_type};base64,{data}"))
         }
-        layer0::content::ImageSource::Url { url } => Some(url.clone()),
+        layer0::content::ContentSource::Url { url } => Some(url.clone()),
         _ => None,
     }
 }

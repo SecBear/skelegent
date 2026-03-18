@@ -8,16 +8,16 @@
 //! All tests require live API keys and are `#[ignore]` by default.
 //! They verify that OperatorOutput structure is consistent across providers.
 
-use layer0::OperatorId;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use skg_context_engine::{Context, ReactLoopConfig, react_loop};
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_provider_anthropic::AnthropicProvider;
 use skg_provider_ollama::OllamaProvider;
 use skg_provider_openai::OpenAIProvider;
-use skg_tool::{ToolCallContext, ToolRegistry};
+use skg_tool::ToolRegistry;
 use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 use std::sync::{Arc, Mutex};
 
@@ -56,7 +56,7 @@ async fn anthropic_react_simple_prompt() {
     .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+    let dispatch_ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("claude-haiku-4-5-20251001".into()),
@@ -65,7 +65,7 @@ async fn anthropic_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
         .await
         .expect("react_loop should succeed");
 
@@ -84,7 +84,10 @@ async fn anthropic_single_shot() {
     let op = SingleShotOperator::new(provider, config);
 
     let output = op
-        .execute(simple_input("Say hello in exactly 3 words."))
+        .execute(
+            simple_input("Say hello in exactly 3 words."),
+            &DispatchContext::new(DispatchId::new("test"), OperatorId::from("test")),
+        )
         .await
         .expect("Anthropic SingleShotOperator should succeed");
 
@@ -176,7 +179,7 @@ async fn openai_react_simple_prompt() {
     .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+    let dispatch_ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("gpt-4o-mini".into()),
@@ -185,7 +188,7 @@ async fn openai_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
         .await
         .expect("react_loop should succeed");
 
@@ -204,7 +207,10 @@ async fn openai_single_shot() {
     let op = SingleShotOperator::new(provider, config);
 
     let output = op
-        .execute(simple_input("Say hello in exactly 3 words."))
+        .execute(
+            simple_input("Say hello in exactly 3 words."),
+            &DispatchContext::new(DispatchId::new("test"), OperatorId::from("test")),
+        )
         .await
         .expect("OpenAI SingleShotOperator should succeed");
 
@@ -282,7 +288,7 @@ async fn ollama_react_simple_prompt() {
     .unwrap();
 
     let tools = ToolRegistry::new();
-    let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+    let dispatch_ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("test"));
     let config = ReactLoopConfig {
         system_prompt: "You are a concise assistant. Follow instructions exactly.".into(),
         model: Some("llama3.2:1b".into()),
@@ -291,7 +297,7 @@ async fn ollama_react_simple_prompt() {
         tool_filter: None,
     };
 
-    let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+    let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
         .await
         .expect("react_loop should succeed");
 
@@ -464,4 +470,149 @@ async fn anthropic_extract_cognitive_state_live() {
             || obj.contains_key("current_status"),
         "cognitive state should contain at least one schema field"
     );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Pi auth integration tests
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Resolve a credential from `~/.pi/agent/auth.json` by key name.
+/// For Anthropic, automatically refreshes expired tokens.
+async fn pi_auth_token(key: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::PathBuf::from(home).join(".pi/agent/auth.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let creds: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let entry = creds.get(key)?;
+    let access = entry.get("access")?.as_str()?;
+    let expires = entry.get("expires").and_then(|v| v.as_i64()).unwrap_or(0);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    // If token is still valid, return it
+    if now_ms < expires - 5 * 60 * 1000 {
+        return Some(access.to_string());
+    }
+
+    // Only refresh Anthropic tokens
+    if key != "anthropic" {
+        return Some(access.to_string());
+    }
+
+    let refresh = entry.get("refresh")?.as_str()?;
+    eprintln!("pi auth: refreshing expired anthropic token...");
+
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        "refresh_token": refresh,
+    });
+    let resp = client
+        .post("https://console.anthropic.com/v1/oauth/token")
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        eprintln!("pi auth: refresh failed: {}", resp.status());
+        return None;
+    }
+    let resp_json: serde_json::Value = resp.json().await.ok()?;
+    let new_access = resp_json.get("access_token")?.as_str()?;
+    let new_refresh = resp_json.get("refresh_token")?.as_str()?;
+    let expires_in = resp_json
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(3600);
+
+    // Write back to auth.json
+    let mut all_creds: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if let Some(entry) = all_creds.get_mut(key) {
+        entry["access"] = serde_json::Value::String(new_access.to_string());
+        entry["refresh"] = serde_json::Value::String(new_refresh.to_string());
+        entry["expires"] = serde_json::Value::Number(serde_json::Number::from(
+            now_ms + (expires_in as i64 * 1000) - 5 * 60 * 1000,
+        ));
+    }
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&all_creds).ok()?);
+    eprintln!("pi auth: token refreshed and persisted");
+    Some(new_access.to_string())
+}
+
+#[tokio::test]
+#[ignore]
+async fn pi_auth_anthropic_inference() {
+    let token = pi_auth_token("anthropic")
+        .await
+        .expect("pi auth: no anthropic credential");
+    let provider = AnthropicProvider::new(token);
+
+    let op = SingleShotOperator::new(provider, single_shot_config("claude-3-haiku-20240307"));
+
+    let output = op
+        .execute(
+            simple_input("Reply with exactly the word 'pong'"),
+            &DispatchContext::new(DispatchId::new("pi-test"), OperatorId::from("pi-test")),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(output.exit_reason, ExitReason::Complete);
+    let text = output.message.as_text().unwrap_or_default().to_lowercase();
+    assert!(text.contains("pong"), "expected 'pong', got: {text}");
+}
+
+#[tokio::test]
+#[ignore]
+async fn pi_auth_openai_inference() {
+    let token = match pi_auth_token("openai-codex").await {
+        Some(t) => t,
+        None => {
+            eprintln!("SKIP: no openai-codex credential in pi auth");
+            return;
+        }
+    };
+    let provider = OpenAIProvider::new(token);
+
+    let op = SingleShotOperator::new(provider, single_shot_config("gpt-4o-mini"));
+
+    let output = op
+        .execute(
+            simple_input("Reply with exactly the word 'pong'"),
+            &DispatchContext::new(DispatchId::new("pi-test"), OperatorId::from("pi-test")),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(output.exit_reason, ExitReason::Complete);
+    let text = output.message.as_text().unwrap_or_default().to_lowercase();
+    assert!(text.contains("pong"), "expected 'pong', got: {text}");
+}
+
+#[tokio::test]
+#[ignore]
+async fn pi_auth_openai_embed() {
+    let token = match pi_auth_token("openai-codex").await {
+        Some(t) => t,
+        None => {
+            eprintln!("SKIP: no openai-codex credential in pi auth");
+            return;
+        }
+    };
+    let provider = OpenAIProvider::new(token);
+
+    use skg_turn::Provider;
+    use skg_turn::embedding::EmbedRequest;
+
+    let request =
+        EmbedRequest::new(vec!["hello world".into()]).with_model("text-embedding-3-small");
+    let response = provider.embed(request).await.unwrap();
+
+    assert_eq!(response.embeddings.len(), 1);
+    assert!(!response.embeddings[0].vector.is_empty());
+    // text-embedding-3-small returns 1536 dimensions by default
+    assert_eq!(response.embeddings[0].vector.len(), 1536);
 }

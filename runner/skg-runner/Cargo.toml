@@ -29,3 +29,6 @@ base64 = "0.22"
 [build-dependencies]
 tonic-build = "0.13"
 prost-build = "0.13"
+
+[dev-dependencies]
+async-trait = "0.1"

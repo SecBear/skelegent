@@ -1,8 +1,9 @@
 // Integration tests for the `#[skg_tool]` proc macro.
 // Each test exercises the generated struct through the `ToolDyn` trait.
 
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use serde_json::{Value, json};
-use skg_tool::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError};
+use skg_tool::{ToolConcurrencyHint, ToolDyn, ToolError};
 use skg_tool_macro::skg_tool;
 
 // ── Test 1: basic required-parameter tool ─────────────────────────────────────
@@ -37,7 +38,7 @@ async fn test_basic_tool_schema() {
 #[tokio::test]
 async fn test_basic_tool_call() {
     let tool = GetWeatherTool::new();
-    let ctx = ToolCallContext::new(layer0::OperatorId::new("test-agent"));
+    let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test-agent"));
     let input = json!({"location": "San Francisco"});
     let result = tool.call(input, &ctx).await.expect("call must succeed");
     assert_eq!(result["location"], "San Francisco");
@@ -70,7 +71,7 @@ async fn test_optional_param_schema() {
 #[tokio::test]
 async fn test_optional_param_absent_deserialises_as_none() {
     let tool = SearchTool::new();
-    let ctx = ToolCallContext::new(layer0::OperatorId::new("test-agent"));
+    let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test-agent"));
     // `limit` is not present in the input JSON
     let input = json!({"query": "rust proc macros"});
     let result = tool.call(input, &ctx).await.expect("call must succeed");
@@ -82,17 +83,17 @@ async fn test_optional_param_absent_deserialises_as_none() {
 #[tokio::test]
 async fn test_optional_param_present_deserialises_correctly() {
     let tool = SearchTool::new();
-    let ctx = ToolCallContext::new(layer0::OperatorId::new("test-agent"));
+    let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test-agent"));
     let input = json!({"query": "rust", "limit": 10});
     let result = tool.call(input, &ctx).await.expect("call must succeed");
     assert_eq!(result["query"], "rust");
     assert_eq!(result["limit"], 10);
 }
 
-// ── Test 3: ToolCallContext parameter ─────────────────────────────────────────
+// ── Test 3: DispatchContext parameter ─────────────────────────────────────────
 
 #[skg_tool(name = "agent_info", description = "Returns agent info from context")]
-async fn agent_info(ctx: &ToolCallContext, label: String) -> Result<Value, ToolError> {
+async fn agent_info(ctx: &DispatchContext, label: String) -> Result<Value, ToolError> {
     let operator_str = ctx.operator_id.to_string();
     Ok(json!({"agent": operator_str, "label": label}))
 }
@@ -114,7 +115,7 @@ async fn test_ctx_param_excluded_from_schema() {
 #[tokio::test]
 async fn test_ctx_param_passed_through_to_function() {
     let tool = AgentInfoTool::new();
-    let ctx = ToolCallContext::new(layer0::OperatorId::new("my-agent"));
+    let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("my-agent"));
     let input = json!({"label": "hello"});
     let result = tool.call(input, &ctx).await.expect("call must succeed");
     assert_eq!(result["label"], "hello");
@@ -163,7 +164,7 @@ async fn test_zero_param_schema_is_empty_object() {
 #[tokio::test]
 async fn test_zero_param_call() {
     let tool = PingTool::new();
-    let ctx = ToolCallContext::new(layer0::OperatorId::new("test-agent"));
+    let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test-agent"));
     let result = tool.call(json!({}), &ctx).await.expect("call must succeed");
     assert_eq!(result["pong"], true);
 }

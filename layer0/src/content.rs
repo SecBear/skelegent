@@ -31,9 +31,31 @@ pub enum ContentBlock {
     #[serde(rename = "image")]
     Image {
         /// The image source (base64 or URL).
-        source: ImageSource,
+        source: ContentSource,
         /// The MIME type of the image.
         media_type: String,
+    },
+
+    /// File content — documents, audio, video, code files.
+    #[serde(rename = "file")]
+    File {
+        /// The file data source — inline bytes or URL reference.
+        source: ContentSource,
+        /// MIME type (e.g., `application/pdf`, `audio/mp3`).
+        media_type: String,
+        /// Optional filename hint for the recipient.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
+
+    /// Structured data content — JSON objects, form data, API responses.
+    #[serde(rename = "data")]
+    Data {
+        /// Structured data payload.
+        data: serde_json::Value,
+        /// Optional media type hint (e.g., `application/json`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
     },
 
     /// A tool use request from the model.
@@ -70,19 +92,19 @@ pub enum ContentBlock {
     },
 }
 
-/// Source for image content.
+/// Source for binary content — images, files, or other media.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum ImageSource {
-    /// Base64-encoded image data.
+pub enum ContentSource {
+    /// Base64-encoded binary data.
     Base64 {
-        /// The base64-encoded image data.
+        /// The base64-encoded data.
         data: String,
     },
-    /// URL pointing to an image.
+    /// URL pointing to content.
     Url {
-        /// The URL of the image.
+        /// The URL of the content.
         url: String,
     },
 }

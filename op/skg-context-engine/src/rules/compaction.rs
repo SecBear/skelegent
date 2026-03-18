@@ -305,6 +305,13 @@ impl ContextOp for CompactionRule {
     async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
         let before = ctx.messages().len();
 
+        tracing::info!(
+            compaction_event = "context_pressure",
+            message_count = before,
+            threshold = self.max_messages,
+            "compaction rule: message threshold exceeded, compacting"
+        );
+
         let compacted = match &self.strategy {
             CompactionStrategy::SlidingWindow { keep } => sliding_window(ctx.messages(), *keep),
             CompactionStrategy::PolicyTrim { target } => policy_trim(ctx.messages(), *target),
@@ -313,9 +320,10 @@ impl ContextOp for CompactionRule {
 
         let after = ctx.messages().len();
         tracing::info!(
+            compaction_event = "compaction_complete",
             messages_before = before,
             messages_after = after,
-            "skg.compaction"
+            "compaction rule: compaction complete"
         );
 
         Ok(())

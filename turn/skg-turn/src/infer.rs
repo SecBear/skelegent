@@ -39,7 +39,6 @@ pub struct InferRequest {
     pub system: Option<String>,
 
     /// Provider-specific config passthrough (e.g., thinking blocks, caching).
-    #[allow(dead_code)]
     pub extra: serde_json::Value,
 }
 
@@ -142,6 +141,11 @@ impl InferResponse {
         self.content.as_text()
     }
 
+    /// Consume the response and return its content.
+    pub fn into_content(self) -> Content {
+        self.content
+    }
+
     /// Whether the model is requesting tool use.
     pub fn has_tool_calls(&self) -> bool {
         !self.tool_calls.is_empty()
@@ -212,6 +216,12 @@ impl InferResponse {
             },
             content,
         )
+    }
+}
+
+impl From<InferResponse> for Content {
+    fn from(response: InferResponse) -> Self {
+        response.content
     }
 }
 
@@ -317,5 +327,35 @@ mod tests {
             Role::Tool { name, .. } => assert_eq!(name, "search"),
             _ => panic!("expected Tool role"),
         }
+    }
+
+    #[test]
+    fn into_content_returns_inner() {
+        let resp = InferResponse {
+            content: Content::text("Hello!"),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: TokenUsage::default(),
+            model: "test".into(),
+            cost: None,
+            truncated: None,
+        };
+        let content = resp.into_content();
+        assert_eq!(content.as_text(), Some("Hello!"));
+    }
+
+    #[test]
+    fn from_infer_response_for_content() {
+        let resp = InferResponse {
+            content: Content::text("Converted"),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: TokenUsage::default(),
+            model: "test".into(),
+            cost: None,
+            truncated: None,
+        };
+        let content: Content = resp.into();
+        assert_eq!(content.as_text(), Some("Converted"));
     }
 }

@@ -188,7 +188,7 @@ where
 impl ErrorProvider<fn() -> ProviderError> {
     /// Provider that always returns `ProviderError::RateLimited`.
     pub fn rate_limited() -> Self {
-        Self::new(|| ProviderError::RateLimited)
+        Self::new(|| ProviderError::RateLimited { retry_after: None })
     }
 
     /// Provider that always returns `ProviderError::AuthFailed`.
@@ -217,7 +217,7 @@ where
 
 /// Create an [`ErrorProvider`] that always returns `ProviderError::RateLimited`.
 pub fn error_provider_rate_limited() -> ErrorProvider<impl Fn() -> ProviderError + Send + Sync> {
-    ErrorProvider::new(|| ProviderError::RateLimited)
+    ErrorProvider::new(|| ProviderError::RateLimited { retry_after: None })
 }
 
 /// Create an [`ErrorProvider`] that always returns `ProviderError::AuthFailed`.
@@ -365,7 +365,7 @@ mod tests {
         let provider = error_provider_rate_limited();
         let err = provider.infer(dummy_request()).await.unwrap_err();
         assert!(err.is_retryable());
-        assert!(matches!(err, ProviderError::RateLimited));
+        assert!(matches!(err, ProviderError::RateLimited { .. }));
     }
 
     #[tokio::test]

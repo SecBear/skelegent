@@ -43,6 +43,10 @@ pub struct TokenUsage {
     pub cache_read_tokens: Option<u64>,
     /// Tokens written to cache (if supported).
     pub cache_creation_tokens: Option<u64>,
+    /// Reasoning tokens consumed (if the model supports extended thinking).
+    /// Only populated by providers that report this (e.g., OpenAI o-series).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
 }
 
 #[cfg(test)]
@@ -78,6 +82,7 @@ mod tests {
             output_tokens: 50,
             cache_read_tokens: Some(10),
             cache_creation_tokens: Some(5),
+            reasoning_tokens: Some(42),
         };
         let json = serde_json::to_value(&usage).unwrap();
         let back: TokenUsage = serde_json::from_value(json).unwrap();

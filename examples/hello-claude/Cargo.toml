@@ -10,7 +10,7 @@ path = "main.rs"
 
 [dependencies]
 layer0 = { path = "../../layer0" }
-skg-auth-omp = { path = "../../auth/skg-auth-omp" }
+skg-auth-omp = { path = "../../../extras/auth/skg-auth-omp" }
 skg-provider-anthropic = { path = "../../provider/skg-provider-anthropic" }
 skg-op-single-shot = { path = "../../op/skg-op-single-shot" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

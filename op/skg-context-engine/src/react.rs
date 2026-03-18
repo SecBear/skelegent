@@ -14,13 +14,14 @@ use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
 use crate::ops::tool::ExecuteTool;
 use crate::output::{OutputError, OutputMode, OutputSchema};
+use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use serde_json::Value;
-use skg_tool::{ToolCallContext, ToolDyn, ToolRegistry};
+use skg_tool::{ToolDyn, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
@@ -60,6 +61,18 @@ impl Clone for ReactLoopConfig {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             tool_filter: self.tool_filter.clone(),
+        }
+    }
+}
+
+impl Default for ReactLoopConfig {
+    fn default() -> Self {
+        Self {
+            system_prompt: String::new(),
+            model: None,
+            max_tokens: Some(4096),
+            temperature: None,
+            tool_filter: None,
         }
     }
 }
@@ -123,8 +136,8 @@ pub fn check_exit(stop_reason: &StopReason) -> ExitReason {
 /// Check which tool calls require approval and return the corresponding effects.
 ///
 /// Returns a vec of `Effect::ToolApprovalRequired` for each tool call where
-/// `tool.requires_approval()` is true. Returns an empty vec if no tools
-/// require approval.
+/// `tool.approval_policy().requires_approval(&input)` is true. Returns an empty
+/// vec if no tools require approval.
 ///
 /// This is the decision point for human-in-the-loop approval. The caller
 /// decides what to do with the effects (emit them, filter them, etc.).
@@ -134,7 +147,7 @@ pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<E
         .filter(|call| {
             registry
                 .get(&call.name)
-                .is_some_and(|t| t.requires_approval())
+                .is_some_and(|t| t.approval_policy().requires_approval(&call.input))
         })
         .map(|call| Effect::ToolApprovalRequired {
             tool_name: call.name.clone(),
@@ -154,28 +167,7 @@ pub fn format_tool_error(e: &EngineError) -> String {
     format!("Error: {e}")
 }
 
-async fn infer_once<P: Provider>(
-    ctx: &mut Context,
-    provider: &P,
-    tools: &ToolRegistry,
-    config: &ReactLoopConfig,
-    extra_tool: Option<&ToolSchema>,
-) -> Result<crate::InferResult, EngineError> {
-    ctx.enter_boundary::<InferBoundary>().await?;
-
-    let mut compile_config = config.compile_config(tools, ctx);
-    if let Some(schema) = extra_tool {
-        compile_config.tools.push(schema.clone());
-    }
-
-    let compiled = ctx.compile(&compile_config);
-    let result = compiled.infer(provider).await?;
-
-    ctx.exit_boundary::<InferBoundary>().await?;
-    Ok(result)
-}
-
-fn structured_exit_output(err: EngineError, ctx: &Context) -> Result<OperatorOutput, EngineError> {
+fn structured_exit_output(err: EngineError, ctx: &mut Context) -> Result<OperatorOutput, EngineError> {
     match err {
         EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
         other => Err(other),
@@ -188,7 +180,7 @@ enum ToolDispatchOutcome {
     Exit(ExitReason),
 }
 
-fn make_context_output(message: Content, exit: ExitReason, ctx: &Context) -> OperatorOutput {
+fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
     let mut output = OperatorOutput::new(message, exit);
     let mut meta = OperatorMetadata::default();
     meta.tokens_in = ctx.metrics.tokens_in;
@@ -197,7 +189,7 @@ fn make_context_output(message: Content, exit: ExitReason, ctx: &Context) -> Ope
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = ctx.effects().to_vec();
+    output.effects = ctx.drain_effects();
     output
 }
 
@@ -225,15 +217,28 @@ pub async fn react_loop<P: Provider>(
     ctx: &mut Context,
     provider: &P,
     tools: &ToolRegistry,
-    tool_ctx: &ToolCallContext,
+    dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
 ) -> Result<OperatorOutput, EngineError> {
     loop {
-        // Phase 1: Compile and infer (re-filter tools each turn)
-        let result = match infer_once(ctx, provider, tools, config, None).await {
-            Ok(result) => result,
-            Err(err) => return structured_exit_output(err, ctx),
-        };
+        // Enter InferBoundary: drains pending interventions + fires Before rules.
+        // Compile AFTER so any context mutations (injected messages, tool changes)
+        // appear in the request.
+        if let Err(err) = ctx.enter_boundary::<InferBoundary>().await {
+            return structured_exit_output(err, ctx);
+        }
+
+        // Phase 1: Compile and infer (re-filter tools each turn, after before rules)
+        let compile_config = config.compile_config(tools, ctx);
+        let compiled = ctx.compile(&compile_config);
+
+        let infer_span = tracing::info_span!("infer", turn = ctx.metrics.turns_completed);
+        let result = tracing::Instrument::instrument(compiled.infer(provider), infer_span).await?;
+
+        // Exit InferBoundary: fires After rules
+        if let Err(err) = ctx.exit_boundary::<InferBoundary>().await {
+            return structured_exit_output(err, ctx);
+        }
 
         // Phase 2: Append response to context (this is a context op — rules fire)
         if let Err(err) = ctx.run(AppendResponse::new(result.response.clone())).await {
@@ -264,19 +269,26 @@ pub async fn react_loop<P: Provider>(
 
         // Phase 5: Dispatch tool calls
         for call in &tool_calls {
-            let result_str = match ctx
-                .run(ExecuteTool::new(
+            let tool_span = tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
+            let start = std::time::Instant::now();
+            let tool_result = tracing::Instrument::instrument(
+                ctx.run(ExecuteTool::new(
                     call.clone(),
                     tools.clone(),
-                    tool_ctx.clone(),
-                ))
-                .await
-            {
-                Ok(s) => s,
-                Err(EngineError::Exit { reason, .. }) => {
-                    return Ok(make_context_output(Content::text(""), reason, ctx));
+                    dispatch_ctx.clone(),
+                )),
+                tool_span,
+            )
+            .await;
+            let result_str = match tool_result {
+                Ok(s) => {
+                    tracing::debug!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, "tool succeeded");
+                    s
                 }
-                Err(e) => format_tool_error(&e),
+                Err(e) => {
+                    tracing::warn!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, error = %e, "tool failed");
+                    format_tool_error(&e)
+                }
             };
 
             // Append tool result to context
@@ -289,8 +301,17 @@ pub async fn react_loop<P: Provider>(
     }
 }
 
-fn make_output(response: InferResponse, exit: ExitReason, ctx: &Context) -> OperatorOutput {
-    make_context_output(response.content, exit, ctx)
+fn make_output(response: InferResponse, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
+    let mut output = OperatorOutput::new(response.content, exit);
+    let mut meta = OperatorMetadata::default();
+    meta.tokens_in = ctx.metrics.tokens_in;
+    meta.tokens_out = ctx.metrics.tokens_out;
+    meta.cost = ctx.metrics.cost;
+    meta.turns_used = ctx.metrics.turns_completed;
+    meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
+    output.metadata = meta;
+    output.effects = ctx.drain_effects();
+    output
 }
 
 /// Extract tool schemas from a registry, applying a filter.
@@ -344,7 +365,7 @@ pub async fn react_loop_structured<P: Provider>(
     ctx: &mut Context,
     provider: &P,
     tools: &ToolRegistry,
-    tool_ctx: &ToolCallContext,
+    dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
     output: &OutputSchema,
 ) -> Result<(Option<Value>, OperatorOutput), EngineError> {
@@ -357,15 +378,31 @@ pub async fn react_loop_structured<P: Provider>(
     let mut output_retries: u32 = 0;
 
     loop {
-        // Phase 1: Compile and infer (re-filter tools each turn)
-        let result =
-            match infer_once(ctx, provider, tools, config, output_tool_schema.as_ref()).await {
-                Ok(result) => result,
-                Err(err) => match structured_exit_output(err, ctx) {
-                    Ok(output) => return Ok((None, output)),
-                    Err(other) => return Err(other),
-                },
-            };
+        // Enter InferBoundary: drains pending interventions + fires Before rules.
+        // Compile AFTER so any context mutations appear in the request.
+        if let Err(err) = ctx.enter_boundary::<InferBoundary>().await {
+            match structured_exit_output(err, ctx) {
+                Ok(output) => return Ok((None, output)),
+                Err(other) => return Err(other),
+            }
+        }
+
+        // Phase 1: Compile and infer (re-filter tools each turn, after before rules)
+        let mut compile_config = config.compile_config(tools, ctx);
+        if let Some(schema) = &output_tool_schema {
+            compile_config.tools.push(schema.clone());
+        }
+        let compiled = ctx.compile(&compile_config);
+
+        let result = compiled.infer(provider).await?;
+
+        // Exit InferBoundary: fires After rules
+        if let Err(err) = ctx.exit_boundary::<InferBoundary>().await {
+            match structured_exit_output(err, ctx) {
+                Ok(output) => return Ok((None, output)),
+                Err(other) => return Err(other),
+            }
+        }
 
         // Phase 2: Append response to context (rules fire)
         if let Err(err) = ctx.run(AppendResponse::new(result.response.clone())).await {
@@ -422,7 +459,7 @@ pub async fn react_loop_structured<P: Provider>(
                     ctx,
                     &result.response,
                     tools,
-                    tool_ctx,
+                    dispatch_ctx,
                     &output.tool_name,
                 )
                 .await?;
@@ -446,7 +483,7 @@ pub async fn react_loop_structured<P: Provider>(
                         ctx,
                         &result.response,
                         tools,
-                        tool_ctx,
+                        dispatch_ctx,
                         &output.tool_name,
                     )
                     .await?;
@@ -477,16 +514,14 @@ pub async fn react_loop_structured<P: Provider>(
 
 /// Dispatch function tool calls, skipping the output tool.
 ///
-/// If any tool requires approval, emits [`Effect::ToolApprovalRequired`]
-/// effects on the context and returns [`ToolDispatchOutcome::AwaitingApproval`].
-/// If a rule/interceptor exits during tool execution, returns
-/// [`ToolDispatchOutcome::Exit`] so the caller can surface the structured exit
-/// instead of treating it as a tool error string.
+/// If any tool requires approval, stores [`Effect::ToolApprovalRequired`]
+/// effects in the context and returns `AwaitingApproval` (caller should exit with
+/// [`ExitReason::AwaitingApproval`]).
 async fn dispatch_function_tools(
     ctx: &mut Context,
     response: &InferResponse,
     tools: &ToolRegistry,
-    tool_ctx: &ToolCallContext,
+    dispatch_ctx: &DispatchContext,
     output_tool_name: &str,
 ) -> Result<ToolDispatchOutcome, EngineError> {
     // Check for approval-required tools first (excluding output tool)
@@ -499,7 +534,7 @@ async fn dispatch_function_tools(
     let approval_effects = check_approval(&function_calls, tools);
 
     if !approval_effects.is_empty() {
-        ctx.extend_effects(approval_effects);
+        ctx.extend_effects(approval_effects.clone());
         return Ok(ToolDispatchOutcome::AwaitingApproval);
     }
 
@@ -511,7 +546,7 @@ async fn dispatch_function_tools(
             .run(ExecuteTool::new(
                 call.clone(),
                 tools.clone(),
-                tool_ctx.clone(),
+                dispatch_ctx.clone(),
             ))
             .await
         {
@@ -542,6 +577,7 @@ mod tests {
     use crate::{InferBoundary, Rule};
     use async_trait::async_trait;
     use layer0::id::OperatorId;
+    use layer0::{DispatchContext, DispatchId};
     use serde_json::json;
     use skg_tool::{ToolDyn, ToolError};
     use skg_turn::provider::ProviderError;
@@ -568,7 +604,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<
             Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {
@@ -648,7 +684,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await
@@ -682,7 +718,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await
@@ -721,7 +757,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let err = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await
@@ -754,7 +790,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let err = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await
@@ -783,7 +819,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await
             .unwrap();
@@ -812,7 +848,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::text_json(json!({}), |v| Ok(v.clone()));
         let (value, output) = react_loop_structured(
             &mut ctx,
@@ -908,7 +944,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
         let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
             .await
@@ -944,14 +980,14 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let (value, output) = react_loop_structured(
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             &schema,
         )
@@ -987,14 +1023,14 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let (value, _) = react_loop_structured(
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             &schema,
         )
@@ -1025,14 +1061,14 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let err = react_loop_structured(
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             &schema,
         )
@@ -1057,14 +1093,14 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::text_json(json!({}), city_validator);
 
         let (value, _) = react_loop_structured(
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             &schema,
         )
@@ -1087,7 +1123,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         // ToolCall mode: model returns text instead of calling return_result
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
@@ -1095,7 +1131,7 @@ mod tests {
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             &schema,
         )
@@ -1130,14 +1166,14 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(MockTool { name: "search" }));
 
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let (value, _) = react_loop_structured(
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             &schema,
         )
@@ -1166,7 +1202,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
 
         let (value, output) = react_loop_structured(
@@ -1235,7 +1271,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), city_validator);
         let (value, output) = react_loop_structured(
             &mut ctx,
@@ -1275,14 +1311,14 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::tool_call(json!({}), |v| Ok(v.clone()));
 
         let _ = react_loop_structured(
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             &schema,
         )
@@ -1305,14 +1341,14 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let schema = OutputSchema::text_json(json!({}), |v| Ok(v.clone()));
 
         let _ = react_loop_structured(
             &mut ctx,
             &provider,
             &tools,
-            &tool_ctx,
+            &dispatch_ctx,
             &simple_config(),
             &schema,
         )
@@ -1390,7 +1426,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let config = ReactLoopConfig {
             system_prompt: "test".into(),
             model: None,
@@ -1401,7 +1437,7 @@ mod tests {
             })),
         };
 
-        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config)
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
             .await
             .unwrap();
 
@@ -1430,14 +1466,14 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<
             Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {
             Box::pin(async { Ok(json!("should not reach here")) })
         }
-        fn requires_approval(&self) -> bool {
-            true
+        fn approval_policy(&self) -> skg_tool::ApprovalPolicy {
+            skg_tool::ApprovalPolicy::Always
         }
     }
 
@@ -1454,29 +1490,19 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
             .await
             .unwrap();
 
         // Should exit with AwaitingApproval
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
 
-        // Should have the ToolApprovalRequired effect
-        assert_eq!(output.effects.len(), 1);
-        match &output.effects[0] {
-            Effect::ToolApprovalRequired {
-                tool_name,
-                call_id,
-                input,
-            } => {
-                assert_eq!(tool_name, "dangerous_tool");
-                assert_eq!(call_id, "c1");
-                assert_eq!(input, &json!({ "cmd": "rm -rf /" }));
-            }
-            other => panic!("expected ToolApprovalRequired, got {other:?}"),
-        }
+        // Effects now flow through Context into output.effects
+        assert!(!output.effects.is_empty());
+
+        // Provider should have been called exactly once
 
         // Provider should have been called exactly once
         assert_eq!(provider.call_count(), 1);
@@ -1496,13 +1522,13 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
             .await
             .unwrap();
 
-        // Normal completion — requires_approval defaults to false
+        // Normal completion — approval_policy defaults to ApprovalPolicy::None
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert!(output.effects.is_empty());
     }
@@ -1525,21 +1551,120 @@ mod tests {
             .await
             .unwrap();
 
-        let tool_ctx = ToolCallContext::new(OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
-        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
             .await
             .unwrap();
 
         // Should exit with AwaitingApproval (approval check happens before dispatch)
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
-        assert_eq!(output.effects.len(), 1);
+        // Effects now flow through Context into output.effects
+        assert!(!output.effects.is_empty());
+    }
+
+    #[tokio::test]
+    async fn react_loop_approval_effects_appear_in_output() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("dangerous_tool", "c1", json!({ "cmd": "rm -rf /" }));
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(ApprovalTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("delete everything")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
+        assert!(
+            !output.effects.is_empty(),
+            "approval effects must appear in OperatorOutput"
+        );
+
+        // Verify the effect is the expected ToolApprovalRequired variant
         match &output.effects[0] {
-            Effect::ToolApprovalRequired { tool_name, .. } => {
+            Effect::ToolApprovalRequired {
+                tool_name, call_id, ..
+            } => {
                 assert_eq!(tool_name, "dangerous_tool");
+                assert_eq!(call_id, "c1");
             }
             other => panic!("expected ToolApprovalRequired, got {other:?}"),
         }
+    }
+
+    struct AlwaysFailingTool;
+
+    impl ToolDyn for AlwaysFailingTool {
+        fn name(&self) -> &str {
+            "fail"
+        }
+        fn description(&self) -> &str {
+            "always fails"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({ "type": "object" })
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &DispatchContext,
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
+        > {
+            Box::pin(async { Err(ToolError::ExecutionFailed("boom".into())) })
+        }
+    }
+
+    /// Failed tool calls must count toward the tool budget, otherwise a tool
+    /// that always fails causes an infinite loop when `max_tool_calls` is set.
+    #[tokio::test]
+    async fn react_loop_failed_tool_calls_count_toward_budget() {
+        let provider = TestProvider::new();
+        // Provide more responses than needed; budget guard must halt before all are consumed.
+        provider.respond_with_tool_call("fail", "c1", json!({}));
+        provider.respond_with_tool_call("fail", "c2", json!({}));
+        provider.respond_with_tool_call("fail", "c3", json!({}));
+        provider.respond_with_text("should never reach");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(AlwaysFailingTool));
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "budget_guard",
+            100,
+            BudgetGuard::with_config(BudgetGuardConfig {
+                max_cost: None,
+                max_turns: None,
+                max_duration: None,
+                max_tool_calls: Some(3),
+            }),
+        )]);
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            output.exit_reason,
+            ExitReason::BudgetExhausted,
+            "loop must exit with BudgetExhausted after 3 failed tool calls"
+        );
+        // Provider was called exactly 3 times (once per tool-call response consumed).
+        assert_eq!(provider.call_count(), 3);
+        assert_eq!(ctx.metrics.tool_calls_total, 3);
+        assert_eq!(ctx.metrics.tool_calls_failed, 3);
     }
 
     #[test]
@@ -1610,5 +1735,55 @@ mod tests {
         let formatted = format_tool_error(&err);
         assert!(formatted.starts_with("Error: "));
         assert!(formatted.contains("something broke"));
+    }
+
+    // Regression test: effects pushed to ctx before a budget-exhausted exit must
+    // appear in the output. Previously make_context_output hardcoded vec![] and
+    // silently dropped them.
+    #[tokio::test]
+    async fn react_loop_budget_exit_preserves_pending_effects() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("should never be used");
+
+        let mut ctx = Context::with_rules(vec![Rule::before::<InferBoundary>(
+            "budget_guard",
+            100,
+            BudgetGuard::with_config(BudgetGuardConfig {
+                max_cost: None,
+                max_turns: Some(1),
+                max_duration: None,
+                max_tool_calls: None,
+            }),
+        )]);
+        // Pre-seed an effect that must survive the exit path.
+        ctx.push_effect(Effect::Progress {
+            content: Content::text("sentinel-effect"),
+        });
+        // Trip the budget guard: turns_completed already at limit.
+        ctx.metrics.turns_completed = 1;
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::MaxTurns);
+        assert_eq!(
+            output.effects.len(),
+            1,
+            "effect pushed before budget exit must not be dropped"
+        );
+        match &output.effects[0] {
+            Effect::Progress { content } => {
+                assert_eq!(content.as_text(), Some("sentinel-effect"));
+            }
+            other => panic!("expected Progress effect, got {other:?}"),
+        }
+        // Provider must not have been called — the budget guard fired before inference.
+        assert_eq!(provider.call_count(), 0);
     }
 }

@@ -46,3 +46,8 @@ macro_rules! typed_id {
 
 typed_id!(RunId, "Typed identifier for a durable run.");
 typed_id!(WaitPointId, "Typed identifier for a durable wait point.");
+
+typed_id!(
+    CheckpointId,
+    "Typed identifier for a durable execution checkpoint."
+);

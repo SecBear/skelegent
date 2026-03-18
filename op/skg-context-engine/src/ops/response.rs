@@ -43,3 +43,65 @@ impl ContextOp for AppendResponse {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::Context;
+    use crate::op::ContextOp;
+    use layer0::context::Role;
+    use rust_decimal::Decimal;
+    use skg_turn::test_utils::make_text_response;
+
+    #[tokio::test]
+    async fn appends_message_to_context() {
+        let mut ctx = Context::new();
+        let resp = make_text_response("Hello!");
+        AppendResponse::new(resp).execute(&mut ctx).await.unwrap();
+
+        let msgs = ctx.messages();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, Role::Assistant);
+        assert!(msgs[0].content.as_text().unwrap().contains("Hello!"));
+    }
+
+    #[tokio::test]
+    async fn updates_token_metrics() {
+        let mut ctx = Context::new();
+        // make_text_response uses TokenUsage::default() (zeros)
+        let resp = make_text_response("ok");
+        AppendResponse::new(resp).execute(&mut ctx).await.unwrap();
+
+        // Default token usage is 0, but verifies the path executes
+        assert_eq!(ctx.metrics.tokens_in, 0);
+        assert_eq!(ctx.metrics.tokens_out, 0);
+    }
+
+    #[tokio::test]
+    async fn accumulates_across_multiple_appends() {
+        let mut ctx = Context::new();
+        AppendResponse::new(make_text_response("a"))
+            .execute(&mut ctx)
+            .await
+            .unwrap();
+        AppendResponse::new(make_text_response("b"))
+            .execute(&mut ctx)
+            .await
+            .unwrap();
+
+        assert_eq!(ctx.messages().len(), 2);
+        assert_eq!(ctx.messages()[0].role, Role::Assistant);
+        assert_eq!(ctx.messages()[1].role, Role::Assistant);
+    }
+
+    #[tokio::test]
+    async fn cost_none_leaves_zero() {
+        let mut ctx = Context::new();
+        // make_text_response has cost: None
+        AppendResponse::new(make_text_response("ok"))
+            .execute(&mut ctx)
+            .await
+            .unwrap();
+        assert_eq!(ctx.metrics.cost, Decimal::ZERO);
+    }
+}

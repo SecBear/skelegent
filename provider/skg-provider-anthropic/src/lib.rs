@@ -6,7 +6,7 @@
 mod types;
 
 use futures_util::StreamExt;
-use layer0::content::{Content, ContentBlock, ImageSource as L0ImageSource};
+use layer0::content::{Content, ContentBlock, ContentSource as L0ContentSource};
 use rust_decimal::Decimal;
 use skg_auth::{AuthProvider, AuthRequest};
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
@@ -184,10 +184,10 @@ fn content_block_to_anthropic(block: &ContentBlock) -> Option<AnthropicContentBl
         }),
         ContentBlock::Image { source, media_type } => Some(AnthropicContentBlock::Image {
             source: match source {
-                L0ImageSource::Base64 { data } => {
+                L0ContentSource::Base64 { data } => {
                     AnthropicImageSource::Base64 { data: data.clone() }
                 }
-                L0ImageSource::Url { url } => AnthropicImageSource::Url { url: url.clone() },
+                L0ContentSource::Url { url } => AnthropicImageSource::Url { url: url.clone() },
                 _ => return None,
             },
             media_type: media_type.clone(),
@@ -223,10 +223,10 @@ fn parse_anthropic_infer_response(
                 text_parts.push(ContentBlock::Image {
                     source: match source {
                         AnthropicImageSource::Base64 { data } => {
-                            L0ImageSource::Base64 { data: data.clone() }
+                            L0ContentSource::Base64 { data: data.clone() }
                         }
                         AnthropicImageSource::Url { url } => {
-                            L0ImageSource::Url { url: url.clone() }
+                            L0ContentSource::Url { url: url.clone() }
                         }
                     },
                     media_type: media_type.clone(),
@@ -260,6 +260,7 @@ fn parse_anthropic_infer_response(
         output_tokens: response.usage.output_tokens,
         cache_read_tokens: response.usage.cache_read_input_tokens,
         cache_creation_tokens: response.usage.cache_creation_input_tokens,
+        reasoning_tokens: None,
     };
 
     let input_cost = Decimal::from(response.usage.input_tokens) * Decimal::new(25, 8);
@@ -357,7 +358,13 @@ impl Provider for AnthropicProvider {
 
             let status = http_response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(ProviderError::RateLimited);
+                let retry_after = http_response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                return Err(ProviderError::RateLimited { retry_after });
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
@@ -438,7 +445,13 @@ impl StreamProvider for AnthropicProvider {
 
             let status = http_response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(ProviderError::RateLimited);
+                let retry_after = http_response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs);
+                return Err(ProviderError::RateLimited { retry_after });
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
@@ -601,6 +614,7 @@ impl StreamProvider for AnthropicProvider {
                                     output_tokens,
                                     cache_read_tokens,
                                     cache_creation_tokens,
+                                    reasoning_tokens: None,
                                 };
                                 on_event(StreamEvent::Usage(usage_event));
                             }
@@ -637,6 +651,7 @@ impl StreamProvider for AnthropicProvider {
                 output_tokens,
                 cache_read_tokens,
                 cache_creation_tokens,
+                reasoning_tokens: None,
             };
 
             let input_cost = Decimal::from(input_tokens) * Decimal::new(25, 8);
@@ -675,6 +690,14 @@ fn map_error_response(status: reqwest::StatusCode, body: &str) -> ProviderError 
             message: body.to_string(),
         };
     }
+    // Client errors (4xx except 429, handled earlier) are not retryable.
+    if status.is_client_error() {
+        return ProviderError::InvalidRequest {
+            message: format!("HTTP {status}: {body}"),
+            status: Some(status_u16),
+        };
+    }
+    // Server errors and network issues are transient.
     ProviderError::TransientError {
         message: format!("HTTP {status}: {body}"),
         status: Some(status_u16),

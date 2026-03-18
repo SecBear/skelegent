@@ -1,36 +1,28 @@
 use async_trait::async_trait;
-use layer0::dispatch::Dispatcher;
+use layer0::DispatchContext;
+use layer0::content::Content;
+use layer0::dispatch::Artifact;
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OrchError, StateError};
+use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
-use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
-use layer0::state::{Lifetime, StateStore, StoreOptions};
+use layer0::state::{Lifetime, MemoryLink, StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
 use serde_json::json;
-use skg_effects_core::EffectExecutor;
 use skg_effects_core::Signalable;
-use skg_effects_local::LocalEffectExecutor;
+use skg_effects_core::{EffectHandler, EffectOutcome, UnknownEffectPolicy};
+use skg_effects_local::LocalEffectHandler;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// ── Minimal no-op dispatcher + signaler ─────────────────────────────────────
+fn test_ctx() -> DispatchContext {
+    DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
+}
+
+// ── Minimal no-op signaler ──────────────────────────────────────────────────
 
 struct NoOpOrch;
-
-#[async_trait]
-impl Dispatcher for NoOpOrch {
-    async fn dispatch(
-        &self,
-        _operator: &OperatorId,
-        _input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
-        Ok(OperatorOutput::new(
-            layer0::content::Content::text("ok"),
-            ExitReason::Complete,
-        ))
-    }
-}
 
 #[async_trait]
 impl Signalable for NoOpOrch {
@@ -119,25 +111,30 @@ async fn halt_hook_prevents_memory_write() {
     let orch = Arc::new(NoOpOrch);
 
     let stack = StoreStack::builder().guard(Arc::new(HaltGuard)).build();
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    )
-    .with_store_middleware(stack);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_store_middleware(stack);
 
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "secret".into(),
-        value: json!("sensitive"),
-        tier: None,
-        lifetime: None,
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }])
-    .await
-    .expect("halt is not an error — execute() succeeds");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "secret".into(),
+                value: json!("sensitive"),
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("halt is not an error — handle() succeeds");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Skipped),
+        "halt guard must produce Skipped outcome"
+    );
 
     let got = state.read(&Scope::Global, "secret").await.expect("read ok");
     assert_eq!(got, None, "halt guard must prevent the write");
@@ -148,24 +145,29 @@ async fn halt_hook_prevents_memory_write() {
 async fn no_hooks_writes_normally() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(NoOpOrch);
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    );
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>));
 
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "k".into(),
-        value: json!(42),
-        tier: None,
-        lifetime: None,
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }])
-    .await
-    .expect("execute ok");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "k".into(),
+                value: json!(42),
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "write must produce Applied outcome"
+    );
 
     let got = state.read(&Scope::Global, "k").await.expect("read ok");
     assert_eq!(got, Some(json!(42)));
@@ -179,25 +181,30 @@ async fn observer_hook_sees_key_and_value() {
 
     let observer = RecordingObserver::new();
     let stack = StoreStack::builder().observe(observer.clone()).build();
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    )
-    .with_store_middleware(stack);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_store_middleware(stack);
 
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "observed_key".into(),
-        value: json!({"x": 1}),
-        tier: None,
-        lifetime: None,
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }])
-    .await
-    .expect("execute ok");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "observed_key".into(),
+                value: json!({"x": 1}),
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "observer must not block — Applied"
+    );
 
     assert_eq!(
         *observer.seen_key.lock().await,
@@ -229,25 +236,30 @@ async fn modify_hook_replaces_value() {
             new_value: json!("replaced"),
         }))
         .build();
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    )
-    .with_store_middleware(stack);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_store_middleware(stack);
 
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "m".into(),
-        value: json!("original"),
-        tier: None,
-        lifetime: None,
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }])
-    .await
-    .expect("execute ok");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "m".into(),
+                value: json!("original"),
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "transformer must commit — Applied"
+    );
 
     let got = state.read(&Scope::Global, "m").await.expect("read ok");
     assert_eq!(
@@ -289,26 +301,31 @@ async fn lifetime_guardrail_blocks_transient_write() {
     let stack = StoreStack::builder()
         .guard(Arc::new(LifetimeGuardrail))
         .build();
-    let exec = LocalEffectExecutor::new(
-        state.clone(),
-        orch.clone() as Arc<dyn Dispatcher>,
-        Some(orch as Arc<dyn Signalable>),
-    )
-    .with_store_middleware(stack);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_store_middleware(stack);
 
     // Transient write: middleware must block it.
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "transient_key".into(),
-        value: serde_json::json!("should_not_land"),
-        tier: None,
-        lifetime: Some(Lifetime::Transient),
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }])
-    .await
-    .expect("halt is not an error");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "transient_key".into(),
+                value: serde_json::json!("should_not_land"),
+                tier: None,
+                lifetime: Some(Lifetime::Transient),
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("halt is not an error");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Skipped),
+        "transient write must be Skipped"
+    );
 
     let got = state
         .read(&Scope::Global, "transient_key")
@@ -317,18 +334,27 @@ async fn lifetime_guardrail_blocks_transient_write() {
     assert_eq!(got, None, "transient write must be blocked");
 
     // Durable write: middleware must allow it.
-    exec.execute(&[Effect::WriteMemory {
-        scope: Scope::Global,
-        key: "durable_key".into(),
-        value: serde_json::json!("should_land"),
-        tier: None,
-        lifetime: Some(layer0::state::Lifetime::Durable),
-        content_kind: None,
-        salience: None,
-        ttl: None,
-    }])
-    .await
-    .expect("execute ok");
+    let outcome = handler
+        .handle(
+            &Effect::WriteMemory {
+                scope: Scope::Global,
+                key: "durable_key".into(),
+                value: serde_json::json!("should_land"),
+                tier: None,
+                lifetime: Some(layer0::state::Lifetime::Durable),
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "durable write must be Applied"
+    );
 
     let got = state
         .read(&Scope::Global, "durable_key")
@@ -338,5 +364,121 @@ async fn lifetime_guardrail_blocks_transient_write() {
         got,
         Some(serde_json::json!("should_land")),
         "durable write must succeed"
+    );
+}
+
+/// Handoff must preserve structured JSON state in `input.metadata`.
+#[tokio::test]
+async fn handoff_preserves_structured_state_in_metadata() {
+    let state = Arc::new(InMemoryStore::new());
+    let orch = Arc::new(NoOpOrch);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>));
+
+    let handoff_state = json!({
+        "conversation_id": "abc-123",
+        "context": { "depth": 3, "tags": ["urgent", "follow-up"] },
+        "score": 0.95
+    });
+
+    let outcome = handler
+        .handle(
+            &Effect::Handoff {
+                operator: OperatorId::new("next-op"),
+                state: handoff_state.clone(),
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    match outcome {
+        EffectOutcome::Handoff { operator, input } => {
+            assert_eq!(operator, OperatorId::new("next-op"));
+            assert_eq!(
+                input.metadata, handoff_state,
+                "metadata must carry the original structured JSON, not Null"
+            );
+        }
+        other => panic!("expected Handoff outcome, got {:?}", other),
+    }
+}
+
+/// Effect::LinkMemory creates a graph link that is traversable via the store.
+#[tokio::test]
+async fn link_memory_effect_creates_graph_link() {
+    let state = Arc::new(InMemoryStore::new());
+    let orch = Arc::new(NoOpOrch);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>));
+
+    let outcome = handler
+        .handle(
+            &Effect::LinkMemory {
+                scope: Scope::Global,
+                link: MemoryLink::new("notes/meeting", "decisions/arch", "references"),
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("handle ok");
+
+    assert!(
+        matches!(outcome, EffectOutcome::Applied),
+        "LinkMemory must produce Applied outcome"
+    );
+
+    // Verify the link was created by traversing from the source key.
+    let reachable = state
+        .traverse(&Scope::Global, "notes/meeting", Some("references"), 1)
+        .await
+        .expect("traverse ok");
+    assert_eq!(
+        reachable,
+        vec!["decisions/arch"],
+        "link must be traversable from source to target"
+    );
+}
+
+/// Progress and Artifact effects are caller-interpreted (routed via dispatch-channel
+/// wiring through EffectEmitter → DispatchHandle, not EffectHandler). The handler must
+/// skip them cleanly under `IgnoreAndWarn`.
+#[tokio::test]
+async fn progress_and_artifact_effects_skip_cleanly() {
+    let state = Arc::new(InMemoryStore::new());
+    let orch = Arc::new(NoOpOrch);
+    let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
+        .with_unknown_policy(UnknownEffectPolicy::IgnoreAndWarn);
+
+    // Progress effect must be skipped.
+    let progress_outcome = handler
+        .handle(
+            &Effect::Progress {
+                content: Content::text("step 1"),
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("Progress must not error under IgnoreAndWarn");
+
+    assert!(
+        matches!(progress_outcome, EffectOutcome::Skipped),
+        "Progress effect must produce Skipped, got {:?}",
+        progress_outcome,
+    );
+
+    // Artifact effect must be skipped.
+    let artifact_outcome = handler
+        .handle(
+            &Effect::Artifact {
+                artifact: Artifact::new("art-1", vec![Content::text("hello")]),
+            },
+            &test_ctx(),
+        )
+        .await
+        .expect("Artifact must not error under IgnoreAndWarn");
+
+    assert!(
+        matches!(artifact_outcome, EffectOutcome::Skipped),
+        "Artifact effect must produce Skipped, got {:?}",
+        artifact_outcome,
     );
 }

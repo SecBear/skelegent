@@ -204,14 +204,17 @@ pub trait StateStore: Send + Sync {
     fn clear_transient(&self) {}
     /// Create a link between two memory entries.
     ///
-    /// Graph-aware backends create a typed edge. Default: no-op (returns Ok).
+    /// Graph-aware backends create a typed edge. Default returns an error
+    /// indicating graph operations are not supported.
     async fn link(&self, _scope: &Scope, _link: &MemoryLink) -> Result<(), StateError> {
-        Ok(())
+        Err(StateError::Other(
+            "graph operations not supported by this store".into(),
+        ))
     }
 
     /// Remove a link between two memory entries.
     ///
-    /// Default: no-op (returns Ok).
+    /// Default returns an error indicating graph operations are not supported.
     async fn unlink(
         &self,
         _scope: &Scope,
@@ -219,13 +222,16 @@ pub trait StateStore: Send + Sync {
         _to_key: &str,
         _relation: &str,
     ) -> Result<(), StateError> {
-        Ok(())
+        Err(StateError::Other(
+            "graph operations not supported by this store".into(),
+        ))
     }
 
     /// Traverse links from a starting key.
     ///
     /// Returns keys reachable within `max_depth` hops via edges matching
-    /// `relation` (None = any relation). Default: empty vec.
+    /// `relation` (None = any relation). Default returns an error indicating
+    /// graph operations are not supported.
     async fn traverse(
         &self,
         _scope: &Scope,
@@ -233,7 +239,9 @@ pub trait StateStore: Send + Sync {
         _relation: Option<&str>,
         _max_depth: u32,
     ) -> Result<Vec<String>, StateError> {
-        Ok(vec![])
+        Err(StateError::Other(
+            "graph operations not supported by this store".into(),
+        ))
     }
 
     /// Enhanced search with advisory options.

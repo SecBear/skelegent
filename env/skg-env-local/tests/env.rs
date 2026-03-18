@@ -1,6 +1,8 @@
 use layer0::content::Content;
+use layer0::dispatch_context::DispatchContext;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
+use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 use layer0::test_utils::EchoOperator;
@@ -13,6 +15,10 @@ fn simple_input(msg: &str) -> OperatorInput {
     OperatorInput::new(Content::text(msg), TriggerType::User)
 }
 
+fn make_ctx() -> DispatchContext {
+    DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
+}
+
 // --- Basic execution ---
 
 #[tokio::test]
@@ -21,7 +27,7 @@ async fn passthrough_execution() {
     let input = simple_input("hello");
     let spec = EnvironmentSpec::default();
 
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&make_ctx(), input, &spec).await.unwrap();
     assert_eq!(output.message, Content::text("hello"));
 }
 
@@ -31,7 +37,7 @@ async fn preserves_operator_metadata() {
     let input = simple_input("test");
     let spec = EnvironmentSpec::default();
 
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&make_ctx(), input, &spec).await.unwrap();
     // EchoOperator returns default metadata
     assert_eq!(output.metadata.tokens_in, 0);
 }
@@ -46,10 +52,9 @@ impl layer0::operator::Operator for FailingOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
+        _ctx: &layer0::DispatchContext,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
-        Err(layer0::error::OperatorError::NonRetryable(
-            "always fails".into(),
-        ))
+        Err(layer0::error::OperatorError::non_retryable("always fails"))
     }
 }
 
@@ -59,7 +64,7 @@ async fn propagates_operator_error() {
     let input = simple_input("will fail");
     let spec = EnvironmentSpec::default();
 
-    let result = env.run(input, &spec).await;
+    let result = env.run(&make_ctx(), input, &spec).await;
     assert!(result.is_err());
     match result.unwrap_err() {
         EnvError::OperatorError(e) => {
@@ -77,7 +82,7 @@ async fn usable_as_box_dyn_environment() {
     let input = simple_input("dyn test");
     let spec = EnvironmentSpec::default();
 
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&make_ctx(), input, &spec).await.unwrap();
     assert_eq!(output.message, Content::text("dyn test"));
 }
 
@@ -87,7 +92,7 @@ async fn usable_as_arc_dyn_environment() {
     let input = simple_input("arc test");
     let spec = EnvironmentSpec::default();
 
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&make_ctx(), input, &spec).await.unwrap();
     assert_eq!(output.message, Content::text("arc test"));
 }
 
@@ -100,7 +105,7 @@ async fn ignores_spec_fields() {
     let spec = EnvironmentSpec::default();
 
     // LocalEnv ignores the spec — it's a passthrough
-    let output = env.run(input, &spec).await.unwrap();
+    let output = env.run(&make_ctx(), input, &spec).await.unwrap();
     assert_eq!(output.message, Content::text("spec ignored"));
 }
 
@@ -113,9 +118,10 @@ impl layer0::operator::Operator for ReadEnvVarOperator {
     async fn execute(
         &self,
         _input: OperatorInput,
+        _ctx: &layer0::DispatchContext,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         let value = std::env::var(&self.var_name)
-            .map_err(|e| layer0::error::OperatorError::NonRetryable(e.to_string()))?;
+            .map_err(|e| layer0::error::OperatorError::non_retryable(e.to_string()))?;
         Ok(OperatorOutput::new(
             Content::text(value),
             layer0::operator::ExitReason::Complete,
@@ -189,7 +195,7 @@ async fn resolves_injects_and_emits_events() {
         },
     ));
 
-    let output = env.run(simple_input("inject"), &spec).await.unwrap();
+    let output = env.run(&make_ctx(), simple_input("inject"), &spec).await.unwrap();
     assert_eq!(output.message, Content::text(SECRET_VALUE));
     assert!(std::env::var(VAR_NAME).is_err());
 
@@ -225,7 +231,7 @@ async fn credential_failures_are_sanitized_and_audited() {
         },
     ));
 
-    let err = env.run(simple_input("inject"), &spec).await.unwrap_err();
+    let err = env.run(&make_ctx(), simple_input("inject"), &spec).await.unwrap_err();
     match &err {
         EnvError::CredentialFailed(msg) => {
             assert!(msg.contains("anthropic-api-key"));

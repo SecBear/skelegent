@@ -14,11 +14,15 @@ It must be easy for any implementation to adopt and must avoid coupling to any s
 
 ## Protocol Traits
 
-Layer 0 defines the primary protocol traits that independent implementations agree on:
+Layer 0 defines four primary protocol traits:
 
 - `Operator`: one unit of agent work
 - `Dispatcher`: dispatch/invoke operators
+
+`Signalable` (fire-and-forget inter-workflow messaging) and `Queryable` (read-only workflow state queries) are defined in Layer 2 (`skg-effects-core`), not Layer 0.
+
 - `StateStore` + `StateReader`: persistence and retrieval
+
 - `Environment`: isolated execution boundary
 
 Middleware traits/stacks are cross-cutting protocol surfaces, but not separate primary runtime protocols. Lifecycle coordination and observability policy live above Layer 0 unless promoted into a real cross-boundary contract.

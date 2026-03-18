@@ -11,6 +11,7 @@
 //! no remote execution boundaries, no network policy enforcement.
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
@@ -206,6 +207,7 @@ impl LocalEnv {
 impl Environment for LocalEnv {
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
@@ -214,7 +216,7 @@ impl Environment for LocalEnv {
 
         let result = self
             .op
-            .execute(input)
+            .execute(input, ctx)
             .await
             .map_err(EnvError::OperatorError);
         drop(cleanup);
@@ -399,7 +401,11 @@ mod tests {
 
     #[async_trait]
     impl Operator for EchoOperator {
-        async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+        async fn execute(
+            &self,
+            input: OperatorInput,
+            _ctx: &DispatchContext,
+        ) -> Result<OperatorOutput, OperatorError> {
             Ok(OperatorOutput::new(input.message, ExitReason::Complete))
         }
     }
@@ -408,8 +414,12 @@ mod tests {
 
     #[async_trait]
     impl Operator for FailOperator {
-        async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
-            Err(OperatorError::Model("deliberate failure".into()))
+        async fn execute(
+            &self,
+            _input: OperatorInput,
+            _ctx: &DispatchContext,
+        ) -> Result<OperatorOutput, OperatorError> {
+            Err(OperatorError::model("deliberate failure"))
         }
     }
 
@@ -421,7 +431,7 @@ mod tests {
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let output = env.run(input, &spec).await.unwrap();
+        let output = env.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec).await.unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.message.as_text().unwrap(), "hello");
     }
@@ -434,7 +444,7 @@ mod tests {
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let result = env.run(input, &spec).await;
+        let result = env.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec).await;
         assert!(result.is_err());
     }
 

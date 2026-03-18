@@ -6,6 +6,7 @@
 
 use layer0::content::Content;
 use layer0::operator::{Operator, OperatorInput, TriggerType};
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use skg_auth_omp::OmpAuthProvider;
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_provider_anthropic::AnthropicProvider;
@@ -14,7 +15,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Build auth provider from OMP's credential store.
-    let auth = Arc::new(OmpAuthProvider::new()?);
+    let auth = Arc::new(OmpAuthProvider::from_env().expect("OMP agent.db not found"));
     let provider = AnthropicProvider::with_auth(auth);
 
     // 2. Build operator.
@@ -34,7 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // 4. Execute and print.
-    let output = op.execute(input).await?;
+    let ctx = DispatchContext::new(DispatchId::new("hello"), OperatorId::new("single-shot"));
+    let output = op.execute(input, &ctx).await?;
     println!(
         "Response: {}",
         output.message.as_text().unwrap_or("(no text)")

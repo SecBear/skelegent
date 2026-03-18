@@ -8,7 +8,11 @@ use crate::context::Context;
 use crate::error::EngineError;
 use crate::ops::compact::Compact;
 use crate::ops::inject::{InjectMessage, InjectMessages, InjectSystem};
+use crate::ops::store::{LoadConversation, SaveConversation};
 use layer0::context::Message;
+use layer0::effect::Scope;
+use layer0::state::StateStore;
+use std::sync::Arc;
 
 /// Fluent context assembly methods.
 ///
@@ -53,6 +57,35 @@ impl Context {
             self.compact(strategy).await?;
         }
         Ok(())
+    }
+
+    // ── Persistence ──────────────────────────────────────────
+
+    /// Save the current conversation messages to a [`StateStore`].
+    ///
+    /// Serializes the message buffer as JSON under the given scope and key.
+    /// Pair with [`load_conversation`](Self::load_conversation) to restore.
+    pub async fn save_conversation(
+        &mut self,
+        store: Arc<dyn StateStore>,
+        scope: Scope,
+        key: impl Into<String>,
+    ) -> Result<(), EngineError> {
+        self.run(SaveConversation::new(store, scope, key)).await
+    }
+
+    /// Load conversation messages from a [`StateStore`].
+    ///
+    /// Reads a JSON array of messages from the store and replaces the
+    /// context messages. Returns `None` if the key does not exist
+    /// (context unchanged), or `Some(count)` if messages were loaded.
+    pub async fn load_conversation(
+        &mut self,
+        store: Arc<dyn StateStore>,
+        scope: Scope,
+        key: impl Into<String>,
+    ) -> Result<Option<usize>, EngineError> {
+        self.run(LoadConversation::new(store, scope, key)).await
     }
 }
 

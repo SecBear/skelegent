@@ -1,6 +1,6 @@
 //! The [`Context`] runtime — first-class mutable substrate for agentic systems.
 //!
-//! Context carries messages, typed extensions, effects, metrics, and rules.
+//! Context carries messages, typed extensions, metrics, and rules.
 //! Every mutation goes through [`Context::run()`], which fires applicable rules.
 
 use crate::error::EngineError;
@@ -81,6 +81,8 @@ pub struct TurnMetrics {
     pub turns_completed: u32,
     /// Total tool calls dispatched.
     pub tool_calls_total: u32,
+    /// Total tool calls that returned an error.
+    pub tool_calls_failed: u32,
     /// When this operator invocation started.
     pub start: Instant,
 }
@@ -93,6 +95,7 @@ impl Default for TurnMetrics {
             cost: Decimal::ZERO,
             turns_completed: 0,
             tool_calls_total: 0,
+            tool_calls_failed: 0,
             start: Instant::now(),
         }
     }
@@ -118,8 +121,7 @@ impl TurnMetrics {
 /// The mutable substrate for agentic systems.
 ///
 /// Context carries everything an agent needs: the message buffer, typed
-/// extensions for cross-component state, declared effects, accumulated
-/// metrics, and reactive rules.
+/// extensions for cross-component state, accumulated
 ///
 /// Every operation goes through [`Context::run()`], which dispatches the
 /// operation and fires applicable rules before and after. This is how
@@ -136,15 +138,13 @@ pub struct Context {
     messages: Vec<Message>,
     /// Typed arbitrary state for cross-component communication.
     pub extensions: Extensions,
-    /// Declared effects (write_memory, delegate, signal, etc.).
-    ///
-    /// Access via [`effects()`](Self::effects) for reads and [`push_effect`](Self::push_effect)
-    /// or [`extend_effects`](Self::extend_effects) for writes.
-    effects: Vec<Effect>,
     /// Accumulated metrics for this operator invocation.
     pub metrics: TurnMetrics,
     /// Reactive rules. Sorted by priority (highest first).
     rules: Vec<Rule>,
+    /// Effects declared during this operator invocation.
+    /// Drained into `OperatorOutput::effects` by the caller.
+    effects: Vec<Effect>,
     /// True when executing a rule — prevents recursive rule firing.
     in_rule: bool,
     /// Observation stream sender. When present, every mutation emits a
@@ -161,12 +161,12 @@ impl Context {
         Self {
             messages: Vec::new(),
             extensions: Extensions::new(),
-            effects: Vec::new(),
             metrics: TurnMetrics::new(),
             rules: Vec::new(),
             in_rule: false,
             stream_tx: None,
             intervention_rx: None,
+            effects: Vec::new(),
         }
     }
 
@@ -215,11 +215,6 @@ impl Context {
     /// The message buffer (read-only).
     pub fn messages(&self) -> &[Message] {
         &self.messages
-    }
-
-    /// The declared effects (read-only).
-    pub fn effects(&self) -> &[Effect] {
-        &self.effects
     }
 
     // ── Mutation methods (emit to observation stream) ──────────────
@@ -278,25 +273,10 @@ impl Context {
         });
     }
 
-    /// Declare an effect.
-    ///
-    /// Emits [`ContextMutation::EffectDeclared`] to the observation stream.
-    pub fn push_effect(&mut self, effect: Effect) {
-        self.effects.push(effect.clone());
-        self.emit(ContextMutation::EffectDeclared(effect));
-    }
-
     /// Append multiple messages. Each emits [`ContextMutation::MessagePushed`].
     pub fn extend_messages(&mut self, msgs: impl IntoIterator<Item = Message>) {
         for msg in msgs {
             self.push_message(msg);
-        }
-    }
-
-    /// Declare multiple effects. Each emits [`ContextMutation::EffectDeclared`].
-    pub fn extend_effects(&mut self, effects: impl IntoIterator<Item = Effect>) {
-        for effect in effects {
-            self.push_effect(effect);
         }
     }
 
@@ -311,6 +291,31 @@ impl Context {
                 mutation,
             });
         }
+    }
+
+    // ── Effects ─────────────────────────────────────────────────────
+
+    /// Declare an effect. Stored until drained into OperatorOutput.
+    pub fn push_effect(&mut self, effect: Effect) {
+        self.emit(ContextMutation::EffectDeclared(effect.clone()));
+        self.effects.push(effect);
+    }
+
+    /// Declare multiple effects.
+    pub fn extend_effects(&mut self, effects: impl IntoIterator<Item = Effect>) {
+        for effect in effects {
+            self.push_effect(effect);
+        }
+    }
+
+    /// Read current effects without draining.
+    pub fn effects(&self) -> &[Effect] {
+        &self.effects
+    }
+
+    /// Drain all effects (transfers ownership to caller).
+    pub fn drain_effects(&mut self) -> Vec<Effect> {
+        std::mem::take(&mut self.effects)
     }
 
     // ── Rules and structure ──────────────────────────────────────────
@@ -377,7 +382,10 @@ impl Context {
 
     async fn enter_governed(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         if !self.in_rule {
+            // Drain pending interventions
             self.drain_interventions().await?;
+
+            // Fire "before" rules
             self.fire_before_rules(op_type).await?;
             self.fire_when_rules().await?;
         }
@@ -416,7 +424,7 @@ impl Context {
     }
 
     /// Fire rules that match `Before` for the given op type.
-    async fn fire_before_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
+    pub(crate) async fn fire_before_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         // Collect indices of matching rules to avoid borrow issues
         let indices: Vec<usize> = self
             .rules
@@ -472,7 +480,7 @@ impl Context {
     }
 
     /// Fire rules that match `After` for the given op type.
-    async fn fire_after_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
+    pub(crate) async fn fire_after_rules(&mut self, op_type: TypeId) -> Result<(), EngineError> {
         let indices: Vec<usize> = self
             .rules
             .iter()
@@ -742,37 +750,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn push_effect_emits_event() {
-        use layer0::effect::{Effect, Scope};
-
-        let (tx, mut rx) = broadcast::channel(16);
-        let mut ctx = Context::new();
-        ctx.with_stream(tx);
-
-        let effect = Effect::WriteMemory {
-            scope: Scope::Global,
-            key: "k".into(),
-            value: serde_json::json!("v"),
-            tier: None,
-            lifetime: None,
-            content_kind: None,
-            salience: None,
-            ttl: None,
-        };
-        ctx.push_effect(effect);
-
-        assert_eq!(ctx.effects().len(), 1);
-
-        let event = rx.try_recv().unwrap();
-        match event.mutation {
-            ContextMutation::EffectDeclared(Effect::WriteMemory { key, .. }) => {
-                assert_eq!(key, "k");
-            }
-            other => panic!("expected EffectDeclared(WriteMemory), got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
     async fn no_stream_sender_means_no_cost() {
         // Without a stream sender, mutation methods still work.
         let mut ctx = Context::new();
@@ -925,5 +902,36 @@ mod tests {
             }
             other => panic!("expected MessagePushed from intervention, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn push_effect_stores_and_drains() {
+        use layer0::effect::Effect;
+        let mut ctx = Context::new();
+        let effect = Effect::DeleteMemory {
+            scope: layer0::effect::Scope::Global,
+            key: "test_key".into(),
+        };
+        ctx.push_effect(effect.clone());
+        assert_eq!(ctx.effects().len(), 1);
+        let drained = ctx.drain_effects();
+        assert_eq!(drained.len(), 1);
+        assert!(ctx.effects().is_empty());
+    }
+
+    #[tokio::test]
+    async fn extend_effects_stores_multiple() {
+        use layer0::effect::Effect;
+        let mut ctx = Context::new();
+        let e1 = Effect::DeleteMemory {
+            scope: layer0::effect::Scope::Global,
+            key: "a".into(),
+        };
+        let e2 = Effect::DeleteMemory {
+            scope: layer0::effect::Scope::Global,
+            key: "b".into(),
+        };
+        ctx.extend_effects(vec![e1, e2]);
+        assert_eq!(ctx.effects().len(), 2);
     }
 }

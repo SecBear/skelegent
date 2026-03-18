@@ -19,7 +19,6 @@
 //! subscriber, not rely on the broadcast channel.
 
 use layer0::context::Message;
-use layer0::effect::Effect;
 use skg_turn::stream::StreamEvent;
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,7 +26,7 @@ use std::time::Instant;
 /// A single mutation to context state.
 ///
 /// The vocabulary is tied to [`Context`](crate::Context)'s structural API
-/// (messages, effects, metrics), NOT to the open-ended set of
+/// (messages, metrics), NOT to the open-ended set of
 /// [`ContextOp`](crate::ContextOp)s. New ops compose existing mutations —
 /// `InjectSystem` calls `ctx.push_message()`, `Compact` calls
 /// `ctx.set_messages()`. The stream shows the actual changes regardless of
@@ -61,9 +60,6 @@ pub enum ContextMutation {
         new_len: usize,
     },
 
-    /// An effect was declared.
-    EffectDeclared(Effect),
-
     /// Metrics were updated (tokens, cost).
     MetricsUpdated {
         /// Total input tokens after update.
@@ -74,6 +70,9 @@ pub enum ContextMutation {
 
     /// A streaming inference token/chunk arrived.
     InferenceDelta(StreamEvent),
+
+    /// An effect was declared on the context.
+    EffectDeclared(layer0::effect::Effect),
 }
 
 /// A timestamped context mutation event.

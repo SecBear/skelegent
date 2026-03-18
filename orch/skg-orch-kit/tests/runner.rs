@@ -1,6 +1,7 @@
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::dispatch::Dispatcher;
+use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::{Effect, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
@@ -8,7 +9,8 @@ use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, Trig
 use layer0::state::{SearchResult, StateStore};
 use serde_json::json;
 use skg_effects_core::Signalable;
-use skg_orch_kit::{Kit, KitError, LocalEffectInterpreter, OrchestratedRunner};
+use skg_effects_local::LocalEffectHandler;
+use skg_orch_kit::{Kit, KitError, OrchestratedRunner};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -39,14 +41,31 @@ impl SimpleOrch {
 impl Dispatcher for SimpleOrch {
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         let op = self
             .agents
-            .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
-        op.execute(input).await.map_err(OrchError::OperatorError)
+            .get(ctx.operator_id.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
+            .clone();
+        let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            match op.execute(input, &ctx).await {
+                Ok(output) => {
+                    let _ = sender.send(DispatchEvent::Completed { output }).await;
+                }
+                Err(err) => {
+                    let _ = sender
+                        .send(DispatchEvent::Failed {
+                            error: OrchError::OperatorError(err),
+                        })
+                        .await;
+                }
+            }
+        });
+        Ok(handle)
     }
 }
 
@@ -125,7 +144,11 @@ struct WriterOperator;
 
 #[async_trait]
 impl Operator for WriterOperator {
-    async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        _input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
         output.effects.push(Effect::WriteMemory {
             scope: Scope::Global,
@@ -149,7 +172,11 @@ struct DelegateOperator;
 
 #[async_trait]
 impl Operator for DelegateOperator {
-    async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        _input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("delegating"), ExitReason::Complete);
         output.effects.push(Effect::Delegate {
             operator: OperatorId::new("child"),
@@ -166,7 +193,11 @@ struct ChildOperator;
 
 #[async_trait]
 impl Operator for ChildOperator {
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
         assert_eq!(input.message.as_text().unwrap_or_default(), "child task");
         Ok(OperatorOutput::new(
             Content::text("child done"),
@@ -179,7 +210,11 @@ struct HandoffOperator;
 
 #[async_trait]
 impl Operator for HandoffOperator {
-    async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        _input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
         output.effects.push(Effect::Handoff {
             operator: OperatorId::new("handoff_target"),
@@ -193,8 +228,12 @@ struct HandoffTargetOperator;
 
 #[async_trait]
 impl Operator for HandoffTargetOperator {
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
-        // LocalEffectInterpreter serializes the JSON state to a string and puts it in message text.
+    async fn execute(
+        &self,
+        input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
+        // LocalEffectHandler serializes the JSON state to a string and puts it in message text.
         let text = input.message.as_text().unwrap_or_default();
         assert!(text.contains("\"ticket\":123") || text.contains("\"ticket\": 123"));
         Ok(OperatorOutput::new(
@@ -208,7 +247,11 @@ struct FullPipelineRootOperator;
 
 #[async_trait]
 impl Operator for FullPipelineRootOperator {
-    async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        _input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
         output.effects.push(Effect::WriteMemory {
             scope: Scope::Global,
@@ -250,11 +293,11 @@ async fn runner_executes_memory_and_signal_effects() {
     let orch = Arc::new(orch);
 
     let state = Arc::new(TestStore::new());
-    let runner = OrchestratedRunner::new(
-        orch.clone() as Arc<dyn Dispatcher>,
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::clone(&state) as Arc<dyn StateStore>,
         Some(orch.clone() as Arc<dyn Signalable>),
-        Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
-    );
+    ));
+    let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler);
 
     let trace = runner
         .run(
@@ -267,7 +310,7 @@ async fn runner_executes_memory_and_signal_effects() {
     assert_eq!(trace.outputs.len(), 1);
     assert_eq!(state.read_raw("k1").await, Some(json!({"v": 1})));
 
-    // Signal is sent by the runner via Signalable::signal and recorded by our orch.
+    // Signal is sent by the handler via Signalable::signal and recorded by our orch.
     let signals = orch.recorded_signals().await;
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].0, WorkflowId::new("wf1"));
@@ -283,11 +326,11 @@ async fn runner_enqueues_and_executes_delegate() {
 
     let state = Arc::new(TestStore::new());
     let orch = Arc::new(orch);
-    let runner = OrchestratedRunner::new(
-        orch.clone() as Arc<dyn Dispatcher>,
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::clone(&state) as Arc<dyn StateStore>,
         Some(orch.clone() as Arc<dyn Signalable>),
-        Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
-    );
+    ));
+    let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler);
 
     let trace = runner
         .run(
@@ -309,11 +352,11 @@ async fn runner_enqueues_and_executes_handoff() {
     orch.register("handoff_target", Arc::new(HandoffTargetOperator));
 
     let orch = Arc::new(orch);
-    let runner = OrchestratedRunner::new(
-        orch.clone() as Arc<dyn Dispatcher>,
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::new(TestStore::new()) as Arc<dyn StateStore>,
         Some(orch.clone() as Arc<dyn Signalable>),
-        Arc::new(LocalEffectInterpreter::new(Arc::new(TestStore::new()))),
-    );
+    ));
+    let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler);
 
     let trace = runner
         .run(
@@ -365,7 +408,11 @@ async fn runner_has_safety_bound_for_infinite_followups() {
     struct SelfDelegate;
     #[async_trait]
     impl Operator for SelfDelegate {
-        async fn execute(&self, _input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+        async fn execute(
+            &self,
+            _input: OperatorInput,
+            _ctx: &DispatchContext,
+        ) -> Result<OperatorOutput, OperatorError> {
             let mut output = OperatorOutput::new(Content::text("loop"), ExitReason::Complete);
             output.effects.push(Effect::Delegate {
                 operator: OperatorId::new("root"),
@@ -379,12 +426,12 @@ async fn runner_has_safety_bound_for_infinite_followups() {
     orch.register("root", Arc::new(SelfDelegate));
 
     let orch = Arc::new(orch);
-    let runner = OrchestratedRunner::new(
-        orch.clone() as Arc<dyn Dispatcher>,
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::new(TestStore::new()) as Arc<dyn StateStore>,
         Some(orch.clone() as Arc<dyn Signalable>),
-        Arc::new(LocalEffectInterpreter::new(Arc::new(TestStore::new()))),
-    )
-    .with_max_followups(8);
+    ));
+    let runner =
+        OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler).with_max_followups(8);
 
     let err = runner
         .run(
@@ -404,11 +451,11 @@ async fn runner_effect_pipeline_end_to_end() {
     orch.register("handoff_target", Arc::new(HandoffTargetOperator));
     let orch = Arc::new(orch);
     let state = Arc::new(TestStore::new());
-    let runner = OrchestratedRunner::new(
-        orch.clone() as Arc<dyn Dispatcher>,
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::clone(&state) as Arc<dyn StateStore>,
         Some(orch.clone() as Arc<dyn Signalable>),
-        Arc::new(LocalEffectInterpreter::new(Arc::clone(&state))),
-    );
+    ));
+    let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler);
 
     let trace = runner
         .run(
@@ -438,7 +485,7 @@ async fn runner_effect_pipeline_end_to_end() {
         ]
     );
 
-    // Signal is sent by runner via Signalable::signal and is observable.
+    // Signal is sent by handler via Signalable::signal and is observable.
     let signals = orch.recorded_signals().await;
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].0, WorkflowId::new("wf-pipeline"));

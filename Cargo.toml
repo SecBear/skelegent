@@ -39,13 +39,19 @@ members = [
   "auth/skg-auth-omp",
   "secret/skg-secret-vault",
   "hooks/skg-hook-security",
+  "hooks/skg-hook-retry",
+  "hooks/skg-hook-recorder",
   "examples/custom_operator_barrier",
+  "examples/middleware_echo",
+  "examples/middleware_recorder",
+  "examples/middleware_approval",
   "turn/skg-turn-kit",
   "effects/skg-effects-core",
   "effects/skg-effects-local",
   "env/skg-env-docker",
   "runner/skg-runner",
   "examples/hello-claude",
+  "a2a/skg-a2a-core",
 ]
 
 [workspace.package]
@@ -72,9 +78,11 @@ skg-provider-anthropic = { path = "provider/skg-provider-anthropic", version = "
 skg-provider-openai = { path = "provider/skg-provider-openai", version = "0.4.1" }
 skg-provider-ollama = { path = "provider/skg-provider-ollama", version = "0.4.1" }
 skg-provider-codex = { path = "provider/skg-provider-codex", version = "0.4.1" }
+skg-secret = { path = "secret/skg-secret", version = "0.4.1" }
 skg-orch-local = { path = "orch/skg-orch-local", version = "0.4.1" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
 serde_json = "1"
 rust_decimal = { version = "1", features = ["serde-str"] }
 tempfile = "3"
+reqwest = { version = "0.12", features = ["json"] }

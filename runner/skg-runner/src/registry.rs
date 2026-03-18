@@ -11,25 +11,11 @@ pub struct OperatorRegistry {
 }
 
 impl OperatorRegistry {
-    /// Create an empty registry.
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self {
-            operators: HashMap::new(),
-        }
-    }
-
     /// Start building a registry with a builder pattern.
     pub fn builder() -> OperatorRegistryBuilder {
         OperatorRegistryBuilder {
             operators: HashMap::new(),
         }
-    }
-
-    /// Register an operator. Overwrites any existing operator with the same id.
-    #[allow(dead_code)]
-    pub fn register(&mut self, id: OperatorId, op: Arc<dyn Operator>) {
-        self.operators.insert(id, op);
     }
 
     /// Look up an operator by string id.
@@ -45,6 +31,9 @@ pub struct OperatorRegistryBuilder {
 
 impl OperatorRegistryBuilder {
     /// Register an operator into the builder.
+    ///
+    /// Not called by the default binary (ships with an empty registry),
+    /// but downstream embedders use this to compile operators in.
     #[allow(dead_code)]
     pub fn register(mut self, id: OperatorId, op: Arc<dyn Operator>) -> Self {
         self.operators.insert(id, op);
@@ -62,16 +51,39 @@ impl OperatorRegistryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use layer0::{
+        Content, DispatchContext, ExitReason, OperatorError, OperatorInput, OperatorOutput,
+    };
+
+    struct NoOp;
+
+    #[async_trait]
+    impl layer0::Operator for NoOp {
+        async fn execute(
+            &self,
+            _input: OperatorInput,
+            _ctx: &DispatchContext,
+        ) -> Result<OperatorOutput, OperatorError> {
+            Ok(OperatorOutput::new(
+                Content::text("ok"),
+                ExitReason::Complete,
+            ))
+        }
+    }
 
     #[test]
     fn empty_registry_returns_none() {
-        let reg = OperatorRegistry::new();
+        let reg = OperatorRegistry::builder().build();
         assert!(reg.get("nonexistent").is_none());
     }
 
     #[test]
-    fn builder_produces_empty_registry() {
-        let reg = OperatorRegistry::builder().build();
-        assert!(reg.get("anything").is_none());
+    fn register_and_lookup() {
+        let reg = OperatorRegistry::builder()
+            .register(OperatorId::new("test-op"), Arc::new(NoOp))
+            .build();
+        assert!(reg.get("test-op").is_some());
+        assert!(reg.get("other").is_none());
     }
 }

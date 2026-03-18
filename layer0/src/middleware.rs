@@ -8,10 +8,11 @@
 //! Provider middleware is NOT here — it lives in the turn layer (Layer 1)
 //! because Provider is RPITIT, not object-safe.
 
+use crate::dispatch::DispatchHandle;
+use crate::dispatch_context::DispatchContext;
 use crate::effect::Scope;
 use crate::environment::EnvironmentSpec;
 use crate::error::{EnvError, OrchError, StateError};
-use crate::id::OperatorId;
 use crate::operator::{OperatorInput, OperatorOutput};
 use crate::state::StoreOptions;
 use async_trait::async_trait;
@@ -30,9 +31,9 @@ pub trait DispatchNext: Send + Sync {
     /// Forward the dispatch to the next layer.
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError>;
+    ) -> Result<DispatchHandle, OrchError>;
 }
 
 /// Middleware wrapping `Dispatcher::dispatch`.
@@ -40,15 +41,18 @@ pub trait DispatchNext: Send + Sync {
 /// Code before `next.dispatch()` = pre-processing (input mutation, logging).
 /// Code after `next.dispatch()` = post-processing (output mutation, metrics).
 /// Not calling `next.dispatch()` = short-circuit (guardrail halt, cached response).
+///
+/// The `ctx` parameter carries dispatch correlation, identity, tracing, and
+/// typed extensions. The operator being invoked is `ctx.operator_id`.
 #[async_trait]
 pub trait DispatchMiddleware: Send + Sync {
     /// Intercept a dispatch call.
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError>;
+    ) -> Result<DispatchHandle, OrchError>;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -112,6 +116,7 @@ pub trait ExecNext: Send + Sync {
     /// Forward the execution to the next layer.
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError>;
@@ -125,11 +130,18 @@ pub trait ExecMiddleware: Send + Sync {
     /// Intercept an environment execution.
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
         next: &dyn ExecNext,
     ) -> Result<OperatorOutput, EnvError>;
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // DISPATCH STACK (composed middleware chain)
@@ -168,19 +180,19 @@ impl DispatchStack {
     /// Dispatch through the middleware chain, ending at `terminal`.
     pub async fn dispatch_with(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
         terminal: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         if self.layers.is_empty() {
-            return terminal.dispatch(operator, input).await;
+            return terminal.dispatch(ctx, input).await;
         }
         let chain = DispatchChain {
             layers: &self.layers,
             index: 0,
             terminal,
         };
-        chain.dispatch(operator, input).await
+        chain.dispatch(ctx, input).await
     }
 }
 
@@ -223,22 +235,26 @@ struct DispatchChain<'a> {
 impl DispatchNext for DispatchChain<'_> {
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<DispatchHandle, OrchError> {
         if self.index >= self.layers.len() {
-            return self.terminal.dispatch(operator, input).await;
+            return self.terminal.dispatch(ctx, input).await;
         }
         let next = DispatchChain {
             layers: self.layers,
             index: self.index + 1,
             terminal: self.terminal,
         };
-        self.layers[self.index]
-            .dispatch(operator, input, &next)
-            .await
+        self.layers[self.index].dispatch(ctx, input, &next).await
     }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // STORE STACK (composed middleware chain)
@@ -395,6 +411,12 @@ impl StoreReadNext for StoreReadChain<'_> {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Follows the Middleware Blueprint (ARCHITECTURE.md § Middleware Blueprint).
+// Traits are hand-written (unique method signatures per boundary).
+// Stack + Builder + Chain are structurally identical across all 6 boundaries.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // EXEC STACK (composed middleware chain)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -426,19 +448,20 @@ impl ExecStack {
     /// Execute through the middleware chain, ending at `terminal`.
     pub async fn run_with(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
         terminal: &dyn ExecNext,
     ) -> Result<OperatorOutput, EnvError> {
         if self.layers.is_empty() {
-            return terminal.run(input, spec).await;
+            return terminal.run(ctx, input, spec).await;
         }
         let chain = ExecChain {
             layers: &self.layers,
             index: 0,
             terminal,
         };
-        chain.run(input, spec).await
+        chain.run(ctx, input, spec).await
     }
 }
 
@@ -481,24 +504,36 @@ struct ExecChain<'a> {
 impl ExecNext for ExecChain<'_> {
     async fn run(
         &self,
+        ctx: &DispatchContext,
         input: OperatorInput,
         spec: &EnvironmentSpec,
     ) -> Result<OperatorOutput, EnvError> {
         if self.index >= self.layers.len() {
-            return self.terminal.run(input, spec).await;
+            return self.terminal.run(ctx, input, spec).await;
         }
         let next = ExecChain {
             layers: self.layers,
             index: self.index + 1,
             terminal: self.terminal,
         };
-        self.layers[self.index].run(input, spec, &next).await
+        self.layers[self.index].run(ctx, input, spec, &next).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatch::{DispatchEvent, DispatchHandle};
+    use crate::id::{DispatchId, OperatorId};
+
+    /// Helper: create a DispatchHandle that immediately completes with the given output.
+    fn immediate_handle(output: OperatorOutput) -> DispatchHandle {
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("test"));
+        tokio::spawn(async move {
+            let _ = sender.send(DispatchEvent::Completed { output }).await;
+        });
+        handle
+    }
 
     #[tokio::test]
     async fn dispatch_middleware_is_object_safe() {
@@ -508,12 +543,12 @@ mod tests {
         impl DispatchMiddleware for TagMiddleware {
             async fn dispatch(
                 &self,
-                operator: &OperatorId,
+                _ctx: &DispatchContext,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<OperatorOutput, OrchError> {
+            ) -> Result<DispatchHandle, OrchError> {
                 input.metadata = serde_json::json!({"tagged": true});
-                next.dispatch(operator, input).await
+                next.dispatch(_ctx, input).await
             }
         }
 
@@ -549,11 +584,12 @@ mod tests {
         impl ExecMiddleware for CredentialInjector {
             async fn run(
                 &self,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
                 spec: &EnvironmentSpec,
                 next: &dyn ExecNext,
             ) -> Result<OperatorOutput, EnvError> {
-                next.run(input, spec).await
+                next.run(_ctx, input, spec).await
             }
         }
 
@@ -572,12 +608,12 @@ mod tests {
         impl DispatchMiddleware for CountObserver {
             async fn dispatch(
                 &self,
-                operator: &OperatorId,
+                ctx: &DispatchContext,
                 input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<OperatorOutput, OrchError> {
+            ) -> Result<DispatchHandle, OrchError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                next.dispatch(operator, input).await
+                next.dispatch(ctx, input).await
             }
         }
 
@@ -587,10 +623,10 @@ mod tests {
         impl DispatchMiddleware for HaltGuard {
             async fn dispatch(
                 &self,
-                _operator: &OperatorId,
+                _ctx: &DispatchContext,
                 _input: OperatorInput,
                 _next: &dyn DispatchNext,
-            ) -> Result<OperatorOutput, OrchError> {
+            ) -> Result<DispatchHandle, OrchError> {
                 Err(OrchError::DispatchFailed("budget exceeded".into()))
             }
         }
@@ -606,13 +642,13 @@ mod tests {
         impl DispatchNext for EchoTerminal {
             async fn dispatch(
                 &self,
-                _operator: &OperatorId,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
-            ) -> Result<OperatorOutput, OrchError> {
-                Ok(OperatorOutput::new(
+            ) -> Result<DispatchHandle, OrchError> {
+                Ok(immediate_handle(OperatorOutput::new(
                     input.message,
                     crate::ExitReason::Complete,
-                ))
+                )))
             }
         }
 
@@ -620,9 +656,8 @@ mod tests {
             crate::content::Content::text("test"),
             crate::operator::TriggerType::User,
         );
-        let result = stack
-            .dispatch_with(&OperatorId::from("a"), input, &EchoTerminal)
-            .await;
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("a"));
+        let result = stack.dispatch_with(&ctx, input, &EchoTerminal).await;
         assert!(result.is_err());
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
@@ -635,12 +670,12 @@ mod tests {
         impl DispatchMiddleware for Uppercaser {
             async fn dispatch(
                 &self,
-                operator: &OperatorId,
+                ctx: &DispatchContext,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<OperatorOutput, OrchError> {
+            ) -> Result<DispatchHandle, OrchError> {
                 input.metadata = serde_json::json!({"transformed": true});
-                next.dispatch(operator, input).await
+                next.dispatch(ctx, input).await
             }
         }
 
@@ -650,13 +685,13 @@ mod tests {
         impl DispatchNext for EchoTerminal {
             async fn dispatch(
                 &self,
-                _operator: &OperatorId,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
-            ) -> Result<OperatorOutput, OrchError> {
-                Ok(OperatorOutput::new(
+            ) -> Result<DispatchHandle, OrchError> {
+                Ok(immediate_handle(OperatorOutput::new(
                     input.message,
                     crate::ExitReason::Complete,
-                ))
+                )))
             }
         }
 
@@ -668,9 +703,8 @@ mod tests {
             crate::content::Content::text("hello"),
             crate::operator::TriggerType::User,
         );
-        let result = stack
-            .dispatch_with(&OperatorId::from("a"), input, &EchoTerminal)
-            .await;
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::from("a"));
+        let result = stack.dispatch_with(&ctx, input, &EchoTerminal).await;
         assert!(result.is_ok());
     }
 
@@ -735,11 +769,12 @@ mod tests {
         impl ExecMiddleware for LogExec {
             async fn run(
                 &self,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
                 spec: &EnvironmentSpec,
                 next: &dyn ExecNext,
             ) -> Result<OperatorOutput, EnvError> {
-                next.run(input, spec).await
+                next.run(_ctx, input, spec).await
             }
         }
 
@@ -749,6 +784,7 @@ mod tests {
         impl ExecNext for EchoExec {
             async fn run(
                 &self,
+                _ctx: &DispatchContext,
                 input: OperatorInput,
                 _spec: &EnvironmentSpec,
             ) -> Result<OperatorOutput, EnvError> {
@@ -766,7 +802,7 @@ mod tests {
             crate::operator::TriggerType::User,
         );
         let spec = EnvironmentSpec::default();
-        let result = stack.run_with(input, &spec, &EchoExec).await;
+        let result = stack.run_with(&DispatchContext::new(crate::id::DispatchId::new("test"), crate::id::OperatorId::new("test")), input, &spec, &EchoExec).await;
         assert!(result.is_ok());
     }
 }

@@ -130,9 +130,9 @@ pub struct OpenAIFunction {
 
 /// OpenAI Chat Completions API response body.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct OpenAIResponse {
     /// Unique identifier for the completion.
+    #[allow(dead_code)]
     pub id: String,
     /// Response choices.
     pub choices: Vec<OpenAIChoice>,
@@ -142,30 +142,31 @@ pub struct OpenAIResponse {
     pub usage: OpenAIUsage,
     /// Service tier used for the request.
     #[serde(default)]
+    #[allow(dead_code)]
     pub service_tier: Option<String>,
 }
 
 /// A single choice in the response.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct OpenAIChoice {
     /// The generated message.
     pub message: OpenAIMessage,
     /// Why generation stopped.
     pub finish_reason: String,
     /// Index of this choice.
+    #[allow(dead_code)]
     pub index: u32,
 }
 
 /// Token usage statistics from the OpenAI API.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct OpenAIUsage {
     /// Number of tokens in the prompt.
     pub prompt_tokens: u64,
     /// Number of tokens in the completion.
     pub completion_tokens: u64,
     /// Total tokens used (prompt + completion).
+    #[allow(dead_code)]
     pub total_tokens: u64,
     /// Detailed breakdown of prompt token usage.
     #[serde(default)]
@@ -185,7 +186,6 @@ pub struct OpenAIPromptTokensDetails {
 
 /// Detailed breakdown of completion token usage.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct OpenAICompletionTokensDetails {
     /// Number of reasoning tokens used.
     #[serde(default)]
@@ -193,10 +193,10 @@ pub struct OpenAICompletionTokensDetails {
 }
 
 /// A streaming chunk from OpenAI's Chat Completions API.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct OpenAIStreamChunk {
     /// Unique identifier for the chunk.
+    #[allow(dead_code)]
     pub id: String,
     /// Choices within this chunk.
     pub choices: Vec<OpenAIStreamChoice>,
@@ -208,7 +208,6 @@ pub struct OpenAIStreamChunk {
 }
 
 /// A choice within a streaming chunk.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct OpenAIStreamChoice {
     /// The delta payload.
@@ -217,15 +216,16 @@ pub struct OpenAIStreamChoice {
     #[serde(default)]
     pub finish_reason: Option<String>,
     /// Index of this choice.
+    #[allow(dead_code)]
     pub index: u32,
 }
 
 /// The delta payload within a streaming choice.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct OpenAIStreamDelta {
     /// Role of the message author (present in the first chunk).
     #[serde(default)]
+    #[allow(dead_code)]
     pub role: Option<String>,
     /// Text content delta.
     #[serde(default)]
@@ -257,4 +257,47 @@ pub struct OpenAIStreamFunction {
     /// Partial JSON arguments.
     #[serde(default)]
     pub arguments: Option<String>,
+}
+
+/// OpenAI embeddings API request.
+#[derive(Debug, Serialize)]
+pub(crate) struct OpenAIEmbeddingRequest {
+    /// Model identifier (e.g. "text-embedding-3-small").
+    pub model: String,
+    /// Texts to embed.
+    pub input: Vec<String>,
+    /// Optional output dimensions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<usize>,
+}
+
+/// OpenAI embeddings API response.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OpenAIEmbeddingResponse {
+    /// Embedding data entries.
+    pub data: Vec<OpenAIEmbeddingData>,
+    /// Model that produced the embeddings.
+    pub model: String,
+    /// Token usage.
+    pub usage: OpenAIEmbeddingUsage,
+}
+
+/// A single embedding entry in the response.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OpenAIEmbeddingData {
+    /// The embedding vector.
+    pub embedding: Vec<f32>,
+    /// Index of this embedding in the input list.
+    #[allow(dead_code)]
+    pub index: usize,
+}
+
+/// Token usage for an embedding request.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OpenAIEmbeddingUsage {
+    /// Tokens used for the prompt/input.
+    pub prompt_tokens: u64,
+    /// Total tokens used.
+    #[allow(dead_code)]
+    pub total_tokens: u64,
 }

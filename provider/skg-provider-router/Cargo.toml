@@ -6,6 +6,7 @@ description = "Model routing provider for skelegent — selects provider per-req
 
 [dependencies]
 skg-turn = { path = "../../turn/skg-turn" }
+async-trait = "0.1"
 thiserror = "2"
 
 [dev-dependencies]

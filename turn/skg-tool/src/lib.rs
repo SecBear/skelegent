@@ -10,46 +10,13 @@ pub mod adapter;
 #[cfg(feature = "macros")]
 pub use skg_tool_macro::skg_tool;
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
 
-use layer0::id::OperatorId;
-
-/// Context available to tools during execution.
-///
-/// Carries operator identity, typed dependencies (via Any downcasting),
-/// and metadata for the current tool call.
-#[derive(Clone)]
-pub struct ToolCallContext {
-    /// Identity of the operator making the tool call.
-    pub operator_id: OperatorId,
-    /// Typed dependencies, downcast at the call site.
-    pub deps: Arc<dyn Any + Send + Sync>,
-}
-
-impl ToolCallContext {
-    /// Create a new context with the given operator ID and no deps.
-    pub fn new(operator_id: OperatorId) -> Self {
-        Self {
-            operator_id,
-            deps: Arc::new(()),
-        }
-    }
-
-    /// Create a context with typed dependencies.
-    pub fn with_deps(operator_id: OperatorId, deps: Arc<dyn Any + Send + Sync>) -> Self {
-        Self { operator_id, deps }
-    }
-
-    /// Downcast deps to a specific type.
-    pub fn deps<T: 'static>(&self) -> Option<&T> {
-        self.deps.downcast_ref::<T>()
-    }
-}
+use layer0::DispatchContext;
 
 /// Errors from tool operations.
 #[non_exhaustive]
@@ -67,9 +34,64 @@ pub enum ToolError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// Transient failure (network timeout, temporary unavailability).
+    /// Callers should retry.
+    #[error("transient error: {0}")]
+    Transient(String),
+
+    /// Rate limited by the upstream service.
+    #[error("rate limited: {message}")]
+    RateLimited {
+        /// Suggested wait time before retry.
+        retry_after: Option<std::time::Duration>,
+        /// Human-readable message.
+        message: String,
+    },
+
     /// Catch-all for other errors.
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl ToolError {
+    /// Whether this error is retryable.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Transient(_) | Self::RateLimited { .. })
+    }
+}
+
+/// Policy governing whether a tool invocation requires human approval.
+#[non_exhaustive]
+#[derive(Clone)]
+pub enum ApprovalPolicy {
+    /// Never requires approval.
+    None,
+    /// Always requires approval before execution.
+    Always,
+    /// Requires approval based on the tool input.
+    /// The function receives the tool input and returns true if approval is needed.
+    Conditional(Arc<dyn Fn(&serde_json::Value) -> bool + Send + Sync>),
+}
+
+impl std::fmt::Debug for ApprovalPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Always => write!(f, "Always"),
+            Self::Conditional(_) => write!(f, "Conditional(...)"),
+        }
+    }
+}
+
+impl ApprovalPolicy {
+    /// Check whether approval is required for the given input.
+    pub fn requires_approval(&self, input: &serde_json::Value) -> bool {
+        match self {
+            Self::None => false,
+            Self::Always => true,
+            Self::Conditional(f) => f(input),
+        }
+    }
 }
 
 /// Concurrency hint for tool scheduling.
@@ -89,7 +111,7 @@ pub trait ToolDynStreaming: Send + Sync + 'static + ToolDyn {
     fn call_streaming<'a>(
         &'a self,
         input: serde_json::Value,
-        ctx: &'a ToolCallContext,
+        ctx: &'a DispatchContext,
         on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
     ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>>;
 }
@@ -111,7 +133,7 @@ pub trait ToolDyn: Send + Sync {
     fn call(
         &self,
         input: serde_json::Value,
-        ctx: &ToolCallContext,
+        ctx: &DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>;
 
     /// If this tool also supports streaming, return a reference to its streaming interface.
@@ -120,15 +142,16 @@ pub trait ToolDyn: Send + Sync {
         None
     }
 
-    /// Whether this tool requires human approval before execution.
+    /// The approval policy for this tool.
     ///
-    /// When `true`, the ReAct loop will emit [`Effect::ToolApprovalRequired`]
-    /// and exit with [`ExitReason::AwaitingApproval`] instead of executing
-    /// the tool directly. The calling layer decides how to handle approval.
+    /// When the policy requires approval, the ReAct loop will emit
+    /// [`Effect::ToolApprovalRequired`] and exit with
+    /// [`ExitReason::AwaitingApproval`] instead of executing the tool
+    /// directly. The calling layer decides how to handle approval.
     ///
-    /// Default is `false` — tools execute immediately.
-    fn requires_approval(&self) -> bool {
-        false
+    /// Default is [`ApprovalPolicy::None`] — tools execute immediately.
+    fn approval_policy(&self) -> ApprovalPolicy {
+        ApprovalPolicy::None
     }
 
     /// Optional concurrency hint used by planners/deciders.
@@ -179,13 +202,13 @@ impl ToolDyn for AliasedTool {
     fn call(
         &self,
         input: serde_json::Value,
-        ctx: &ToolCallContext,
+        ctx: &DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         self.inner.call(input, ctx)
     }
 
-    fn requires_approval(&self) -> bool {
-        self.inner.requires_approval()
+    fn approval_policy(&self) -> ApprovalPolicy {
+        self.inner.approval_policy()
     }
 
     fn concurrency_hint(&self) -> ToolConcurrencyHint {
@@ -259,6 +282,7 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::id::{DispatchId, OperatorId};
     use serde_json::json;
 
     fn _assert_send_sync<T: Send + Sync>() {}
@@ -299,7 +323,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -321,7 +345,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Err(ToolError::ExecutionFailed("always fails".into())) })
@@ -359,7 +383,7 @@ mod tests {
         let result = tool
             .call(
                 json!({"msg": "hello"}),
-                &ToolCallContext::new(OperatorId::new("test")),
+                &DispatchContext::new(DispatchId::new("test"), OperatorId::new("test")),
             )
             .await
             .unwrap();
@@ -377,7 +401,7 @@ mod tests {
         let result = tool
             .call(
                 json!({"msg": "hi"}),
-                &ToolCallContext::new(OperatorId::new("test")),
+                &DispatchContext::new(DispatchId::new("test"), OperatorId::new("test")),
             )
             .await
             .unwrap();
@@ -391,7 +415,10 @@ mod tests {
 
         let tool = reg.get("fail").unwrap();
         let result = tool
-            .call(json!({}), &ToolCallContext::new(OperatorId::new("test")))
+            .call(
+                json!({}),
+                &DispatchContext::new(DispatchId::new("test"), OperatorId::new("test")),
+            )
             .await;
         assert!(result.is_err());
     }
@@ -421,7 +448,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Ok(serde_json::json!({"status":"done"})) })
@@ -434,7 +461,7 @@ mod tests {
         fn call_streaming<'a>(
             &'a self,
             _input: serde_json::Value,
-            _ctx: &'a ToolCallContext,
+            _ctx: &'a DispatchContext,
             on_chunk: Box<dyn Fn(&str) + Send + Sync + 'a>,
         ) -> Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send + 'a>> {
             Box::pin(async move {
@@ -461,7 +488,7 @@ mod tests {
             c2.fetch_add(1, Ordering::SeqCst);
             s2.lock().unwrap().push(c.to_string());
         });
-        let ctx = ToolCallContext::new(OperatorId::new("test"));
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let res = tool
             .call_streaming(serde_json::json!({}), &ctx, on_chunk)
             .await;

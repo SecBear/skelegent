@@ -1,14 +1,26 @@
 #![deny(missing_docs)]
-//! Core effect execution primitives: trait and error types.
+//! Core effect handling primitives.
+//!
+//! This crate defines the [`EffectHandler`] trait — the single interface between
+//! effect declarations ([`Effect`]) and their execution. Modeled after the
+//! Elm Cmd pattern: handlers interpret effects and return structured
+//! [`EffectOutcome`]s. The caller decides what to do with dispatch outcomes.
+//!
+//! Implementations:
+//! - `LocalEffectHandler` (in `skg-effects-local`) — in-process state + signaling
+//! - `TemporalEffectHandler` (in `skg-effects-temporal`) — durable via Temporal
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
+use layer0::dispatch::Dispatcher;
 use layer0::effect::Effect;
 use layer0::error::{OrchError, StateError};
-use layer0::id::WorkflowId;
+use layer0::id::{DispatchId, OperatorId, WorkflowId};
+use layer0::operator::OperatorInput;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Error type for effect execution.
+/// Error type for effect handling.
 #[derive(Debug, Error)]
 pub enum Error {
     /// Dispatch error.
@@ -32,12 +44,87 @@ pub enum UnknownEffectPolicy {
     Error,
 }
 
-/// Execute Layer 0 effects in a deterministic, ordered fashion.
+// ── Effect handling ─────────────────────────────────────────────────────────
+
+/// Outcome of handling a single effect.
+///
+/// Inspired by the Elm `Cmd` pattern and algebraic effect handlers:
+/// the handler interprets an effect declaration and returns what happened.
+/// The caller decides what to do with dispatch outcomes — enqueue for
+/// depth-limited execution, dispatch immediately, or capture for testing.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum EffectOutcome {
+    /// The effect was executed successfully (state written, signal sent, etc.).
+    Applied,
+    /// The effect was intentionally skipped (middleware guard suppressed a write,
+    /// backend doesn't support this effect type, or unknown-effect policy is ignore).
+    Skipped,
+    /// A follow-up delegation dispatch is needed.
+    /// The handler does NOT dispatch — the caller decides when and how.
+    Delegate {
+        /// The operator to delegate to.
+        operator: OperatorId,
+        /// The input for the delegated operator.
+        input: OperatorInput,
+    },
+    /// A follow-up handoff dispatch is needed.
+    /// Semantically distinct from [`Delegate`](Self::Delegate): the current
+    /// operator is done and the next operator takes over the conversation.
+    Handoff {
+        /// The operator to hand off to.
+        operator: OperatorId,
+        /// The input for the handoff target (constructed from handoff state).
+        input: OperatorInput,
+    },
+}
+
+/// Handle a single effect and return what happened.
+///
+/// This is the single interface between effect declarations ([`Effect`] from
+/// `layer0`) and their execution. Inspired by algebraic effect handlers:
+/// the handler interprets an effect, performs any side effects (state writes,
+/// signal delivery), and returns a structured outcome.
+///
+/// Dispatch effects (`Delegate`, `Handoff`) are NEVER executed by the handler.
+/// They are returned as [`EffectOutcome::Delegate`] / [`EffectOutcome::Handoff`]
+/// so the caller can control the dispatch loop (depth limiting, tracing,
+/// durable scheduling).
+///
+/// For fire-and-forget callers, [`execute_effects`] dispatches immediately.
 #[async_trait]
-pub trait EffectExecutor: Send + Sync {
-    /// Execute a list of effects in order. Implementations must preserve
-    /// the provided order and short-circuit on the first error.
-    async fn execute(&self, effects: &[Effect]) -> Result<(), Error>;
+pub trait EffectHandler: Send + Sync {
+    /// Handle a single effect. Returns the outcome for the caller to act on.
+    async fn handle(&self, effect: &Effect, ctx: &DispatchContext) -> Result<EffectOutcome, Error>;
+}
+
+/// Execute all effects, dispatching followups immediately.
+///
+/// Convenience for callers that don't need depth limiting or trace recording.
+/// Calls [`EffectHandler::handle`] for each effect and dispatches any
+/// [`EffectOutcome::Delegate`] / [`EffectOutcome::Handoff`] outcomes through
+/// the provided dispatcher.
+pub async fn execute_effects(
+    handler: &dyn EffectHandler,
+    effects: &[Effect],
+    ctx: &DispatchContext,
+    dispatcher: &dyn Dispatcher,
+) -> Result<(), Error> {
+    for effect in effects {
+        match handler.handle(effect, ctx).await? {
+            EffectOutcome::Applied | EffectOutcome::Skipped => {}
+            EffectOutcome::Delegate { operator, input }
+            | EffectOutcome::Handoff { operator, input } => {
+                let child_ctx = ctx.child(DispatchId::new(operator.as_str()), operator);
+                dispatcher
+                    .dispatch(&child_ctx, input)
+                    .await?
+                    .collect()
+                    .await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 // ── Capability traits ────────────────────────────────────────────────────────

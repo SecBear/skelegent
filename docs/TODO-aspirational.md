@@ -35,7 +35,12 @@ are tracked here as candidates for future work.
 **Current reality**: Only `custom_operator_barrier` exists. `tests/poc.rs` and `tests/cross_provider.rs` cover composability and provider parity respectively.
 **Question**: Should these be standalone binaries, workspace examples, or are the existing tests sufficient?
 
-## A6: Conversation persistence
+## ~~A6: Conversation persistence~~ 
+
+**Status: DONE**
+- `SaveConversation`/`LoadConversation` context ops in `skg-context-engine/src/ops/store.rs`
+- `Context::save_conversation()`/`load_conversation()` convenience methods in `assembly.rs`
+- Full round-trip tested
 
 **Source**: implied by state architecture
 **Current reality**: `Context` is in-memory only. `FlushToStore`/`InjectFromStore` can persist/restore specific data, but there's no save/restore for a full `Context` across sessions.
@@ -47,7 +52,15 @@ are tracked here as candidates for future work.
 **Current reality**: `StateStore::search()` does text search only. `skg-state-sqlite` in extras could support `sqlite-vec` for vector similarity.
 **Question**: Should this be a separate trait (`VectorStore`), an extension to `StateStore`, or a feature flag on specific backends?
 
-## A8: MCP client integration
+## ~~A8: MCP client integration~~
+
+**Status: DONE**
+- `McpClient` in `skg-mcp/src/client.rs`
+- Supports stdio and streamable HTTP (SSE) transport
+- `discover_tools()` returns `Vec<Arc<dyn ToolDyn>>` — MCP tools look like local tools
+- `discover_operators()` returns `Vec<(ToolOperator, ToolMetadata)>`
+- Aliases, resources, prompts discovery
+- Token budget estimation
 
 **Source**: architecture roadmap
 **Current reality**: `skg-mcp` exists as an MCP server (exposing skelegent operators as MCP tools). No MCP client (discovering/calling external MCP tools).
@@ -59,7 +72,13 @@ are tracked here as candidates for future work.
 **Current reality**: `skg-orch-local` is in-process only. `skg-orch-kit` provides composition but no persistence.
 **Question**: Checkpoint/replay vs event-sourcing vs Temporal-style? What's the minimum viable durability?
 
-## A10: HTTP serving harness
+## ~~A10: HTTP serving harness~~
+
+**Status: DONE**
+- `skg-runner` with axum on port 8080
+- REST endpoints: `/health`, `/v1/execute`, `/v1/execute/stream`
+- SSE streaming with real-time `DispatchEvent` forwarding
+- gRPC transport on port 50051
 
 **Source**: architecture roadmap
 **Current reality**: No HTTP layer. Operators are called programmatically.

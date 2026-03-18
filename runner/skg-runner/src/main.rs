@@ -11,6 +11,8 @@
 mod http_adapter;
 mod registry;
 
+use layer0::dispatch::{DispatchEvent, DispatchHandle};
+use layer0::{DispatchContext, DispatchId, OperatorId};
 use std::sync::Arc;
 
 use tokio::signal;
@@ -105,38 +107,95 @@ impl RunnerServiceImpl {
         })
     }
 
+    /// Deserialize `OperatorInput` from base64-encoded JSON.
+    pub fn deserialize_input_from_b64(
+        &self,
+        b64: &str,
+    ) -> Result<layer0::OperatorInput, CoreError> {
+        use base64::Engine;
+        let bytes = base64::prelude::BASE64_STANDARD
+            .decode(b64)
+            .map_err(|e| CoreError::InvalidArgument(format!("invalid base64 in `input`: {e}")))?;
+        self.deserialize_input(&bytes)
+    }
+
     /// Look up an operator by id.
-    fn resolve_operator(&self, operator_id: &str) -> Result<Arc<dyn layer0::Operator>, CoreError> {
+    pub fn resolve_operator(
+        &self,
+        operator_id: &str,
+    ) -> Result<Arc<dyn layer0::Operator>, CoreError> {
         self.registry
             .get(operator_id)
             .cloned()
             .ok_or_else(|| CoreError::NotFound(format!("operator not found: {operator_id}")))
     }
 
+    /// Execute an operator and return the structured output.
+    ///
+    /// Creates a real dispatch channel so that effects emitted
+    /// during execution are captured in the output.
+    /// After execution, logs a warning if the output contains unhandled
+    /// effects. The runner is a deployment harness, **not** an
+    /// orchestrator — effect interpretation is the caller's responsibility.
+    pub async fn execute_operator(
+        &self,
+        operator_id: &str,
+        input_bytes: &[u8],
+    ) -> Result<layer0::OperatorOutput, CoreError> {
+        let input = self.deserialize_input(input_bytes)?;
+        let operator = self.resolve_operator(operator_id)?;
+
+        // Create a dispatch channel to capture effects emitted during execution.
+        let (handle, sender) = DispatchHandle::channel(DispatchId::new("runner"));
+
+        // Spawn in a task to catch panics from operator implementations.
+        let op_id = operator_id.to_owned();
+        tokio::task::spawn(async move {
+            let ctx = DispatchContext::new(DispatchId::new("runner"), OperatorId::new(op_id));
+            match operator.execute(input, &ctx).await {
+                Ok(output) => {
+                    let _ = sender.send(DispatchEvent::Completed { output }).await;
+                }
+                Err(op_err) => {
+                    let _ = sender
+                        .send(DispatchEvent::Failed {
+                            error: op_err.into(),
+                        })
+                        .await;
+                }
+            }
+        });
+
+        let output = handle.collect().await.map_err(|e| {
+            error!("operator error: {e}");
+            match &e {
+                layer0::error::OrchError::OperatorNotFound(msg) => CoreError::NotFound(msg.clone()),
+                layer0::error::OrchError::WorkflowNotFound(msg) => CoreError::NotFound(msg.clone()),
+                _ => CoreError::Internal(e.to_string()),
+            }
+        })?;
+
+        if output.has_unhandled_effects() {
+            warn!(
+                operator = operator_id,
+                effect_count = output.effects.len(),
+                "operator produced unhandled effects — the runner does not interpret effects; callers must handle them"
+            );
+        }
+
+        Ok(output)
+    }
+
     /// Shared execute pipeline used by both gRPC and HTTP transports.
     ///
-    /// Takes raw `input_bytes` (JSON-encoded `OperatorInput`), dispatches
-    /// to the named operator, and returns serialized `OperatorOutput`.
+    /// Delegates to [`execute_operator`](Self::execute_operator) and serializes
+    /// the [`OperatorOutput`](layer0::OperatorOutput) to JSON bytes.
     pub async fn execute_core(
         &self,
         operator_id: &str,
         input_bytes: &[u8],
     ) -> Result<Vec<u8>, CoreError> {
-        let input = self.deserialize_input(input_bytes)?;
-        let operator = self.resolve_operator(operator_id)?;
-
-        // Spawn in a task to catch panics from operator implementations.
-        let handle = tokio::task::spawn(async move { operator.execute(input).await });
-
-        let result = handle.await.map_err(|join_err| {
-            error!("operator panicked: {join_err}");
-            CoreError::Internal("operator execution failed".into())
-        })?;
-
-        let output = result.map_err(|op_err| {
-            error!("operator error: {op_err}");
-            CoreError::Internal("operator execution failed".into())
-        })?;
+        let output = self.execute_operator(operator_id, input_bytes).await?;
 
         serde_json::to_vec(&output).map_err(|e| {
             error!("failed to serialize OperatorOutput: {e}");
@@ -176,25 +235,70 @@ impl Runner for RunnerServiceImpl {
         self.validate_session_key(&req.session_key)?;
         let input = self.deserialize_input(&req.input)?;
         let operator = self.resolve_operator(&req.operator)?;
-
-        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        let op_id = req.operator.clone();
 
         tokio::task::spawn(async move {
-            // Log that execution has started.
-            let started_event = ExecuteEvent {
-                event: Some(execute_event::Event::LogLine(b"operator started".to_vec())),
-            };
-            if tx.send(Ok(started_event)).await.is_err() {
-                return; // receiver dropped
-            }
+            // Create a dispatch channel for real-time event streaming.
+            let (mut handle, sender) = DispatchHandle::channel(DispatchId::new("runner-grpc"));
 
-            // Execute the operator, catching panics via the spawned task boundary.
-            let result = tokio::task::spawn(async move { operator.execute(input).await }).await;
+            // Spawn the operator execution.
+            let op_id_inner = op_id.clone();
+            tokio::spawn(async move {
+                let ctx = DispatchContext::new(
+                    DispatchId::new("runner-grpc"),
+                    OperatorId::new(op_id_inner),
+                );
+                match operator.execute(input, &ctx).await {
+                    Ok(output) => {
+                        let _ = sender.send(DispatchEvent::Completed { output }).await;
+                    }
+                    Err(op_err) => {
+                        let _ = sender
+                            .send(DispatchEvent::Failed {
+                                error: op_err.into(),
+                            })
+                            .await;
+                    }
+                }
+            });
 
-            match result {
-                Ok(Ok(output)) => {
-                    let output_bytes = match serde_json::to_vec(&output) {
-                        Ok(bytes) => bytes,
+            // Forward dispatch events as gRPC streaming events.
+            while let Some(event) = handle.recv().await {
+                let grpc_event = match &event {
+                    DispatchEvent::Progress { content } => {
+                        // Map progress to log_line (JSON-serialized content).
+                        match serde_json::to_vec(content) {
+                            Ok(bytes) => ExecuteEvent {
+                                event: Some(execute_event::Event::LogLine(bytes)),
+                            },
+                            Err(_) => continue,
+                        }
+                    }
+                    DispatchEvent::ArtifactProduced { artifact } => {
+                        // Map artifacts to partial_output.
+                        match serde_json::to_vec(artifact) {
+                            Ok(bytes) => ExecuteEvent {
+                                event: Some(execute_event::Event::PartialOutput(bytes)),
+                            },
+                            Err(_) => continue,
+                        }
+                    }
+                    DispatchEvent::EffectEmitted { effect } => {
+                        // Map effects to partial_output.
+                        match serde_json::to_vec(effect) {
+                            Ok(bytes) => ExecuteEvent {
+                                event: Some(execute_event::Event::PartialOutput(bytes)),
+                            },
+                            Err(_) => continue,
+                        }
+                    }
+                    DispatchEvent::Completed { output } => match serde_json::to_vec(output) {
+                        Ok(output_bytes) => ExecuteEvent {
+                            event: Some(execute_event::Event::FinalOutput(ExecuteResponse {
+                                output: output_bytes,
+                            })),
+                        },
                         Err(e) => {
                             let _ = tx
                                 .send(Err(Status::internal(format!(
@@ -203,25 +307,18 @@ impl Runner for RunnerServiceImpl {
                                 .await;
                             return;
                         }
-                    };
-                    let final_event = ExecuteEvent {
-                        event: Some(execute_event::Event::FinalOutput(ExecuteResponse {
-                            output: output_bytes,
-                        })),
-                    };
-                    let _ = tx.send(Ok(final_event)).await;
-                }
-                Ok(Err(op_err)) => {
-                    error!("operator error during stream: {op_err}");
-                    let _ = tx
-                        .send(Err(Status::internal("operator execution failed")))
-                        .await;
-                }
-                Err(join_err) => {
-                    error!("operator panicked during stream: {join_err}");
-                    let _ = tx
-                        .send(Err(Status::internal("operator execution failed")))
-                        .await;
+                    },
+                    DispatchEvent::Failed { error } => {
+                        error!("operator error during stream: {error}");
+                        let status = orch_error_to_grpc_status(error);
+                        let _ = tx.send(Err(status)).await;
+                        return;
+                    }
+                    _ => continue, // Future variants.
+                };
+
+                if tx.send(Ok(grpc_event)).await.is_err() {
+                    return; // receiver dropped
                 }
             }
         });
@@ -239,6 +336,34 @@ impl Runner for RunnerServiceImpl {
             ready: true,
             version: env!("CARGO_PKG_VERSION").to_string(),
         }))
+    }
+}
+
+/// Map an `OrchError` to the appropriate gRPC status code.
+///
+/// Preserves variant-level classification: not-found errors become
+/// `NOT_FOUND`, retryable errors become `UNAVAILABLE`, halts become
+/// `ABORTED`, and everything else falls through to `INTERNAL`.
+fn orch_error_to_grpc_status(error: &layer0::error::OrchError) -> Status {
+    use layer0::error::{OperatorError, OrchError};
+
+    match error {
+        OrchError::OperatorNotFound(msg) => Status::not_found(msg.clone()),
+        OrchError::WorkflowNotFound(msg) => Status::not_found(msg.clone()),
+        OrchError::DispatchFailed(msg) => Status::unavailable(msg.clone()),
+        OrchError::SignalFailed(msg) => Status::unavailable(msg.clone()),
+        OrchError::OperatorError(op_err) => match op_err {
+            OperatorError::Model {
+                retryable: true, ..
+            } => Status::unavailable(format!("model error (retryable): {op_err}")),
+            OperatorError::Retryable { message, .. } => {
+                Status::unavailable(format!("retryable: {message}"))
+            }
+            OperatorError::Halted { reason } => Status::aborted(format!("halted: {reason}")),
+            _ => Status::internal(op_err.to_string()),
+        },
+        OrchError::EnvironmentError(env_err) => Status::failed_precondition(env_err.to_string()),
+        _ => Status::internal(error.to_string()),
     }
 }
 

@@ -142,7 +142,7 @@ fn content_blocks_serde_round_trip() {
             text: "hello".into(),
         },
         ContentBlock::Image {
-            source: layer0::content::ImageSource::Url {
+            source: layer0::content::ContentSource::Url {
                 url: "https://example.com/img.png".into(),
             },
             media_type: "image/png".into(),
@@ -482,11 +482,11 @@ fn compaction_policy_round_trip() {
         CompactionPolicy::CompressFirst,
         CompactionPolicy::DiscardWhenDone,
     ];
-
-    for policy in policies {
-        let json = serde_json::to_string(&policy).unwrap();
+    for policy in &policies {
+        let json = serde_json::to_string(policy).unwrap();
         let back: CompactionPolicy = serde_json::from_str(&json).unwrap();
-        assert_eq!(policy, back);
+        let json2 = serde_json::to_string(&back).unwrap();
+        assert_eq!(json, json2);
     }
 }
 
@@ -502,26 +502,6 @@ fn search_result_round_trip() {
     let back: SearchResult = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
     assert_eq!(json, json2);
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// LogLevel round-trip
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn log_level_round_trip() {
-    let levels = vec![
-        layer0::effect::LogLevel::Trace,
-        layer0::effect::LogLevel::Debug,
-        layer0::effect::LogLevel::Info,
-        layer0::effect::LogLevel::Warn,
-        layer0::effect::LogLevel::Error,
-    ];
-    for l in levels {
-        let json = serde_json::to_string(&l).unwrap();
-        let back: layer0::effect::LogLevel = serde_json::from_str(&json).unwrap();
-        assert_eq!(l, back);
-    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -723,12 +703,12 @@ fn _takes_state_store<T: StateStore>(s: &T) {
 
 #[test]
 fn operator_error_display() {
-    let e = OperatorError::Model("rate limited".into());
+    let e = OperatorError::model("rate limited");
     assert_eq!(e.to_string(), "model error: rate limited");
 
     let e = OperatorError::SubDispatch {
         operator: "bash".into(),
-        message: "command failed".into(),
+        source: "command failed".to_string().into(),
     };
     assert_eq!(e.to_string(), "sub-dispatch error in bash: command failed");
 }
@@ -761,15 +741,15 @@ fn env_error_display() {
 #[test]
 fn operator_error_display_remaining_variants() {
     assert_eq!(
-        OperatorError::ContextAssembly("bad ctx".into()).to_string(),
-        "context assembly failed: bad ctx"
+        OperatorError::context_assembly(std::io::Error::other("bad ctx")).to_string(),
+        "context assembly: bad ctx"
     );
     assert_eq!(
-        OperatorError::Retryable("timeout".into()).to_string(),
+        OperatorError::retryable("timeout").to_string(),
         "retryable: timeout"
     );
     assert_eq!(
-        OperatorError::NonRetryable("invalid".into()).to_string(),
+        OperatorError::non_retryable("invalid").to_string(),
         "non-retryable: invalid"
     );
     let boxed: Box<dyn std::error::Error + Send + Sync> = "inner error".into();
@@ -790,7 +770,7 @@ fn orch_error_display_remaining_variants() {
         OrchError::SignalFailed("no handler".into()).to_string(),
         "signal delivery failed: no handler"
     );
-    let inner = OperatorError::Model("provider down".into());
+    let inner = OperatorError::model("provider down");
     assert_eq!(
         OrchError::OperatorError(inner).to_string(),
         "operator error: model error: provider down"
@@ -827,30 +807,13 @@ fn env_error_display_remaining_variants() {
         EnvError::ResourceExceeded("OOM".into()).to_string(),
         "resource limit exceeded: OOM"
     );
-    let inner = OperatorError::Model("provider down".into());
+    let inner = OperatorError::model("provider down");
     assert_eq!(
         EnvError::OperatorError(inner).to_string(),
         "operator error: model error: provider down"
     );
     let boxed: Box<dyn std::error::Error + Send + Sync> = "env inner".into();
     assert_eq!(EnvError::Other(boxed).to_string(), "env inner");
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Effect::Log and Effect::Handoff round-trips
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[test]
-fn effect_log_round_trip() {
-    let e = Effect::Log {
-        level: layer0::effect::LogLevel::Info,
-        message: "turn completed".into(),
-        data: Some(json!({"duration_ms": 1500})),
-    };
-    let json = serde_json::to_string(&e).unwrap();
-    let back: Effect = serde_json::from_str(&json).unwrap();
-    let json2 = serde_json::to_string(&back).unwrap();
-    assert_eq!(json, json2);
 }
 
 #[test]
@@ -1383,3 +1346,205 @@ fn effect_unlink_memory_round_trip() {
 // The new methods use no generics and no Self in return position — safe.
 fn _assert_state_store_still_object_safe(_: &dyn StateStore) {}
 fn _assert_state_reader_still_object_safe(_: &dyn StateReader) {}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CollectedDispatch / collect_all
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[tokio::test]
+async fn collect_all_preserves_intermediate_events() {
+    let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-collect-all"));
+
+    let send_task = tokio::spawn(async move {
+        sender
+            .send(DispatchEvent::Progress {
+                content: Content::text("thinking..."),
+            })
+            .await
+            .unwrap();
+        sender
+            .send(DispatchEvent::EffectEmitted {
+                effect: Effect::Progress {
+                    content: Content::text("progress-effect"),
+                },
+            })
+            .await
+            .unwrap();
+        sender
+            .send(DispatchEvent::Completed {
+                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+            })
+            .await
+            .unwrap();
+        // Drop sender to close the channel.
+    });
+
+    let result = handle.collect_all().await.unwrap();
+    send_task.await.unwrap();
+
+    // Both Progress and EffectEmitted should be in events.
+    assert_eq!(result.events.len(), 2);
+    assert!(matches!(result.events[0], DispatchEvent::Progress { .. }));
+    assert!(matches!(
+        result.events[1],
+        DispatchEvent::EffectEmitted { .. }
+    ));
+
+    // Effects should also be populated in output.
+    assert_eq!(result.output.effects.len(), 1);
+    assert_eq!(result.output.message, Content::text("done"));
+}
+
+#[tokio::test]
+async fn collect_discards_progress_but_collect_all_preserves_it() {
+    // collect() discards Progress events.
+    let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-collect-discard"));
+    let send_task = tokio::spawn(async move {
+        sender
+            .send(DispatchEvent::Progress {
+                content: Content::text("step 1"),
+            })
+            .await
+            .unwrap();
+        sender
+            .send(DispatchEvent::Completed {
+                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+            })
+            .await
+            .unwrap();
+    });
+
+    let output = handle.collect().await.unwrap();
+    send_task.await.unwrap();
+    // collect() gives no way to observe the Progress event.
+    assert_eq!(output.message, Content::text("done"));
+    assert!(output.effects.is_empty());
+}
+
+#[tokio::test]
+async fn collect_all_empty_events_on_immediate_complete() {
+    let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-empty"));
+    tokio::spawn(async move {
+        sender
+            .send(DispatchEvent::Completed {
+                output: OperatorOutput::new(Content::text("ok"), ExitReason::Complete),
+            })
+            .await
+            .unwrap();
+    });
+
+    let result = handle.collect_all().await.unwrap();
+    assert!(result.events.is_empty());
+    assert_eq!(result.output.message, Content::text("ok"));
+}
+
+#[tokio::test]
+async fn collect_all_returns_error_on_failure() {
+    let (handle, sender) = DispatchHandle::channel(DispatchId::new("test-fail"));
+    tokio::spawn(async move {
+        sender
+            .send(DispatchEvent::Progress {
+                content: Content::text("working..."),
+            })
+            .await
+            .unwrap();
+        sender
+            .send(DispatchEvent::Failed {
+                error: OrchError::DispatchFailed("boom".into()),
+            })
+            .await
+            .unwrap();
+    });
+
+    let err = handle.collect_all().await.unwrap_err();
+    assert!(matches!(err, OrchError::DispatchFailed(_)));
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Graph operations on InMemoryStore
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#[cfg(feature = "test-utils")]
+mod graph_tests {
+    use layer0::effect::Scope;
+    use layer0::state::{MemoryLink, StateStore};
+    use layer0::test_utils::InMemoryStore;
+
+    #[tokio::test]
+    async fn graph_link_and_traverse() {
+        let store = InMemoryStore::new();
+        let scope = Scope::Global;
+
+        // a -> b -> c
+        store
+            .link(&scope, &MemoryLink::new("a", "b", "related"))
+            .await
+            .unwrap();
+        store
+            .link(&scope, &MemoryLink::new("b", "c", "related"))
+            .await
+            .unwrap();
+
+        // depth 1: only b reachable from a
+        let depth1 = store.traverse(&scope, "a", None, 1).await.unwrap();
+        assert_eq!(depth1, vec!["b"]);
+
+        // depth 2: b and c reachable from a
+        let mut depth2 = store.traverse(&scope, "a", None, 2).await.unwrap();
+        depth2.sort();
+        assert_eq!(depth2, vec!["b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn graph_unlink_removes_edge() {
+        let store = InMemoryStore::new();
+        let scope = Scope::Global;
+
+        store
+            .link(&scope, &MemoryLink::new("x", "y", "depends_on"))
+            .await
+            .unwrap();
+
+        let before = store.traverse(&scope, "x", None, 1).await.unwrap();
+        assert_eq!(before, vec!["y"]);
+
+        store.unlink(&scope, "x", "y", "depends_on").await.unwrap();
+
+        let after = store.traverse(&scope, "x", None, 1).await.unwrap();
+        assert!(after.is_empty(), "unlink must remove the edge");
+    }
+
+    #[tokio::test]
+    async fn graph_traverse_filters_by_relation() {
+        let store = InMemoryStore::new();
+        let scope = Scope::Global;
+
+        store
+            .link(&scope, &MemoryLink::new("a", "b", "references"))
+            .await
+            .unwrap();
+        store
+            .link(&scope, &MemoryLink::new("a", "c", "supersedes"))
+            .await
+            .unwrap();
+
+        // Filter by "references" — only b
+        let refs = store
+            .traverse(&scope, "a", Some("references"), 1)
+            .await
+            .unwrap();
+        assert_eq!(refs, vec!["b"]);
+
+        // Filter by "supersedes" — only c
+        let sups = store
+            .traverse(&scope, "a", Some("supersedes"), 1)
+            .await
+            .unwrap();
+        assert_eq!(sups, vec!["c"]);
+
+        // No filter — both b and c
+        let mut all = store.traverse(&scope, "a", None, 1).await.unwrap();
+        all.sort();
+        assert_eq!(all, vec!["b", "c"]);
+    }
+}

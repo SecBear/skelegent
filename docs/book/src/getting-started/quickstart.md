@@ -7,10 +7,11 @@ This example creates an Anthropic provider, registers a tool, builds a `Context`
 ```rust,no_run
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::id::OperatorId;
+use layer0::DispatchContext;
+use layer0::id::{DispatchId, OperatorId};
 use skg_context_engine::{Context, ReactLoopConfig, react_loop};
 use skg_provider_anthropic::AnthropicProvider;
-use skg_tool::{ToolCallContext, ToolDyn, ToolError, ToolRegistry};
+use skg_tool::{ToolDyn, ToolError, ToolRegistry};
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;
@@ -39,7 +40,7 @@ impl ToolDyn for CurrentTimeTool {
     fn call(
         &self,
         _input: serde_json::Value,
-        _ctx: &ToolCallContext,
+        _ctx: &DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         Box::pin(async {
             // In a real tool, you'd use chrono or std::time
@@ -67,8 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         temperature: None,
     };
 
-    // 4. Create a tool-call context (identifies the calling agent)
-    let tool_ctx = ToolCallContext::new(OperatorId::from("assistant"));
+    // 4. Create a dispatch context (identifies the calling agent)
+    let tool_ctx = DispatchContext::new(DispatchId::new("assistant"), OperatorId::new("assistant"));
 
     // 5. Build a Context and inject the user message
     let mut ctx = Context::new();

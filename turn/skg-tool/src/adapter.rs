@@ -10,11 +10,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use layer0::operator::Operator;
 use layer0::{
-    Content, DurationMs, ExitReason, OperatorError, OperatorId, OperatorInput, OperatorOutput,
-    OrchError, SubDispatchRecord, ToolMetadata,
+    Content, DispatchContext, DurationMs, ExitReason, OperatorError,
+    OperatorInput, OperatorOutput, OrchError, SubDispatchRecord, ToolMetadata,
 };
 
-use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolRegistry};
+use crate::{ToolConcurrencyHint, ToolDyn, ToolRegistry};
 
 /// Wraps an `Arc<dyn ToolDyn>` as an `Operator`, bridging the tool abstraction
 /// to the operator protocol. This allows existing tools to participate in
@@ -50,13 +50,16 @@ impl Operator for ToolOperator {
     ///
     /// `input.message` must be valid JSON text representing the tool's input.
     /// Any parse failure is surfaced as `OperatorError::NonRetryable`.
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
+    async fn execute(
+        &self,
+        input: OperatorInput,
+        ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("null");
         let tool_input: serde_json::Value = serde_json::from_str(text)
-            .map_err(|e| OperatorError::NonRetryable(format!("invalid tool input JSON: {e}")))?;
+            .map_err(|e| OperatorError::non_retryable(format!("invalid tool input JSON: {e}")))?;
 
-        let ctx = ToolCallContext::new(OperatorId::new("agent"));
-        match self.tool.call(tool_input, &ctx).await {
+        match self.tool.call(tool_input, ctx).await {
             Ok(result) => {
                 let mut output =
                     OperatorOutput::new(Content::text(result.to_string()), ExitReason::Complete);
@@ -69,7 +72,7 @@ impl Operator for ToolOperator {
             }
             Err(err) => Err(OperatorError::SubDispatch {
                 operator: self.tool.name().to_string(),
-                message: err.to_string(),
+                source: Box::new(err),
             }),
         }
     }
@@ -102,31 +105,50 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
     /// Returns `OrchError::OperatorNotFound` when the name is not registered.
     async fn dispatch(
         &self,
-        operator: &OperatorId,
+        ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<layer0::DispatchHandle, OrchError> {
         let tool = self
             .registry
-            .get(operator.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(operator.to_string()))?;
+            .get(ctx.operator_id.as_str())
+            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?;
 
+        let ctx_owned = ctx.clone();
         let operator = ToolOperator::new(Arc::clone(tool));
-        operator.execute(input).await.map_err(OrchError::from)
+        let (handle, sender) = layer0::DispatchHandle::channel(ctx.dispatch_id.clone());
+        tokio::spawn(async move {
+            match operator.execute(input, &ctx_owned).await {
+                Ok(output) => {
+                    let _ = sender
+                        .send(layer0::DispatchEvent::Completed { output })
+                        .await;
+                }
+                Err(err) => {
+                    let _ = sender
+                        .send(layer0::DispatchEvent::Failed {
+                            error: OrchError::from(err),
+                        })
+                        .await;
+                }
+            }
+        });
+        Ok(handle)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ToolCallContext, ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
+    use crate::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
     use layer0::operator::TriggerType;
     use layer0::{
-        Content, Dispatcher, ExitReason, OperatorError, OperatorId, OperatorInput, OrchError,
+        Content, DispatchContext, DispatchId, Dispatcher, ExitReason, OperatorError, OperatorId,
+        OperatorInput, OrchError,
     };
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     // ── Minimal test tools ────────────────────────────────────────────────────
 
@@ -145,7 +167,7 @@ mod tests {
         fn call(
             &self,
             input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async move { Ok(json!({"echoed": input})) })
@@ -170,7 +192,7 @@ mod tests {
         fn call(
             &self,
             _input: serde_json::Value,
-            _ctx: &ToolCallContext,
+            _ctx: &DispatchContext,
         ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
         {
             Box::pin(async { Err(ToolError::ExecutionFailed("always fails".into())) })
@@ -179,6 +201,41 @@ mod tests {
 
     fn make_input(json_text: &str) -> OperatorInput {
         OperatorInput::new(Content::text(json_text), TriggerType::Task)
+    }
+
+    /// Records the DispatchContext ids seen by its `call` implementation.
+    /// Used to verify that `ToolOperator::execute` forwards the received ctx.
+    struct CtxCaptureTool {
+        seen: Arc<Mutex<Option<(String, String)>>>,
+    }
+
+    impl ToolDyn for CtxCaptureTool {
+        fn name(&self) -> &str {
+            "capture"
+        }
+        fn description(&self) -> &str {
+            "Captures the DispatchContext it received"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            ctx: &DispatchContext,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
+        {
+            let dispatch_id = ctx.dispatch_id.to_string();
+            let operator_id = ctx.operator_id.to_string();
+            let seen = Arc::clone(&self.seen);
+            Box::pin(async move {
+                *seen.lock().unwrap() = Some((dispatch_id, operator_id));
+                Ok(json!(null))
+            })
+        }
+        fn concurrency_hint(&self) -> ToolConcurrencyHint {
+            ToolConcurrencyHint::Shared
+        }
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -202,7 +259,8 @@ mod tests {
         let op = ToolOperator::new(tool);
 
         let input = make_input(r#"{"msg": "hello"}"#);
-        let output = op.execute(input).await.expect("should succeed");
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+        let output = op.execute(input, &ctx).await.expect("should succeed");
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
 
@@ -224,15 +282,14 @@ mod tests {
         let op = ToolOperator::new(tool);
 
         let input = make_input("{}");
-        let err = op.execute(input).await.expect_err("should fail");
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+        let err = op.execute(input, &ctx).await.expect_err("should fail");
 
         match err {
-            OperatorError::SubDispatch { operator, message } => {
+            OperatorError::SubDispatch { operator, source } => {
                 assert_eq!(operator, "fail");
-                assert!(
-                    message.contains("always fails"),
-                    "unexpected message: {message}"
-                );
+                let msg = source.to_string();
+                assert!(msg.contains("always fails"), "unexpected message: {msg}");
             }
             other => panic!("expected SubDispatch, got {other:?}"),
         }
@@ -245,11 +302,15 @@ mod tests {
         let orch = ToolRegistryOrchestrator::new(reg);
 
         let operator = OperatorId::new("echo");
+        let ctx = DispatchContext::new(DispatchId::new("echo"), operator.clone());
         let input = make_input(r#"{"x": 42}"#);
         let output = orch
-            .dispatch(&operator, input)
+            .dispatch(&ctx, input)
             .await
-            .expect("should succeed");
+            .expect("should succeed")
+            .collect()
+            .await
+            .expect("should complete");
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let text = output.message.as_text().expect("should be text");
@@ -263,11 +324,9 @@ mod tests {
         let orch = ToolRegistryOrchestrator::new(reg);
 
         let operator = OperatorId::new("unknown_tool");
+        let ctx = DispatchContext::new(DispatchId::new("unknown_tool"), operator.clone());
         let input = make_input("{}");
-        let err = orch
-            .dispatch(&operator, input)
-            .await
-            .expect_err("should fail");
+        let err = orch.dispatch(&ctx, input).await.expect_err("should fail");
 
         match err {
             OrchError::OperatorNotFound(name) => {
@@ -275,5 +334,22 @@ mod tests {
             }
             other => panic!("expected OperatorNotFound, got {other:?}"),
         }
+    }
+
+    /// Regression: ToolOperator::execute must forward the received DispatchContext to
+    /// tool.call(), not fabricate a new one with hardcoded ids.
+    #[tokio::test]
+    async fn tool_operator_forwards_ctx_to_tool() {
+        let seen = Arc::new(Mutex::new(None));
+        let tool = Arc::new(CtxCaptureTool { seen: Arc::clone(&seen) });
+        let op = ToolOperator::new(tool);
+
+        let ctx = DispatchContext::new(DispatchId::new("my-dispatch"), OperatorId::new("my-op"));
+        let input = make_input("{}");
+        op.execute(input, &ctx).await.expect("should succeed");
+
+        let captured = seen.lock().unwrap().take().expect("tool must have been called");
+        assert_eq!(captured.0, "my-dispatch", "dispatch_id was not forwarded");
+        assert_eq!(captured.1, "my-op", "operator_id was not forwarded");
     }
 }

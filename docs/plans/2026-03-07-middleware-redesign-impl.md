@@ -1184,8 +1184,8 @@ impl From<ProviderMessage> for Message {
                 ContentPart::ToolResult { tool_use_id, content, is_error } => ContentBlock::ToolResult { tool_use_id, content, is_error },
                 ContentPart::Image { source, media_type } => {
                     let src = match source {
-                        turn::ImageSource::Base64 { data } => layer0::ImageSource::Base64 { data },
-                        turn::ImageSource::Url { url } => layer0::ImageSource::Url { url },
+                        turn::ContentSource::Base64 { data } => layer0::ContentSource::Base64 { data },
+                        turn::ContentSource::Url { url } => layer0::ContentSource::Url { url },
                     };
                     ContentBlock::Image { source: src, media_type }
                 }

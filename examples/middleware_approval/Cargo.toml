@@ -1,0 +1,14 @@
+[package]
+name = "middleware-approval"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "middleware-approval"
+path = "main.rs"
+
+[dependencies]
+layer0 = { path = "../../layer0", version = "0.4.1" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

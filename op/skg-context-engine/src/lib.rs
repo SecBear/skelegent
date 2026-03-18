@@ -61,26 +61,27 @@
 //! struct MyOperator<P: Provider> {
 //!     provider: P,
 //!     tools: ToolRegistry,
-//!     tool_ctx: ToolCallContext,
+//!     operator_id: OperatorId,
 //!     config: ReactLoopConfig,
 //! }
 //!
 //! #[async_trait]
 //! impl<P: Provider> Operator for MyOperator<P> {
-//!     async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError> {
-//!         let mut ctx = Context::new();
-//!         ctx.inject_message(Message::new(Role::User, input.message))
+//!     async fn execute(&self, input: OperatorInput, ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError> {
+//!         let mut context = Context::new();
+//!         context.inject_message(Message::new(Role::User, input.message))
 //!             .await
-//!             .map_err(|e| OperatorError::NonRetryable(e.to_string()))?;
-//!         react_loop(&mut ctx, &self.provider, &self.tools, &self.tool_ctx, &self.config)
+//!             .map_err(OperatorError::context_assembly)?;
+//!         react_loop(&mut context, &self.provider, &self.tools, ctx, &self.config)
 //!             .await
-//!             .map_err(|e| OperatorError::NonRetryable(e.to_string()))
+//!             .map_err(|e| OperatorError::non_retryable(e.to_string()))
 //!     }
 //! }
 //! ```
 
 pub mod assembly;
 pub mod boundary;
+pub mod cognitive_operator;
 pub mod compile;
 pub mod context;
 pub mod error;
@@ -95,6 +96,7 @@ pub mod stream_react;
 
 // Re-exports
 pub use boundary::{InferBoundary, StreamInferBoundary};
+pub use cognitive_operator::{CognitiveOperator, map_engine_error};
 pub use compile::{CompileConfig, CompiledContext, InferResult};
 pub use context::{Context, Extensions, TurnMetrics};
 pub use error::EngineError;

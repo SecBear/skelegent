@@ -185,9 +185,17 @@ All patterns are built from seven primitives: **Chain**, **Fan-out**, **Fan-in**
 output as input. Observe watches concurrently. Intervene modifies a running
 operator's context from outside. If a new pattern can't be expressed as a
 combination of these seven, the framework may need a new primitive.
-**Dispatch capability**: Operators receive dispatch capability via `Arc<dyn Dispatcher>` injected at construction time. `Dispatcher` is the single immediate invocation primitive — one trait, one method (`dispatch`), used everywhere an operator is invoked. Durable run/control is a separate orchestration-local capability above Layer 0; it must not redefine `Dispatcher` into a long-lived run contract.
+**Dispatch capability**: Operators receive dispatch capability via `Arc<dyn Dispatcher>`
+injected at construction time. `Dispatcher` is the single invocation primitive —
+one trait, one method (`dispatch`), used everywhere. There is no separate
+"orchestrator dispatch" vs "operator dispatch."
 
-**The Orchestrator is a pattern, not a trait**: The code that builds operators, wires their dependencies (state stores, providers, observation channels, intervention channels), registers them with a Dispatcher implementation, and manages lifecycle — this is application code. It is the "orchestrator" in the same way an Erlang supervisor is application code, not a protocol trait. Different applications wire differently. The Dispatcher is the swappable immediate-invocation part. Durable run/control, when present, sits alongside it above Layer 0.
+**The Orchestrator is a pattern, not a trait**: The code that builds operators,
+wires their dependencies (state stores, providers, observation channels,
+intervention channels), registers them with a Dispatcher implementation, and
+manages lifecycle — this is application code. It is the "orchestrator" in the
+same way an Erlang supervisor is application code, not a protocol trait.
+Different applications wire differently. The Dispatcher is the swappable part.
 
 **Context transfer**: Task-only injection is the default. Context boundaries
 should be enforced by infrastructure (separate process), not by prompt
@@ -202,7 +210,10 @@ acceptable for simple cases but does not scale.
 Conversation-scoped handoff (child inherits the conversation, parent terminates)
 is a distinct pattern from delegation.
 
-**Communication**: Synchronous call/return is the default (`Dispatcher::dispatch`). Signals are asynchronous control-plane messages for orchestration (`Effect::Signal`). Durable resume is a separate concept: it satisfies a specific durable wait point rather than acting as a generic signal. Context streams provide real-time observation. Intervention channels provide cross-agent context modification. Shared state via `StateStore` scopes remains persistent coordination, not the durable run contract.
+**Communication**: Synchronous call/return is the default (`Dispatcher::dispatch`).
+Signals for distributed orchestration (`Effect::Signal`). Context streams for
+real-time observation. Intervention channels for cross-agent context modification.
+Shared state via `StateStore` scopes for persistent coordination.
 
 **Observation and intervention**: Streaming-first. The context engine's `Context`
 emits every mutation as it happens — messages pushed/removed, effects declared,
@@ -371,3 +382,67 @@ synchronized registries, and collapses when the descriptor language can't
 express what the actual code can. If you need richer per-dispatch
 customization than `OperatorConfig` provides, add a field to `OperatorConfig`
 (it is `#[non_exhaustive]`), not a descriptor language.
+
+---
+
+## Middleware Blueprint
+
+Six middleware stacks protect six protocol boundaries. Each stack follows the
+same structural pattern. The traits are hand-written per boundary because each
+boundary has a unique method signature — dispatch takes `(ctx, input) → Handle`,
+infer takes `request → Response`, store has separate `read` and `write`, etc.
+Rust's type system prevents a single generic middleware trait across these
+signatures. This is intentional: **type safety at each boundary IS the value.**
+
+### Where stacks live
+
+| Crate | Stacks | Boundaries |
+|---|---|---|
+| `layer0` | `DispatchStack`, `StoreStack`, `ExecStack` | Protocol boundaries (dispatch, state, environment) |
+| `skg-turn` | `InferStack`, `EmbedStack` | Provider boundaries (inference, embedding) |
+| `skg-secret` | `SecretStack` | Secret boundary (secret resolution) |
+
+### The pattern
+
+Every stack is built from the same five components. When adding a new boundary,
+replicate this template:
+
+1. **`*Next` trait** — Continuation to the next layer. One async method matching
+   the boundary's signature. Implementing types: the chain struct and the
+   terminal (the real service).
+
+2. **`*Middleware` trait** — Wraps the call with a `next: &dyn *Next` parameter
+   for continuation-passing. Code before `next` = pre-processing. Code after
+   `next` = post-processing. Not calling `next` = short-circuit.
+
+3. **`*Stack` struct** — `{ layers: Vec<Arc<dyn *Middleware>> }`. Holds the
+   composed chain. Provides `*_with()` to run a request through the chain.
+
+4. **`*StackBuilder`** — `{ observers, transformers, guards }` with `.observe()`,
+   `.transform()`, `.guard()`, `.build()`. Enforces ordering at construction.
+
+5. **`*Chain` struct** — Internal (not `pub`). Links middleware to next via
+   `index + terminal`. Implements `*Next` so each layer sees the remainder of
+   the chain as its continuation.
+
+The `*_with()` method on the stack runs the request through the chain. If the
+stack is empty, it calls the terminal directly (zero overhead).
+
+### Ordering contract
+
+Stacking order is fixed at build time:
+
+```
+Observers (outermost) → Transformers → Guards (innermost) → Terminal
+```
+
+- **Observers** always run, always call `next`. They see every request and
+  response, even when a guard short-circuits. Use for: logging, metrics,
+  audit trails.
+- **Transformers** may modify the request or response, always call `next`.
+  Use for: input normalization, encryption, model overrides.
+- **Guards** may short-circuit by returning an error without calling `next`.
+  Use for: budget enforcement, content filtering, access control.
+
+This ordering means observers see the original request, transformers shape it,
+and guards make the final accept/reject decision on the transformed input.

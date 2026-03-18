@@ -1,5 +1,6 @@
 //! Effect system — side-effects declared by operators for external execution.
 
+use crate::dispatch::Artifact;
 use crate::duration::DurationMs;
 use crate::id::*;
 use crate::state::{ContentKind, Lifetime, MemoryTier};
@@ -83,16 +84,6 @@ pub enum Effect {
         state: serde_json::Value,
     },
 
-    /// Emit a log/trace event. Observers and telemetry consume these.
-    Log {
-        /// Severity level.
-        level: LogLevel,
-        /// Log message.
-        message: String,
-        /// Optional structured data.
-        data: Option<serde_json::Value>,
-    },
-
     /// Create a link between two memory entries.
     LinkMemory {
         /// The scope for the link.
@@ -123,6 +114,28 @@ pub enum Effect {
         call_id: String,
         /// The input the model wants to send to the tool.
         input: serde_json::Value,
+    },
+
+    /// Emit intermediate progress visible to the dispatch caller.
+    ///
+    /// The dispatch layer converts this into a
+    /// [`DispatchEvent::Progress`](crate::dispatch::DispatchEvent::Progress)
+    /// on the caller's handle. Use for reasoning traces, status updates,
+    /// or partial outputs during long-running operations.
+    Progress {
+        /// Progress content.
+        content: crate::content::Content,
+    },
+
+    /// Produce an intermediate deliverable during execution.
+    ///
+    /// The dispatch layer converts this into a
+    /// [`DispatchEvent::ArtifactProduced`](crate::dispatch::DispatchEvent::ArtifactProduced)
+    /// on the caller's handle. Use for files, structured data, or any
+    /// named output produced before the operator finishes.
+    Artifact {
+        /// The artifact to emit.
+        artifact: Artifact,
     },
 
     /// Future effect types. Named string + arbitrary payload.
@@ -180,21 +193,4 @@ impl SignalPayload {
             data,
         }
     }
-}
-
-/// Log severity levels.
-#[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum LogLevel {
-    /// Finest-grained tracing.
-    Trace,
-    /// Debug-level detail.
-    Debug,
-    /// Informational messages.
-    Info,
-    /// Warnings.
-    Warn,
-    /// Errors.
-    Error,
 }

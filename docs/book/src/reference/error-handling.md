@@ -82,8 +82,9 @@ Errors from LLM providers (Layer 1, `skg_turn::provider::ProviderError`):
 
 ```rust
 pub enum ProviderError {
-    TransientError { message: String, status: Option<u16> }, // HTTP/network failure
-    RateLimited,              // 429 response
+    TransientError { message: String, status: Option<u16> }, // 5xx / network failure
+    RateLimited { retry_after: Option<Duration> },           // 429 response
+    InvalidRequest { message: String, status: Option<u16> }, // 4xx client error (not retryable)
     ContentBlocked { message: String }, // Content blocked by provider
     AuthFailed(String),       // 401/403 response
     InvalidResponse(String),  // Response parse failure
@@ -91,7 +92,7 @@ pub enum ProviderError {
 }
 ```
 
-`ProviderError::is_retryable()` returns `true` for `RateLimited` and `TransientError`.
+`ProviderError::is_retryable()` returns `true` for `RateLimited` and `TransientError`. `InvalidRequest` is not retryable — 4xx client errors indicate malformed requests that will never succeed on retry.
 
 ### ToolError
 
@@ -118,6 +119,6 @@ ProviderError / ToolError
   OrchError / EnvError
 ```
 
-Provider and tool errors are mapped to `OperatorError` by the operator implementation (e.g., the `react_loop`-based operator maps `ProviderError::RateLimited` to `OperatorError::Retryable`). Operator errors propagate into orchestration and environment errors automatically via `From` impls.
+Provider and tool errors are mapped to `OperatorError` by the operator implementation (e.g., the `react_loop`-based operator maps `ProviderError::RateLimited` to `OperatorError::Model { retryable: true }`). Operator errors propagate into orchestration and environment errors automatically via `From` impls. The `RetryMiddleware` checks `OperatorError::is_retryable()` to determine whether an `OrchError::OperatorError` should be retried.
 
 This layered propagation ensures that callers at each level see errors appropriate to their abstraction. An orchestrator sees `OrchError`, never `ProviderError`.

@@ -17,8 +17,9 @@ use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
 use layer0::state::StateStore;
 use layer0::test_utils::EchoOperator;
+use layer0::{DispatchContext, DispatchId};
 use rust_decimal::Decimal;
-use skg_context_engine::{Context, ReactLoopConfig, react_loop};
+use skg_context_engine::{CognitiveOperator, ReactLoopConfig};
 use skg_op_single_shot::{SingleShotConfig, SingleShotOperator};
 use skg_orch_local::LocalOrch;
 use skg_state_fs::FsStore;
@@ -50,6 +51,7 @@ fn make_response(
             output_tokens,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            reasoning_tokens: None,
         },
         model: model.into(),
         cost: Some(cost),
@@ -58,51 +60,11 @@ fn make_response(
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ContextEngineOperator: A wrapper for testing react_loop with Operator trait
+// CognitiveOperator replaces the old hand-rolled ContextEngineOperator
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Wraps react_loop in an Operator implementation for test composability.
-struct ContextEngineOperator<P: skg_turn::provider::Provider> {
-    provider: P,
-    config: ReactLoopConfig,
-    tools: ToolRegistry,
-    tool_ctx: skg_tool::ToolCallContext,
-}
-
-impl<P: skg_turn::provider::Provider> ContextEngineOperator<P> {
-    fn new(provider: P, tools: ToolRegistry, config: ReactLoopConfig) -> Self {
-        Self {
-            provider,
-            config,
-            tools,
-            tool_ctx: skg_tool::ToolCallContext::new(layer0::id::OperatorId::from("test")),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl<P: skg_turn::provider::Provider> Operator for ContextEngineOperator<P> {
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, layer0::OperatorError> {
-        let mut ctx = Context::new();
-        // Inject the user input as the first message
-        ctx.inject_message(layer0::context::Message::new(
-            layer0::context::Role::User,
-            input.message,
-        ))
-        .await
-        .map_err(|e| layer0::OperatorError::NonRetryable(e.to_string()))?;
-
-        react_loop(
-            &mut ctx,
-            &self.provider,
-            &self.tools,
-            &self.tool_ctx,
-            &self.config,
-        )
-        .await
-        .map_err(|e| layer0::OperatorError::NonRetryable(e.to_string()))
-    }
-}
+/// Type alias for test readability.
+type ContextEngineOperator<P> = CognitiveOperator<P>;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Helpers
@@ -112,18 +74,25 @@ fn simple_input(text: &str) -> OperatorInput {
     OperatorInput::new(Content::text(text), TriggerType::User)
 }
 
-fn react_config() -> ReactLoopConfig {
+fn test_ctx() -> DispatchContext {
+    DispatchContext::new(DispatchId::new("test"), OperatorId::new("test-op"))
+}
+
+fn dispatch_ctx(name: &str) -> DispatchContext {
+    DispatchContext::new(DispatchId::new(name), OperatorId::new(name))
+}
+
+fn cognitive_config() -> ReactLoopConfig {
     ReactLoopConfig {
         system_prompt: "You are a helpful assistant.".into(),
         model: Some("mock-model".into()),
         max_tokens: Some(256),
-        temperature: None,
-        tool_filter: None,
+        ..Default::default()
     }
 }
 
-fn make_react_operator(provider: TestProvider) -> ContextEngineOperator<TestProvider> {
-    ContextEngineOperator::new(provider, ToolRegistry::new(), react_config())
+fn make_react_operator(provider: TestProvider) -> CognitiveOperator<TestProvider> {
+    CognitiveOperator::new("test", provider, ToolRegistry::new(), cognitive_config())
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -132,9 +101,8 @@ fn make_react_operator(provider: TestProvider) -> ContextEngineOperator<TestProv
 
 #[tokio::test]
 async fn provider_swap_same_config_different_backend() {
-    // The SAME ReactLoopConfig, ToolRegistry, and context strategy.
+    // The SAME operator config and context strategy.
     // Only the provider instance differs.
-    let config = react_config();
     let tools = ToolRegistry::new();
 
     // Provider A: returns "Hello from A" with 25 input tokens
@@ -146,9 +114,8 @@ async fn provider_swap_same_config_different_backend() {
         Decimal::new(1, 4),
     )]);
     let op_a: ContextEngineOperator<TestProvider> =
-        ContextEngineOperator::new(provider_a, tools, config);
+        CognitiveOperator::new("provider-a", provider_a, tools, cognitive_config());
 
-    let config_b = react_config();
     let tools_b = ToolRegistry::new();
 
     // Provider B: returns "Hello from B" with 30 input tokens
@@ -160,14 +127,15 @@ async fn provider_swap_same_config_different_backend() {
         Decimal::new(2, 4),
     )]);
     let op_b: ContextEngineOperator<TestProvider> =
-        ContextEngineOperator::new(provider_b, tools_b, config_b);
+        CognitiveOperator::new("provider-b", provider_b, tools_b, cognitive_config());
 
     // Execute the same input through both
     let input_a = simple_input("Greet me");
     let input_b = simple_input("Greet me");
 
-    let output_a = op_a.execute(input_a).await.unwrap();
-    let output_b = op_b.execute(input_b).await.unwrap();
+    let ctx = test_ctx();
+    let output_a = op_a.execute(input_a, &ctx).await.unwrap();
+    let output_b = op_b.execute(input_b, &ctx).await.unwrap();
 
     // Both produce OperatorOutput with the same structure
     assert_eq!(output_a.exit_reason, ExitReason::Complete);
@@ -186,14 +154,21 @@ async fn provider_swap_same_config_different_backend() {
         Arc::new(make_react_operator(TestProvider::with_responses(vec![
             make_text_response("dyn A"),
         ])));
-    let dyn_b: Arc<dyn Operator> = Arc::new(ContextEngineOperator::new(
+    let dyn_b: Arc<dyn Operator> = Arc::new(CognitiveOperator::new(
+        "dyn-b",
         TestProvider::with_responses(vec![make_text_response("dyn B")]),
         ToolRegistry::new(),
-        react_config(),
+        cognitive_config(),
     ));
 
-    let out_a = dyn_a.execute(simple_input("test")).await.unwrap();
-    let out_b = dyn_b.execute(simple_input("test")).await.unwrap();
+    let out_a = dyn_a
+        .execute(simple_input("test"), &test_ctx())
+        .await
+        .unwrap();
+    let out_b = dyn_b
+        .execute(simple_input("test"), &test_ctx())
+        .await
+        .unwrap();
     assert_eq!(out_a.exit_reason, ExitReason::Complete);
     assert_eq!(out_b.exit_reason, ExitReason::Complete);
 }
@@ -333,8 +308,8 @@ async fn operator_swap_react_vs_single_shot() {
     // Same input through both operators
     let input = simple_input("Say hello");
 
-    let react_output = react_op.execute(input.clone()).await.unwrap();
-    let ss_output = single_shot_op.execute(input).await.unwrap();
+    let react_output = react_op.execute(input.clone(), &test_ctx()).await.unwrap();
+    let ss_output = single_shot_op.execute(input, &test_ctx()).await.unwrap();
 
     // Both produce OperatorOutput with identical structure
     assert_eq!(react_output.exit_reason, ExitReason::Complete);
@@ -365,7 +340,7 @@ async fn operator_swap_react_vs_single_shot() {
     ];
 
     for (i, op) in operators.iter().enumerate() {
-        let output = op.execute(simple_input("test")).await.unwrap();
+        let output = op.execute(simple_input("test"), &test_ctx()).await.unwrap();
         assert_eq!(
             output.exit_reason,
             ExitReason::Complete,
@@ -385,7 +360,7 @@ async fn operator_swap_echo_operator() {
     let echo: Arc<dyn Operator> = Arc::new(EchoOperator);
 
     let input = simple_input("This exact text should come back");
-    let output = echo.execute(input).await.unwrap();
+    let output = echo.execute(input, &test_ctx()).await.unwrap();
 
     assert_eq!(output.exit_reason, ExitReason::Complete);
     assert_eq!(
@@ -421,7 +396,10 @@ async fn multi_agent_dispatch_single() {
 
     // Dispatch to individual agents
     let summary = orch
-        .dispatch(&OperatorId::new("summarizer"), simple_input("Hello there!"))
+        .dispatch(&dispatch_ctx("summarizer"), simple_input("Hello there!"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     assert_eq!(summary.exit_reason, ExitReason::Complete);
@@ -431,7 +409,10 @@ async fn multi_agent_dispatch_single() {
     );
 
     let classification = orch
-        .dispatch(&OperatorId::new("classifier"), simple_input("Hello there!"))
+        .dispatch(&dispatch_ctx("classifier"), simple_input("Hello there!"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     assert_eq!(classification.exit_reason, ExitReason::Complete);
@@ -441,7 +422,10 @@ async fn multi_agent_dispatch_single() {
     );
 
     let echoed = orch
-        .dispatch(&OperatorId::new("echo"), simple_input("Hello there!"))
+        .dispatch(&dispatch_ctx("echo"), simple_input("Hello there!"))
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
     assert_eq!(echoed.message.as_text().unwrap(), "Hello there!");
@@ -476,7 +460,13 @@ async fn multi_agent_parallel_dispatch() {
 
     let mut results = Vec::new();
     for (op, input) in tasks {
-        results.push(orch.dispatch(&op, input).await);
+        results.push(
+            orch.dispatch(&dispatch_ctx(op.as_str()), input)
+                .await
+                .unwrap()
+                .collect()
+                .await,
+        );
     }
 
     // All three should succeed
@@ -514,9 +504,12 @@ async fn multi_agent_with_state_storage() {
     // Step 1: Dispatch research task
     let research = orch
         .dispatch(
-            &OperatorId::new("researcher"),
+            &dispatch_ctx("researcher"),
             simple_input("Research Rust programming"),
         )
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
 
@@ -537,9 +530,12 @@ async fn multi_agent_with_state_storage() {
     // Step 3: Dispatch writing task
     let draft = orch
         .dispatch(
-            &OperatorId::new("writer"),
+            &dispatch_ctx("writer"),
             simple_input("Write about Rust based on research"),
         )
+        .await
+        .unwrap()
+        .collect()
         .await
         .unwrap();
 
@@ -592,7 +588,7 @@ async fn multi_agent_missing_agent_handled_gracefully() {
 
     let mut results = Vec::new();
     for (op, input) in tasks {
-        results.push(orch.dispatch(&op, input).await);
+        results.push(orch.dispatch(&dispatch_ctx(op.as_str()), input).await);
     }
     assert_eq!(results.len(), 2);
     assert!(results[0].is_ok());
@@ -647,11 +643,18 @@ async fn combined_all_patterns() {
     ];
     let mut results = Vec::new();
     for (op, input) in tasks {
-        results.push(orch.dispatch(&op, input).await);
+        results.push(
+            orch.dispatch(&dispatch_ctx(op.as_str()), input)
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap(),
+        );
     }
 
-    let analysis = results[0].as_ref().unwrap();
-    let rating = results[1].as_ref().unwrap();
+    let analysis = &results[0];
+    let rating = &results[1];
 
     // State swap: store in both memory and filesystem
     let memory = MemoryStore::new();

@@ -43,7 +43,7 @@ fn dispatcher_is_object_safe_and_send_sync() {
 
 fn signalable_is_object_safe_and_send_sync() {
 
-    _assert_send_sync::<Box<dyn layer0::Signalable>>();
+    _assert_send_sync::<Box<dyn skg_effects_core::Signalable>>();
 
 }
 
@@ -53,7 +53,7 @@ fn signalable_is_object_safe_and_send_sync() {
 
 fn queryable_is_object_safe_and_send_sync() {
 
-    _assert_send_sync::<Box<dyn layer0::Queryable>>();
+    _assert_send_sync::<Box<dyn skg_effects_core::Queryable>>();
 
 }
 
@@ -124,14 +124,16 @@ Then construct a `Context` and call `react_loop` with the mock provider:
 
 ```rust,no_run
 use skg_context_engine::{Context, react_loop, ReactLoopConfig};
-use skg_tool::{ToolRegistry, ToolCallContext};
+use layer0::DispatchContext;
+use layer0::id::{DispatchId, OperatorId};
+use skg_tool::ToolRegistry;
 use layer0::context::{Message, Role};
 
 let mut ctx = Context::new("You are a helpful assistant.");
 ctx.inject_message(Message::new(Role::User, "Hello"));
 
 let tools = ToolRegistry::new();
-let tool_ctx = ToolCallContext::empty();
+let tool_ctx = DispatchContext::new(DispatchId::new("assistant"), OperatorId::new("assistant"));
 let config = ReactLoopConfig::default();
 
 // Now test without network calls

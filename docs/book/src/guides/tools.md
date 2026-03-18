@@ -23,7 +23,7 @@ pub trait ToolDyn: Send + Sync {
 - **`name()`** -- Unique identifier for the tool. This is what the model uses to request the tool.
 - **`description()`** -- Human-readable description. Sent to the model as part of the tool definition.
 - **`input_schema()`** -- JSON Schema describing the tool's parameters. The model generates input conforming to this schema.
-- **`call()`** -- Async execution. Takes JSON input and a `&ToolCallContext`, returns JSON output or a `ToolError`.
+- **`call()`** -- Async execution. Takes JSON input and a `&DispatchContext`, returns JSON output or a `ToolError`.
 
 ## Creating a tool
 
@@ -62,7 +62,7 @@ impl ToolDyn for ReadFileTool {
     fn call(
         &self,
         input: Value,
-        ctx: &ToolCallContext,
+        ctx: &DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + '_>> {
         Box::pin(async move {
             let path = input["path"]

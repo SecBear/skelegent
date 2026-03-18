@@ -105,7 +105,6 @@ pub struct OllamaOptions {
 
 /// Ollama `/api/chat` response body.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct OllamaResponse {
     /// Model that generated the response.
     pub model: String,
@@ -119,20 +118,24 @@ pub struct OllamaResponse {
     pub done_reason: Option<String>,
     /// Total time spent generating the response in nanoseconds.
     #[serde(default)]
+    #[allow(dead_code)]
     pub total_duration: Option<u64>,
     /// Time spent loading the model in nanoseconds.
     #[serde(default)]
+    #[allow(dead_code)]
     pub load_duration: Option<u64>,
     /// Number of tokens in the prompt.
     #[serde(default)]
     pub prompt_eval_count: Option<u64>,
     /// Time spent evaluating the prompt in nanoseconds.
     #[serde(default)]
+    #[allow(dead_code)]
     pub prompt_eval_duration: Option<u64>,
     /// Number of tokens generated.
     #[serde(default)]
     pub eval_count: Option<u64>,
     /// Time spent generating the response in nanoseconds.
     #[serde(default)]
+    #[allow(dead_code)]
     pub eval_duration: Option<u64>,
 }
