@@ -18,6 +18,7 @@ use skg_provider_anthropic::AnthropicProvider;
 use skg_provider_ollama::OllamaProvider;
 use skg_provider_openai::OpenAIProvider;
 use skg_tool::ToolRegistry;
+use skg_turn::Provider;
 use skg_turn::infer::InferRequest;
 use skg_turn::stream::StreamEvent;
 use futures_util::StreamExt;

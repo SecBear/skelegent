@@ -237,6 +237,7 @@ mod tests {
             tool_error_formatter: None,
             system_prompt_fn: None,
             max_tool_retries: 2,
+            provider_options: std::collections::HashMap::new(),
         }
     }
 

@@ -96,6 +96,9 @@ pub struct ReactLoopConfig {
     ///
     /// Default is `2`.
     pub max_tool_retries: u32,
+    /// Provider-specific options forwarded to InferRequest.
+    /// Keyed by provider name (e.g. "anthropic", "openai").
+    pub provider_options: HashMap<String, serde_json::Value>,
 }
 
 impl Clone for ReactLoopConfig {
@@ -110,6 +113,7 @@ impl Clone for ReactLoopConfig {
             tool_error_formatter: self.tool_error_formatter.clone(),
             system_prompt_fn: self.system_prompt_fn.clone(),
             max_tool_retries: self.max_tool_retries,
+            provider_options: self.provider_options.clone(),
         }
     }
 }
@@ -126,6 +130,7 @@ impl Default for ReactLoopConfig {
             tool_error_formatter: None,
             system_prompt_fn: None,
             max_tool_retries: 2,
+            provider_options: HashMap::new(),
         }
     }
 }
@@ -154,6 +159,7 @@ impl fmt::Debug for ReactLoopConfig {
                 &self.system_prompt_fn.as_ref().map(|_| "Some(Fn)"),
             )
             .field("max_tool_retries", &self.max_tool_retries)
+            .field("provider_options", &self.provider_options)
             .finish()
     }
 }
@@ -177,7 +183,7 @@ impl ReactLoopConfig {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             tools: schemas,
-            provider_options: Default::default(),
+            provider_options: self.provider_options.clone(),
         }
     }
 }
@@ -1011,6 +1017,7 @@ mod tests {
             tool_error_formatter: None,
             system_prompt_fn: None,
             max_tool_retries: 2,
+            provider_options: std::collections::HashMap::new(),
         }
     }
 
@@ -1772,6 +1779,7 @@ mod tests {
             tool_error_formatter: None,
             system_prompt_fn: None,
             max_tool_retries: 2,
+            provider_options: std::collections::HashMap::new(),
         };
 
         let ctx = Context::new();
@@ -1835,6 +1843,7 @@ mod tests {
             tool_error_formatter: None,
             system_prompt_fn: None,
             max_tool_retries: 2,
+            provider_options: std::collections::HashMap::new(),
         };
 
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -2441,6 +2450,7 @@ mod tests {
             tool_error_formatter: None,
             system_prompt_fn: None,
             max_tool_retries: 2,
+            provider_options: std::collections::HashMap::new(),
         };
 
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -2483,6 +2493,7 @@ mod tests {
             })),
             system_prompt_fn: None,
             max_tool_retries: 2,
+            provider_options: std::collections::HashMap::new(),
         };
 
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
