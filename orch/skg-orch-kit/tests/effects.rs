@@ -1,6 +1,6 @@
 use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::effect::{Effect, Scope, SignalPayload};
+use layer0::effect::{Effect, EffectKind, MemoryScope, Scope, SignalPayload};
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::state::StateStore;
@@ -46,26 +46,27 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
 
     // Write then read outside handler.
-    let effect = Effect::WriteMemory {
+    let effect = Effect::new(0, EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k1".into(),
         value: json!({"v": 1}),
+        memory_scope: MemoryScope::Session,
         tier: None,
         lifetime: None,
         content_kind: None,
         salience: None,
         ttl: None,
-    };
+    });
     let outcome = handler.handle(&effect, &ctx).await.expect("write ok");
     assert!(matches!(outcome, EffectOutcome::Applied));
     let got: Option<serde_json::Value> = state.read(&Scope::Global, "k1").await.expect("read ok");
     assert_eq!(got, Some(json!({"v": 1})));
 
     // Delete a missing key is Ok (idempotent)
-    let effect = Effect::DeleteMemory {
+    let effect = Effect::new(0, EffectKind::DeleteMemory {
         scope: Scope::Global,
         key: "missing".into(),
-    };
+    });
     let outcome = handler
         .handle(&effect, &ctx)
         .await
@@ -73,10 +74,10 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
     assert!(matches!(outcome, EffectOutcome::Applied));
 
     // Delete existing key then verify None
-    let effect = Effect::DeleteMemory {
+    let effect = Effect::new(0, EffectKind::DeleteMemory {
         scope: Scope::Global,
         key: "k1".into(),
-    };
+    });
     let outcome = handler.handle(&effect, &ctx).await.expect("delete ok");
     assert!(matches!(outcome, EffectOutcome::Applied));
     let got: Option<serde_json::Value> = state.read(&Scope::Global, "k1").await.expect("read ok");
@@ -92,13 +93,13 @@ async fn delegate_handoff_and_signal_return_correct_outcomes() {
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
 
     // Delegate returns EffectOutcome::Delegate
-    let effect = Effect::Delegate {
+    let effect = Effect::new(0, EffectKind::Delegate {
         operator: OperatorId::new("child"),
         input: Box::new(OperatorInput::new(
             Content::text("child task"),
             TriggerType::Task,
         )),
-    };
+    });
     let outcome = handler.handle(&effect, &ctx).await.expect("delegate ok");
     assert!(
         matches!(&outcome, EffectOutcome::Delegate { operator, .. } if operator == &OperatorId::new("child")),
@@ -106,10 +107,10 @@ async fn delegate_handoff_and_signal_return_correct_outcomes() {
     );
 
     // Handoff returns EffectOutcome::Handoff
-    let effect = Effect::Handoff {
+    let effect = Effect::new(0, EffectKind::Handoff {
         operator: OperatorId::new("handoff_target"),
-        state: json!({"ticket": 123}),
-    };
+        metadata: Some(json!({"ticket": 123})),
+    });
     let outcome = handler.handle(&effect, &ctx).await.expect("handoff ok");
     assert!(
         matches!(&outcome, EffectOutcome::Handoff { operator, .. } if operator == &OperatorId::new("handoff_target")),
@@ -117,10 +118,10 @@ async fn delegate_handoff_and_signal_return_correct_outcomes() {
     );
 
     // Signal is sent via Signalable
-    let effect = Effect::Signal {
+    let effect = Effect::new(0, EffectKind::Signal {
         target: WorkflowId::new("wf1"),
         payload: SignalPayload::new("sig.type", json!({"ok": true})),
-    };
+    });
     let outcome = handler.handle(&effect, &ctx).await.expect("signal ok");
     assert!(matches!(outcome, EffectOutcome::Applied));
 
@@ -139,28 +140,29 @@ async fn preserves_effect_order_across_memory_and_orch_calls() {
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
     // Delete then Write ensures final value exists only if order preserved.
     let effects: Vec<Effect> = vec![
-        Effect::DeleteMemory {
+        Effect::new(0, EffectKind::DeleteMemory {
             scope: Scope::Global,
             key: "k_order".into(),
-        },
-        Effect::Delegate {
+        }),
+        Effect::new(0, EffectKind::Delegate {
             operator: OperatorId::new("a"),
             input: Box::new(OperatorInput::new(Content::text("x"), TriggerType::Task)),
-        },
-        Effect::WriteMemory {
+        }),
+        Effect::new(0, EffectKind::WriteMemory {
             scope: Scope::Global,
             key: "k_order".into(),
             value: json!(42),
+            memory_scope: MemoryScope::Session,
             tier: None,
             lifetime: None,
             content_kind: None,
             salience: None,
             ttl: None,
-        },
-        Effect::Signal {
+        }),
+        Effect::new(0, EffectKind::Signal {
             target: WorkflowId::new("wf_order"),
             payload: SignalPayload::new("t", json!({})),
-        },
+        }),
     ];
 
     let mut outcomes = vec![];
@@ -190,10 +192,10 @@ async fn signal_without_signaler_returns_error() {
     let handler = LocalEffectHandler::new(state, None);
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
 
-    let effect = Effect::Signal {
+    let effect = Effect::new(0, EffectKind::Signal {
         target: WorkflowId::new("wf1"),
         payload: SignalPayload::new("t", json!({})),
-    };
+    });
     let result = handler.handle(&effect, &ctx).await;
     assert!(result.is_err(), "signal without signaler should error");
 }

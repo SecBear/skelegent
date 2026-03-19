@@ -12,7 +12,7 @@ use rust_decimal::Decimal;
 use skg_turn::embedding::{EmbedRequest, EmbedResponse, Embedding};
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
 use skg_turn::provider::{Provider, ProviderError};
-use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+use skg_turn::stream::{InferStream, StreamEvent};
 use skg_turn::types::*;
 use tracing::Instrument;
 use types::*;
@@ -625,27 +625,13 @@ impl Provider for OpenAIProvider {
             })
         }
     }
-}
 
-impl StreamProvider for OpenAIProvider {
     fn infer_stream(
         &self,
-        request: StreamRequest,
-        on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-    ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
-        let infer_request = InferRequest {
-            model: request.model,
-            messages: request.messages,
-            tools: request.tools,
-            max_tokens: request.max_tokens,
-            temperature: request.temperature,
-            system: request.system,
-            extra: request.extra,
-            thinking: request.thinking,
-            tool_choice: request.tool_choice,
-            response_format: request.response_format,
-        };
-        let mut api_request = self.build_infer_request(&infer_request);
+        request: InferRequest,
+    ) -> impl std::future::Future<Output = Result<InferStream, ProviderError>> + Send {
+        skg_turn::assert_real_requests_allowed();
+        let mut api_request = self.build_infer_request(&request);
         api_request.stream = true;
         api_request.stream_options = Some(serde_json::json!({"include_usage": true}));
 
@@ -662,7 +648,7 @@ impl StreamProvider for OpenAIProvider {
             builder.json(&api_request)
         });
 
-        let model = infer_request.model.as_deref().unwrap_or("unknown");
+        let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer_stream", provider = "openai", model);
 
         async move {
@@ -670,14 +656,13 @@ impl StreamProvider for OpenAIProvider {
                 Err(e) => return Err(e),
                 Ok(r) => r,
             };
-            let http_response =
-                http_request
-                    .send()
-                    .await
-                    .map_err(|e| ProviderError::TransientError {
-                        message: e.to_string(),
-                        status: None,
-                    })?;
+            let http_response = http_request
+                .send()
+                .await
+                .map_err(|e| ProviderError::TransientError {
+                    message: e.to_string(),
+                    status: None,
+                })?;
 
             let status = http_response.status();
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -700,188 +685,189 @@ impl StreamProvider for OpenAIProvider {
                 return Err(map_error_response(status, &body));
             }
 
-            // Process SSE byte stream
-            let mut stream = http_response.bytes_stream();
-            let mut buf = String::new();
+            let stream = async_stream::try_stream! {
+                let mut byte_stream = http_response.bytes_stream();
+                let mut buf = String::new();
 
-            // Accumulation state
-            let mut model_name = String::new();
-            let mut input_tokens: u64 = 0;
-            let mut output_tokens: u64 = 0;
-            let mut stop_reason = StopReason::EndTurn;
-            let mut accumulated_text = String::new();
-            // Tool calls accumulated by index
-            let mut tool_ids: Vec<String> = Vec::new();
-            let mut tool_names: Vec<String> = Vec::new();
-            let mut tool_args: Vec<String> = Vec::new();
-            let mut cache_read_tokens: Option<u64> = None;
-            let mut reasoning_tokens: Option<u64> = None;
+                // Accumulation state
+                let mut model_name = String::new();
+                let mut input_tokens: u64 = 0;
+                let mut output_tokens: u64 = 0;
+                let mut stop_reason = StopReason::EndTurn;
+                let mut accumulated_text = String::new();
+                // Tool calls accumulated by index
+                let mut tool_ids: Vec<String> = Vec::new();
+                let mut tool_names: Vec<String> = Vec::new();
+                let mut tool_args: Vec<String> = Vec::new();
+                let mut cache_read_tokens: Option<u64> = None;
+                let mut reasoning_tokens: Option<u64> = None;
 
-            while let Some(chunk) = stream.next().await {
-                let bytes = chunk.map_err(|e| ProviderError::TransientError {
-                    message: format!("stream read error: {e}"),
-                    status: None,
-                })?;
-                buf.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(chunk) = byte_stream.next().await {
+                    let bytes = chunk.map_err(|e| ProviderError::TransientError {
+                        message: format!("stream read error: {e}"),
+                        status: None,
+                    })?;
+                    buf.push_str(&String::from_utf8_lossy(&bytes));
 
-                // Process complete SSE frames
-                while let Some(frame_end) = buf.find("\n\n") {
-                    let frame = buf[..frame_end].to_string();
-                    buf = buf[frame_end + 2..].to_string();
+                    // Process complete SSE frames
+                    while let Some(frame_end) = buf.find("\n\n") {
+                        let frame = buf[..frame_end].to_string();
+                        buf = buf[frame_end + 2..].to_string();
 
-                    for line in frame.lines() {
-                        let data = match line.strip_prefix("data: ") {
-                            Some(d) => d,
-                            None => continue,
-                        };
-
-                        if data == "[DONE]" {
-                            break;
-                        }
-
-                        let chunk: OpenAIStreamChunk = match serde_json::from_str(data) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "failed to parse SSE chunk");
-                                continue;
-                            }
-                        };
-
-                        if model_name.is_empty() {
-                            model_name.clone_from(&chunk.model);
-                        }
-
-                        // Usage chunk (sent at the end when stream_options.include_usage is set)
-                        if let Some(ref usage) = chunk.usage {
-                            input_tokens = usage.prompt_tokens;
-                            output_tokens = usage.completion_tokens;
-                            cache_read_tokens = usage
-                                .prompt_tokens_details
-                                .as_ref()
-                                .and_then(|d| d.cached_tokens);
-                            reasoning_tokens = usage
-                                .completion_tokens_details
-                                .as_ref()
-                                .and_then(|d| d.reasoning_tokens)
-                                .filter(|&t| t > 0);
-                            let usage_event = TokenUsage {
-                                input_tokens,
-                                output_tokens,
-                                cache_read_tokens,
-                                cache_creation_tokens: None,
-                                reasoning_tokens,
+                        for line in frame.lines() {
+                            let data = match line.strip_prefix("data: ") {
+                                Some(d) => d,
+                                None => continue,
                             };
-                            on_event(StreamEvent::Usage(usage_event));
-                        }
 
-                        for choice in &chunk.choices {
-                            // Text delta
-                            if let Some(ref text) = choice.delta.content {
-                                accumulated_text.push_str(text);
-                                on_event(StreamEvent::TextDelta(text.clone()));
+                            if data == "[DONE]" {
+                                break;
                             }
 
-                            // Tool call deltas
-                            if let Some(ref tc_deltas) = choice.delta.tool_calls {
-                                for tc in tc_deltas {
-                                    let idx = tc.index as usize;
-                                    // Grow accumulators if needed
-                                    while tool_ids.len() <= idx {
-                                        tool_ids.push(String::new());
-                                        tool_names.push(String::new());
-                                        tool_args.push(String::new());
-                                    }
+                            let chunk: OpenAIStreamChunk = match serde_json::from_str(data) {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "failed to parse SSE chunk");
+                                    continue;
+                                }
+                            };
 
-                                    if let Some(ref id) = tc.id {
-                                        tool_ids[idx].clone_from(id);
-                                    }
-                                    if let Some(ref func) = tc.function {
-                                        if let Some(ref name) = func.name {
-                                            tool_names[idx].clone_from(name);
-                                            // Emit ToolCallStart when we get id + name
-                                            on_event(StreamEvent::ToolCallStart {
-                                                index: idx,
-                                                id: tool_ids[idx].clone(),
-                                                name: name.clone(),
-                                            });
+                            if model_name.is_empty() {
+                                model_name.clone_from(&chunk.model);
+                            }
+
+                            // Usage chunk (sent at end when stream_options.include_usage is set)
+                            if let Some(ref usage) = chunk.usage {
+                                input_tokens = usage.prompt_tokens;
+                                output_tokens = usage.completion_tokens;
+                                cache_read_tokens = usage
+                                    .prompt_tokens_details
+                                    .as_ref()
+                                    .and_then(|d| d.cached_tokens);
+                                reasoning_tokens = usage
+                                    .completion_tokens_details
+                                    .as_ref()
+                                    .and_then(|d| d.reasoning_tokens)
+                                    .filter(|&t| t > 0);
+                                let usage_event = TokenUsage {
+                                    input_tokens,
+                                    output_tokens,
+                                    cache_read_tokens,
+                                    cache_creation_tokens: None,
+                                    reasoning_tokens,
+                                };
+                                yield StreamEvent::Usage(usage_event);
+                            }
+
+                            for choice in &chunk.choices {
+                                // Text delta
+                                if let Some(ref text) = choice.delta.content {
+                                    accumulated_text.push_str(text);
+                                    yield StreamEvent::TextDelta(text.clone());
+                                }
+
+                                // Tool call deltas
+                                if let Some(ref tc_deltas) = choice.delta.tool_calls {
+                                    for tc in tc_deltas {
+                                        let idx = tc.index as usize;
+                                        // Grow accumulators if needed
+                                        while tool_ids.len() <= idx {
+                                            tool_ids.push(String::new());
+                                            tool_names.push(String::new());
+                                            tool_args.push(String::new());
                                         }
-                                        if let Some(ref args) = func.arguments {
-                                            tool_args[idx].push_str(args);
-                                            on_event(StreamEvent::ToolCallDelta {
-                                                index: idx,
-                                                json_delta: args.clone(),
-                                            });
+
+                                        if let Some(ref id) = tc.id {
+                                            tool_ids[idx].clone_from(id);
+                                        }
+                                        if let Some(ref func) = tc.function {
+                                            if let Some(ref name) = func.name {
+                                                tool_names[idx].clone_from(name);
+                                                // Emit ToolCallStart when we get id + name
+                                                yield StreamEvent::ToolCallStart {
+                                                    index: idx,
+                                                    id: tool_ids[idx].clone(),
+                                                    name: name.clone(),
+                                                };
+                                            }
+                                            if let Some(ref args) = func.arguments {
+                                                tool_args[idx].push_str(args);
+                                                yield StreamEvent::ToolCallDelta {
+                                                    index: idx,
+                                                    json_delta: args.clone(),
+                                                };
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            // Stop reason
-                            if let Some(ref reason) = choice.finish_reason {
-                                stop_reason = match reason.as_str() {
-                                    "stop" => StopReason::EndTurn,
-                                    "tool_calls" => StopReason::ToolUse,
-                                    "length" => StopReason::MaxTokens,
-                                    "content_filter" => StopReason::ContentFilter,
-                                    _ => StopReason::EndTurn,
-                                };
+                                // Stop reason
+                                if let Some(ref reason) = choice.finish_reason {
+                                    stop_reason = match reason.as_str() {
+                                        "stop" => StopReason::EndTurn,
+                                        "tool_calls" => StopReason::ToolUse,
+                                        "length" => StopReason::MaxTokens,
+                                        "content_filter" => StopReason::ContentFilter,
+                                        _ => StopReason::EndTurn,
+                                    };
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // Build final tool calls
-            let tool_calls: Vec<ToolCall> = (0..tool_ids.len())
-                .filter(|i| !tool_ids[*i].is_empty())
-                .map(|i| {
-                    let input: serde_json::Value =
-                        serde_json::from_str(&tool_args[i]).unwrap_or_default();
-                    ToolCall {
-                        id: tool_ids[i].clone(),
-                        name: tool_names[i].clone(),
-                        input,
-                    }
-                })
-                .collect();
+                // Build final tool calls
+                let tool_calls: Vec<ToolCall> = (0..tool_ids.len())
+                    .filter(|i| !tool_ids[*i].is_empty())
+                    .map(|i| {
+                        let input: serde_json::Value =
+                            serde_json::from_str(&tool_args[i]).unwrap_or_default();
+                        ToolCall {
+                            id: tool_ids[i].clone(),
+                            name: tool_names[i].clone(),
+                            input,
+                        }
+                    })
+                    .collect();
 
-            // Build content
-            let content = if accumulated_text.is_empty() {
-                Content::text("")
-            } else {
-                Content::Text(accumulated_text)
+                // Build content
+                let content = if accumulated_text.is_empty() {
+                    Content::text("")
+                } else {
+                    Content::Text(accumulated_text)
+                };
+
+                let usage = TokenUsage {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens: None,
+                    reasoning_tokens,
+                };
+
+                let input_cost = Decimal::from(input_tokens) * Decimal::new(15, 8);
+                let output_cost = Decimal::from(output_tokens) * Decimal::new(60, 8);
+                let cost = input_cost + output_cost;
+
+                let response = InferResponse {
+                    content,
+                    tool_calls,
+                    stop_reason,
+                    usage,
+                    model: model_name,
+                    cost: Some(cost),
+                    truncated: None,
+                };
+
+                tracing::info!(input_tokens, output_tokens, "streaming inference finished");
+                yield StreamEvent::Done(response);
             };
-
-            let usage = TokenUsage {
-                input_tokens,
-                output_tokens,
-                cache_read_tokens,
-                cache_creation_tokens: None,
-                reasoning_tokens,
-            };
-
-            let input_cost = Decimal::from(input_tokens) * Decimal::new(15, 8);
-            let output_cost = Decimal::from(output_tokens) * Decimal::new(60, 8);
-            let cost = input_cost + output_cost;
-
-            let response = InferResponse {
-                content,
-                tool_calls,
-                stop_reason,
-                usage,
-                model: model_name,
-                cost: Some(cost),
-                truncated: None,
-            };
-
-            on_event(StreamEvent::Done(response.clone()));
-
-            tracing::info!(input_tokens, output_tokens, "streaming inference finished");
-            Ok(response)
+            Ok(InferStream::new(stream))
         }
         .instrument(span)
     }
 }
+
 
 /// Map a non-success HTTP response to an appropriate [`ProviderError`].
 ///

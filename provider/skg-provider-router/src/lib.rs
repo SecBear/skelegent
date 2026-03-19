@@ -28,7 +28,7 @@ use skg_turn::embedding::{EmbedRequest, EmbedResponse};
 use skg_turn::infer::{InferRequest, InferResponse};
 use skg_turn::infer_middleware::{EmbedNext, EmbedStack, InferNext, InferStack};
 use skg_turn::provider::{Provider, ProviderError};
-use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+use skg_turn::stream::{InferStream, single_response_stream};
 
 // Re-export DynProvider and box_provider for backwards compatibility.
 pub use skg_turn::provider::{DynProvider, box_provider};
@@ -303,69 +303,23 @@ impl Provider for MiddlewareProvider {
     ) -> impl Future<Output = Result<EmbedResponse, ProviderError>> + Send {
         self.embed_via_stack(request)
     }
-}
 
-impl StreamProvider for MiddlewareProvider {
-    /// Run streaming inference through the middleware stack.
+    /// Stream inference through the middleware stack, returning a single-event stream.
     ///
-    /// Converts the [`StreamRequest`] to an [`InferRequest`], runs it through
-    /// the full [`InferStack`] (guards, transformers, observers), then forwards
-    /// the result to [`infer_stream_fallback`] which emits the response as
-    /// streaming events via `on_event`.
+    /// Runs the request through the full [`InferStack`] (guards, transformers, observers)
+    /// via [`Self::infer_via_stack`], then wraps the response in a single [`StreamEvent::Done`].
     ///
-    /// This ensures all InferMiddleware (logging, caching, guardrails) applies
-    /// to streaming calls. Providers that support native streaming are used
-    /// via the fallback path — they will emit incremental events if they
-    /// implement [`StreamProvider`] directly; otherwise a single `Done` event
-    /// is emitted. The InferStack always fires in either case.
-    ///
-    /// # Note on native streaming
-    ///
-    /// The inner provider is held as `Box<dyn DynProvider>` which is not
-    /// object-safe for RPITIT traits like `StreamProvider`. If the inner
-    /// provider supports native streaming, use it directly (not wrapped in
-    /// `MiddlewareProvider`) or add a `DynStreamProvider` extension when
-    /// incremental streaming through middleware is required.
+    /// Providers that support native streaming should be used directly rather than wrapped
+    /// in `MiddlewareProvider`. The `InferStack` calls `infer()` on the inner provider,
+    /// which is not streaming-aware.
     fn infer_stream(
         &self,
-        request: StreamRequest,
-        on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
-        // Convert StreamRequest → InferRequest, run through the InferStack,
-        // then use the fallback which wraps the response in stream events.
-        let infer_request = InferRequest {
-            model: request.model,
-            messages: request.messages,
-            tools: request.tools,
-            max_tokens: request.max_tokens,
-            temperature: request.temperature,
-            system: request.system,
-            extra: request.extra,
-            thinking: request.thinking,
-            tool_choice: request.tool_choice,
-            response_format: request.response_format,
-        };
-        let stack_future = self.infer_via_stack(infer_request);
+        request: InferRequest,
+    ) -> impl Future<Output = Result<InferStream, ProviderError>> + Send {
+        let stack_future = self.infer_via_stack(request);
         async move {
             let response = stack_future.await?;
-            // Emit the response as stream events.
-            if let Some(text) = response.text() {
-                on_event(StreamEvent::TextDelta(text.to_string()));
-            }
-            for (i, call) in response.tool_calls.iter().enumerate() {
-                on_event(StreamEvent::ToolCallStart {
-                    index: i,
-                    id: call.id.clone(),
-                    name: call.name.clone(),
-                });
-                on_event(StreamEvent::ToolCallDelta {
-                    index: i,
-                    json_delta: call.input.to_string(),
-                });
-            }
-            on_event(StreamEvent::Usage(response.usage.clone()));
-            on_event(StreamEvent::Done(response.clone()));
-            Ok(response)
+            Ok(single_response_stream(response))
         }
     }
 }
@@ -380,6 +334,7 @@ mod tests {
     use layer0::content::Content;
     use layer0::context::{Message, Role};
     use skg_turn::infer_middleware::{EmbedMiddleware, InferMiddleware};
+    use skg_turn::stream::StreamEvent;
     use skg_turn::types::{StopReason, TokenUsage};
     use std::sync::{Arc, Mutex};
 
@@ -750,27 +705,25 @@ mod tests {
         assert_eq!(*texts, vec!["HELLO WORLD"]);
     }
 
-    // -- StreamProvider middleware integration --------------------------------
+    // -- infer_stream middleware integration ----------------------------------
 
-    /// Middleware fires on the StreamProvider::infer_stream path.
+    /// Middleware fires on the `infer_stream` path via the `InferStack`.
     #[tokio::test]
     async fn stream_infer_fires_middleware() {
         use async_trait::async_trait;
+        use futures_util::StreamExt;
         use skg_turn::infer_middleware::InferNext;
-        use std::future::Future;
-        use std::pin::Pin;
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        // -- Stub DynProvider that returns a fixed InferResponse --------
-        struct StubDynProvider;
+        // -- Provider that returns a fixed InferResponse ------------------
+        struct StubProvider;
 
-        impl DynProvider for StubDynProvider {
-            fn infer_boxed(
+        impl Provider for StubProvider {
+            fn infer(
                 &self,
                 request: InferRequest,
-            ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>>
-            {
-                Box::pin(async move {
+            ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
+                async move {
                     Ok(InferResponse {
                         content: Content::text("streamed-ok"),
                         tool_calls: vec![],
@@ -780,11 +733,11 @@ mod tests {
                         cost: None,
                         truncated: None,
                     })
-                })
+                }
             }
         }
 
-        // -- Counting middleware that records invocations ----------------
+        // -- Counting middleware that records invocations -----------------
         struct CountingMiddleware(Arc<AtomicU32>);
 
         #[async_trait]
@@ -805,48 +758,26 @@ mod tests {
             .observe(Arc::new(CountingMiddleware(Arc::clone(&call_count))))
             .build();
 
-        let mp = MiddlewareProvider::new(Box::new(StubDynProvider)).with_infer_stack(stack);
+        let mp = MiddlewareProvider::new(box_provider(StubProvider)).with_infer_stack(stack);
 
         let infer_req = InferRequest::new(vec![Message::new(Role::User, Content::text("hi"))])
             .with_model("test-model");
-        let request: StreamRequest = infer_req.into();
+        let mut stream = mp.infer_stream(infer_req).await.unwrap();
 
-        let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
-        let events_clone = Arc::clone(&events);
+        // The stream yields exactly one Done event wrapping the full response.
+        let event = stream.next().await.expect("stream must yield Done").unwrap();
+        let StreamEvent::Done(response) = event else {
+            panic!("expected Done event, got {event:?}");
+        };
 
-        let response = mp
-            .infer_stream(request, move |event| {
-                let label = match &event {
-                    StreamEvent::TextDelta(t) => format!("text:{t}"),
-                    StreamEvent::Done(_) => "done".into(),
-                    StreamEvent::Usage(_) => "usage".into(),
-                    _ => "other".into(),
-                };
-                events_clone.lock().unwrap().push(label);
-            })
-            .await
-            .unwrap();
+        // Stream is exhausted after Done.
+        assert!(stream.next().await.is_none());
 
-        // Middleware was called exactly once.
+        // Middleware was called exactly once (via infer_via_stack).
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
 
-        // Response came through.
+        // Response carried through the Done event.
         assert_eq!(response.model, "test-model");
         assert_eq!(response.text().unwrap(), "streamed-ok");
-
-        // Stream events were emitted.
-        let captured = events.lock().unwrap();
-        assert!(
-            captured.iter().any(|e| e.starts_with("text:")),
-            "expected a TextDelta event, got: {captured:?}"
-        );
-        assert!(
-            captured.iter().any(|e| e == "done"),
-            "expected a Done event, got: {captured:?}"
-        );
-        assert!(
-            captured.iter().any(|e| e == "usage"),
-            "expected a Usage event, got: {captured:?}"
-        );
     }
 }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Artifact;
-use layer0::effect::{Effect, Scope, SignalPayload};
+use layer0::effect::{Effect, EffectKind, MemoryScope, Scope, SignalPayload};
 use layer0::error::{OrchError, StateError};
 use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
@@ -116,16 +116,17 @@ async fn halt_hook_prevents_memory_write() {
 
     let outcome = handler
         .handle(
-            &Effect::WriteMemory {
+            &Effect::new(0, EffectKind::WriteMemory {
                 scope: Scope::Global,
                 key: "secret".into(),
                 value: json!("sensitive"),
+                memory_scope: MemoryScope::Session,
                 tier: None,
                 lifetime: None,
                 content_kind: None,
                 salience: None,
                 ttl: None,
-            },
+            }),
             &test_ctx(),
         )
         .await
@@ -149,16 +150,17 @@ async fn no_hooks_writes_normally() {
 
     let outcome = handler
         .handle(
-            &Effect::WriteMemory {
+            &Effect::new(0, EffectKind::WriteMemory {
                 scope: Scope::Global,
                 key: "k".into(),
                 value: json!(42),
+                memory_scope: MemoryScope::Session,
                 tier: None,
                 lifetime: None,
                 content_kind: None,
                 salience: None,
                 ttl: None,
-            },
+            }),
             &test_ctx(),
         )
         .await
@@ -186,16 +188,17 @@ async fn observer_hook_sees_key_and_value() {
 
     let outcome = handler
         .handle(
-            &Effect::WriteMemory {
+            &Effect::new(0, EffectKind::WriteMemory {
                 scope: Scope::Global,
                 key: "observed_key".into(),
                 value: json!({"x": 1}),
+                memory_scope: MemoryScope::Session,
                 tier: None,
                 lifetime: None,
                 content_kind: None,
                 salience: None,
                 ttl: None,
-            },
+            }),
             &test_ctx(),
         )
         .await
@@ -241,16 +244,17 @@ async fn modify_hook_replaces_value() {
 
     let outcome = handler
         .handle(
-            &Effect::WriteMemory {
+            &Effect::new(0, EffectKind::WriteMemory {
                 scope: Scope::Global,
                 key: "m".into(),
                 value: json!("original"),
+                memory_scope: MemoryScope::Session,
                 tier: None,
                 lifetime: None,
                 content_kind: None,
                 salience: None,
                 ttl: None,
-            },
+            }),
             &test_ctx(),
         )
         .await
@@ -307,16 +311,17 @@ async fn lifetime_guardrail_blocks_transient_write() {
     // Transient write: middleware must block it.
     let outcome = handler
         .handle(
-            &Effect::WriteMemory {
+            &Effect::new(0, EffectKind::WriteMemory {
                 scope: Scope::Global,
                 key: "transient_key".into(),
                 value: serde_json::json!("should_not_land"),
+                memory_scope: MemoryScope::Session,
                 tier: None,
                 lifetime: Some(Lifetime::Transient),
                 content_kind: None,
                 salience: None,
                 ttl: None,
-            },
+            }),
             &test_ctx(),
         )
         .await
@@ -336,16 +341,17 @@ async fn lifetime_guardrail_blocks_transient_write() {
     // Durable write: middleware must allow it.
     let outcome = handler
         .handle(
-            &Effect::WriteMemory {
+            &Effect::new(0, EffectKind::WriteMemory {
                 scope: Scope::Global,
                 key: "durable_key".into(),
                 value: serde_json::json!("should_land"),
+                memory_scope: MemoryScope::Session,
                 tier: None,
                 lifetime: Some(layer0::state::Lifetime::Durable),
                 content_kind: None,
                 salience: None,
                 ttl: None,
-            },
+            }),
             &test_ctx(),
         )
         .await
@@ -382,10 +388,10 @@ async fn handoff_preserves_structured_state_in_metadata() {
 
     let outcome = handler
         .handle(
-            &Effect::Handoff {
+            &Effect::new(0, EffectKind::Handoff {
                 operator: OperatorId::new("next-op"),
-                state: handoff_state.clone(),
-            },
+                metadata: Some(handoff_state.clone()),
+            }),
             &test_ctx(),
         )
         .await
@@ -412,10 +418,10 @@ async fn link_memory_effect_creates_graph_link() {
 
     let outcome = handler
         .handle(
-            &Effect::LinkMemory {
+            &Effect::new(0, EffectKind::LinkMemory {
                 scope: Scope::Global,
                 link: MemoryLink::new("notes/meeting", "decisions/arch", "references"),
-            },
+            }),
             &test_ctx(),
         )
         .await
@@ -451,9 +457,9 @@ async fn progress_and_artifact_effects_skip_cleanly() {
     // Progress effect must be skipped.
     let progress_outcome = handler
         .handle(
-            &Effect::Progress {
+            &Effect::new(0, EffectKind::Progress {
                 content: Content::text("step 1"),
-            },
+            }),
             &test_ctx(),
         )
         .await
@@ -468,9 +474,9 @@ async fn progress_and_artifact_effects_skip_cleanly() {
     // Artifact effect must be skipped.
     let artifact_outcome = handler
         .handle(
-            &Effect::Artifact {
+            &Effect::new(0, EffectKind::Artifact {
                 artifact: Artifact::new("art-1", vec![Content::text("hello")]),
-            },
+            }),
             &test_ctx(),
         )
         .await

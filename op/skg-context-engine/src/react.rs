@@ -19,7 +19,7 @@ use layer0::approval::{ApprovalResponse, ToolCallAction};
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
-use layer0::effect::Effect;
+use layer0::effect::{Effect, EffectKind};
 use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use serde_json::Value;
@@ -229,11 +229,11 @@ pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<E
                 .get(&call.name)
                 .is_some_and(|t| t.approval_policy().requires_approval(&call.input))
         })
-        .map(|call| Effect::ToolApprovalRequired {
+        .map(|call| Effect::new(0, EffectKind::ToolApprovalRequired {
             tool_name: call.name.clone(),
             call_id: call.id.clone(),
             input: call.input.clone(),
-        })
+        }))
         .collect()
 }
 
@@ -270,7 +270,7 @@ pub struct RejectedToolCall {
 
 /// Reconstruct pending tool calls from effects and resolve against an [`ApprovalResponse`].
 ///
-/// Extracts [`Effect::ToolApprovalRequired`] from the effects slice, matches them
+/// Extracts [`EffectKind::ToolApprovalRequired`] from the effects slice, matches them
 /// against the approval response, and returns which calls to dispatch and which
 /// were rejected.
 ///
@@ -280,8 +280,8 @@ pub fn resolve_approval(effects: &[Effect], response: &ApprovalResponse) -> Reso
     // Collect pending tool calls from ToolApprovalRequired effects.
     let pending: Vec<(&str, &str, &serde_json::Value)> = effects
         .iter()
-        .filter_map(|e| match e {
-            Effect::ToolApprovalRequired {
+        .filter_map(|e| match &e.kind {
+            EffectKind::ToolApprovalRequired {
                 tool_name,
                 call_id,
                 input,
@@ -477,7 +477,7 @@ fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) ->
 /// 2. Append response to context
 /// 3. If no tool calls → return (model is done)
 /// 4. Check tool approval → if any tool requires approval, exit with
-///    [`ExitReason::AwaitingApproval`] and [`Effect::ToolApprovalRequired`]
+///    [`ExitReason::AwaitingApproval`] and [`EffectKind::ToolApprovalRequired`]
 /// 5. Dispatch each tool call → append results to context
 /// 6. Increment turn counter → go to 1
 ///
@@ -570,10 +570,10 @@ pub async fn react_loop<P: Provider>(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        ctx.push_effect(Effect::Handoff {
+                        ctx.push_effect(Effect::new(0, EffectKind::Handoff {
                             operator: OperatorId::from(target.as_str()),
-                            state: serde_json::json!({ "reason": reason }),
-                        });
+                            metadata: Some(serde_json::json!({ "reason": reason })),
+                        }));
                         return Ok(make_context_output(
                             Content::text(""),
                             ExitReason::HandedOff,
@@ -855,7 +855,7 @@ pub async fn react_loop_structured<P: Provider>(
 
 /// Dispatch function tool calls, skipping the output tool.
 ///
-/// If any tool requires approval, stores [`Effect::ToolApprovalRequired`]
+/// If any tool requires approval, stores [`EffectKind::ToolApprovalRequired`]
 /// effects in the context and returns `AwaitingApproval` (caller should exit with
 /// [`ExitReason::AwaitingApproval`]).
 async fn dispatch_function_tools(
@@ -1610,8 +1610,8 @@ mod tests {
         );
         assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
         assert_eq!(output.effects.len(), 1);
-        match &output.effects[0] {
-            Effect::ToolApprovalRequired {
+        match &output.effects[0].kind {
+            EffectKind::ToolApprovalRequired {
                 tool_name,
                 call_id,
                 input,
@@ -1985,8 +1985,8 @@ mod tests {
         );
 
         // Verify the effect is the expected ToolApprovalRequired variant
-        match &output.effects[0] {
-            Effect::ToolApprovalRequired {
+        match &output.effects[0].kind {
+            EffectKind::ToolApprovalRequired {
                 tool_name, call_id, ..
             } => {
                 assert_eq!(tool_name, "dangerous_tool");
@@ -2109,8 +2109,8 @@ mod tests {
 
         let effects = check_approval(&tool_calls, &tools);
         assert_eq!(effects.len(), 1);
-        match &effects[0] {
-            Effect::ToolApprovalRequired {
+        match &effects[0].kind {
+            EffectKind::ToolApprovalRequired {
                 tool_name,
                 call_id,
                 input,
@@ -2152,9 +2152,9 @@ mod tests {
             }),
         )]);
         // Pre-seed an effect that must survive the exit path.
-        ctx.push_effect(Effect::Progress {
+        ctx.push_effect(Effect::new(0, EffectKind::Progress {
             content: Content::text("sentinel-effect"),
-        });
+        }));
         // Trip the budget guard: turns_completed already at limit.
         ctx.metrics.turns_completed = 1;
         ctx.inject_message(Message::new(Role::User, Content::text("hi")))
@@ -2173,8 +2173,8 @@ mod tests {
             1,
             "effect pushed before budget exit must not be dropped"
         );
-        match &output.effects[0] {
-            Effect::Progress { content } => {
+        match &output.effects[0].kind {
+            EffectKind::Progress { content } => {
                 assert_eq!(content.as_text(), Some("sentinel-effect"));
             }
             other => panic!("expected Progress effect, got {other:?}"),
@@ -2189,21 +2189,21 @@ mod tests {
     fn resolve_approve_all() {
         use layer0::approval::ApprovalResponse;
         let effects = vec![
-            Effect::ToolApprovalRequired {
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "x": 1 }),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "x": 2 }),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({ "x": 3 }),
-            },
+            }),
         ];
         let result = resolve_approval(&effects, &ApprovalResponse::ApproveAll);
         assert_eq!(result.approved.len(), 3, "all three should be approved");
@@ -2216,21 +2216,21 @@ mod tests {
     fn resolve_reject_all() {
         use layer0::approval::ApprovalResponse;
         let effects = vec![
-            Effect::ToolApprovalRequired {
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({}),
-            },
+            }),
         ];
         let result = resolve_approval(
             &effects,
@@ -2247,21 +2247,21 @@ mod tests {
     fn resolve_partial() {
         use layer0::approval::ApprovalResponse;
         let effects = vec![
-            Effect::ToolApprovalRequired {
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({}),
-            },
+            }),
         ];
         let result = resolve_approval(
             &effects,
@@ -2280,16 +2280,16 @@ mod tests {
     fn resolve_modify() {
         use layer0::approval::ApprovalResponse;
         let effects = vec![
-            Effect::ToolApprovalRequired {
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "path": "/etc/passwd" }),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "path": "/tmp/safe" }),
-            },
+            }),
         ];
         let new_input = json!({ "path": "/tmp/approved" });
         let result = resolve_approval(
@@ -2326,21 +2326,21 @@ mod tests {
     fn resolve_batch() {
         use layer0::approval::{ApprovalResponse, ToolCallAction, ToolCallDecision};
         let effects = vec![
-            Effect::ToolApprovalRequired {
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "x": 1 }),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "x": 2 }),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({ "x": 3 }),
-            },
+            }),
         ];
         let new_input = json!({ "x": 99 });
         let result = resolve_approval(
@@ -2384,16 +2384,16 @@ mod tests {
         use layer0::approval::ApprovalResponse;
         // Response includes a call_id not present in pending — silently ignored.
         let effects = vec![
-            Effect::ToolApprovalRequired {
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
-            },
-            Effect::ToolApprovalRequired {
+            }),
+            Effect::new(0, EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
-            },
+            }),
         ];
         let result = resolve_approval(
             &effects,
@@ -2779,13 +2779,14 @@ mod tests {
         let handoff_effects: Vec<_> = output
             .effects
             .iter()
-            .filter(|e| matches!(e, Effect::Handoff { .. }))
+            .filter(|e| matches!(e.kind, EffectKind::Handoff { .. }))
             .collect();
         assert_eq!(handoff_effects.len(), 1, "exactly one Handoff effect must be emitted");
-        match &handoff_effects[0] {
-            Effect::Handoff { operator, state } => {
+        match &handoff_effects[0].kind {
+            EffectKind::Handoff { operator, metadata } => {
                 assert_eq!(operator.as_str(), "routing-agent");
-                assert_eq!(state["reason"], "needs routing");
+                let meta = metadata.as_ref().expect("metadata present");
+                assert_eq!(meta["reason"], "needs routing");
             }
             _ => unreachable!(),
         }
@@ -2819,7 +2820,7 @@ mod tests {
             "loop must continue after a non-handoff tool result"
         );
         assert!(
-            output.effects.iter().all(|e| !matches!(e, Effect::Handoff { .. })),
+            output.effects.iter().all(|e| !matches!(e.kind, EffectKind::Handoff { .. })),
             "no Handoff effect must be emitted for a normal tool result"
         );
     }

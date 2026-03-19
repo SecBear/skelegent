@@ -147,7 +147,7 @@ mod tests {
 
     use async_trait::async_trait;
     use layer0::content::Content;
-    use layer0::effect::Effect;
+    use layer0::effect::{Effect, EffectKind};
     use layer0::error::OperatorError;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -204,10 +204,10 @@ mod tests {
                 Content::text(self.reply.clone()),
                 ExitReason::HandedOff,
             );
-            out.effects.push(Effect::Handoff {
+            out.effects.push(Effect::new(0, EffectKind::Handoff {
                 operator: self.target.clone(),
-                state: serde_json::Value::Null,
-            });
+                metadata: None,
+            }));
             Ok(out)
         }
     }

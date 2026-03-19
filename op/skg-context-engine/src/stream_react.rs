@@ -3,10 +3,6 @@
 //! Like [`react_loop()`](crate::react_loop) but streams inference output
 //! via a callback. Tool dispatch, approval checking, and rule firing
 //! work identically.
-//!
-//! For providers that don't implement [`StreamProvider`], use
-//! [`infer_stream_fallback()`](skg_turn::stream::infer_stream_fallback)
-//! to get a non-streaming fallback that still works with this function.
 
 use crate::boundary::StreamInferBoundary;
 use crate::compile::CompileConfig;
@@ -15,15 +11,17 @@ use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
 use crate::ops::tool::{ExecuteTool, format_tool_result};
 use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error, is_handoff_sentinel};
+use futures_util::StreamExt;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::duration::DurationMs;
-use layer0::effect::Effect;
+use layer0::effect::{Effect, EffectKind};
 use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use skg_tool::ToolRegistry;
 use skg_turn::infer::InferResponse;
-use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+use skg_turn::provider::Provider;
+use skg_turn::stream::StreamEvent;
 
 ///
 /// Same flow as [`react_loop()`](crate::react_loop) but streams inference
@@ -43,7 +41,7 @@ use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
 ///     },
 /// ).await?;
 /// ```
-pub async fn stream_react_loop<P: StreamProvider>(
+pub async fn stream_react_loop<P: Provider>(
     ctx: &mut Context,
     provider: &P,
     tools: &ToolRegistry,
@@ -51,7 +49,6 @@ pub async fn stream_react_loop<P: StreamProvider>(
     config: &ReactLoopConfig,
     on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
 ) -> Result<OperatorOutput, EngineError> {
-    let on_event = std::sync::Arc::new(on_event);
     loop {
         // Enter StreamInferBoundary: drains pending interventions + fires Before rules.
         // Compile AFTER so any context mutations appear in the request.
@@ -61,15 +58,28 @@ pub async fn stream_react_loop<P: StreamProvider>(
 
         // Phase 1: Compile context (re-filter tools each turn, after before rules)
         let compile_config = config.compile_config(tools, ctx);
-        let request = build_stream_request(ctx, &compile_config);
+        let infer_request = build_infer_request(ctx, &compile_config);
 
-        // Phase 2: Stream inference — buffer events, emit only after commit.
-        let buffered = std::sync::Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
-        let buf_clone = std::sync::Arc::clone(&buffered);
-        let response = provider
-            .infer_stream(request, move |e| buf_clone.lock().unwrap().push(e))
+        // Phase 2: Stream inference — poll the stream, buffer events, emit only after commit.
+        let mut infer_stream = provider
+            .infer_stream(infer_request)
             .await
             .map_err(EngineError::Provider)?;
+
+        let mut buffered: Vec<StreamEvent> = Vec::new();
+        let mut done_response: Option<skg_turn::InferResponse> = None;
+        while let Some(event) = infer_stream.next().await {
+            let event = event.map_err(EngineError::Provider)?;
+            if let StreamEvent::Done(ref resp) = event {
+                done_response = Some(resp.clone());
+            }
+            buffered.push(event);
+        }
+        let response = done_response.ok_or_else(|| {
+            EngineError::Provider(skg_turn::ProviderError::InvalidResponse(
+                "streaming inference ended without Done event".into(),
+            ))
+        })?;
 
         // Exit StreamInferBoundary: fires After rules (before we commit events)
         if let Err(err) = ctx.exit_boundary::<StreamInferBoundary>().await {
@@ -83,7 +93,7 @@ pub async fn stream_react_loop<P: StreamProvider>(
         ctx.metrics.turns_completed += 1;
 
         // Emit buffered events now that the turn is committed
-        let events = std::mem::take(&mut *buffered.lock().unwrap());
+        let events = buffered;
         for event in events {
             on_event(event);
         }
@@ -126,10 +136,10 @@ pub async fn stream_react_loop<P: StreamProvider>(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        ctx.push_effect(Effect::Handoff {
+                        ctx.push_effect(Effect::new(0, EffectKind::Handoff {
                             operator: OperatorId::from(target.as_str()),
-                            state: serde_json::json!({ "reason": reason }),
-                        });
+                            metadata: Some(serde_json::json!({ "reason": reason })),
+                        }));
                         return Ok(make_context_output(
                             Content::text(""),
                             ExitReason::HandedOff,
@@ -186,10 +196,9 @@ fn make_output(response: InferResponse, exit: ExitReason, ctx: &mut Context) -> 
     make_context_output(response.content, exit, ctx)
 }
 
-fn build_stream_request(ctx: &Context, config: &CompileConfig) -> StreamRequest {
-    // Build InferRequest then convert
-    let compiled = ctx.compile(config);
-    StreamRequest::from(compiled.request)
+/// Compile the context into an [`InferRequest`](skg_turn::InferRequest) for streaming.
+fn build_infer_request(ctx: &Context, config: &CompileConfig) -> skg_turn::InferRequest {
+    ctx.compile(config).request
 }
 
 #[cfg(test)]
@@ -207,47 +216,11 @@ mod tests {
     use serde_json::json;
     use skg_tool::{ToolDyn, ToolError, ToolRegistry};
     use skg_turn::provider::ProviderError;
-    use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest, infer_stream_fallback};
+    use skg_turn::stream::StreamEvent;
     use skg_turn::test_utils::TestProvider;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
-
-    // A wrapper that makes TestProvider implement StreamProvider via fallback
-    struct FallbackStreamProvider {
-        inner: TestProvider,
-    }
-
-    impl FallbackStreamProvider {
-        fn new() -> Self {
-            Self {
-                inner: TestProvider::new(),
-            }
-        }
-    }
-
-    impl skg_turn::provider::Provider for FallbackStreamProvider {
-        fn infer(
-            &self,
-            request: skg_turn::InferRequest,
-        ) -> impl std::future::Future<
-            Output = Result<skg_turn::InferResponse, skg_turn::ProviderError>,
-        > + Send {
-            self.inner.infer(request)
-        }
-    }
-
-    impl StreamProvider for FallbackStreamProvider {
-        fn infer_stream(
-            &self,
-            request: StreamRequest,
-            on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-        ) -> impl std::future::Future<
-            Output = Result<skg_turn::InferResponse, skg_turn::ProviderError>,
-        > + Send {
-            infer_stream_fallback(&self.inner, request, on_event)
-        }
-    }
 
     fn simple_config() -> ReactLoopConfig {
         ReactLoopConfig {
@@ -313,6 +286,7 @@ mod tests {
         }
     }
 
+    /// A provider that always fails on both `infer` and `infer_stream`.
     struct AlwaysErrorStreamProvider;
 
     impl skg_turn::provider::Provider for AlwaysErrorStreamProvider {
@@ -327,23 +301,10 @@ mod tests {
         }
     }
 
-    impl StreamProvider for AlwaysErrorStreamProvider {
-        async fn infer_stream(
-            &self,
-            _request: StreamRequest,
-            _on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-        ) -> Result<skg_turn::InferResponse, ProviderError> {
-            Err(ProviderError::TransientError {
-                message: "stream failure".into(),
-                status: None,
-            })
-        }
-    }
-
     #[tokio::test]
     async fn stream_react_before_boundary_rule_mutates_request_before_provider_call() {
-        let provider = FallbackStreamProvider::new();
-        provider.inner.respond_with_text("done");
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
 
         let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
             "mark before stream inference",
@@ -370,7 +331,6 @@ mod tests {
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let request = provider
-            .inner
             .last_request()
             .expect("provider should record request");
         assert!(
@@ -384,8 +344,8 @@ mod tests {
 
     #[tokio::test]
     async fn stream_react_after_boundary_rule_runs_after_success_only() {
-        let provider = FallbackStreamProvider::new();
-        provider.inner.respond_with_text("done");
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
 
         let mut ctx = Context::with_rules(vec![Rule::after::<StreamInferBoundary>(
             "mark after stream inference",
@@ -412,7 +372,6 @@ mod tests {
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let request = provider
-            .inner
             .last_request()
             .expect("provider should record request");
         assert!(
@@ -446,8 +405,8 @@ mod tests {
 
     #[tokio::test]
     async fn stream_react_loop_does_not_emit_events_before_append_commit() {
-        let provider = FallbackStreamProvider::new();
-        provider.inner.respond_with_text("hello before append exit");
+        let provider = TestProvider::new();
+        provider.respond_with_text("hello before append exit");
 
         let mut ctx =
             Context::with_rules(vec![Rule::before::<crate::ops::response::AppendResponse>(
@@ -498,8 +457,8 @@ mod tests {
 
     #[tokio::test]
     async fn stream_react_loop_does_not_emit_events_before_after_boundary_exit() {
-        let provider = FallbackStreamProvider::new();
-        provider.inner.respond_with_text("hello before exit");
+        let provider = TestProvider::new();
+        provider.respond_with_text("hello before exit");
 
         let mut ctx = Context::with_rules(vec![Rule::after::<StreamInferBoundary>(
             "exit after stream inference",
@@ -577,8 +536,8 @@ mod tests {
         config: BudgetGuardConfig,
         expected_exit: ExitReason,
     ) {
-        let provider = FallbackStreamProvider::new();
-        provider.inner.respond_with_text("should never be used");
+        let provider = TestProvider::new();
+        provider.respond_with_text("should never be used");
 
         let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
             "budget_guard",
@@ -606,7 +565,7 @@ mod tests {
 
         assert_eq!(output.exit_reason, expected_exit);
         assert_eq!(output.message.as_text(), Some(""));
-        assert_eq!(provider.inner.call_count(), 0);
+        assert_eq!(provider.call_count(), 0);
     }
 
     #[tokio::test]
@@ -656,8 +615,8 @@ mod tests {
 
     #[tokio::test]
     async fn stream_react_loop_halts_before_provider_call_on_stream_boundary_rule() {
-        let provider = FallbackStreamProvider::new();
-        provider.inner.respond_with_text("should never be used");
+        let provider = TestProvider::new();
+        provider.respond_with_text("should never be used");
 
         let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
             "halt before stream inference",
@@ -683,13 +642,13 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, EngineError::Halted { .. }));
-        assert_eq!(provider.inner.call_count(), 0);
+        assert_eq!(provider.call_count(), 0);
     }
 
     #[tokio::test]
     async fn stream_react_loop_simple_text() {
-        let provider = FallbackStreamProvider::new();
-        provider.inner.respond_with_text("hello streaming!");
+        let provider = TestProvider::new();
+        provider.respond_with_text("hello streaming!");
 
         let mut ctx = Context::new();
         ctx.inject_message(Message::new(Role::User, Content::text("hi")))
@@ -723,17 +682,17 @@ mod tests {
         assert_eq!(output.exit_reason, ExitReason::Complete);
 
         let captured = events.lock().unwrap();
-        assert!(captured.iter().any(|e| e.starts_with("text:")));
+        // TestProvider uses Provider's default infer_stream impl, which wraps the
+        // final response in a single Done event rather than native text deltas.
         assert!(captured.iter().any(|e| e == "done"));
     }
 
     #[tokio::test]
     async fn stream_react_loop_with_tool_call() {
-        let provider = FallbackStreamProvider::new();
+        let provider = TestProvider::new();
         provider
-            .inner
             .respond_with_tool_call("echo", "c1", json!({"msg": "hi"}));
-        provider.inner.respond_with_text("echoed!");
+        provider.respond_with_text("echoed!");
 
         let mut tools = ToolRegistry::new();
         tools.register(Arc::new(MockTool { name: "echo" }));

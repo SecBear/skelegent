@@ -90,6 +90,24 @@ pub trait Provider: Send + Sync {
         request: InferRequest,
     ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send;
 
+    /// Stream inference responses.
+    ///
+    /// Returns an [`crate::stream::InferStream`] that yields [`crate::stream::StreamEvent`]
+    /// items, ending with [`crate::stream::StreamEvent::Done`].
+    ///
+    /// The default implementation calls [`Self::infer`] and wraps the result as a
+    /// single [`crate::stream::StreamEvent::Done`] item. Providers that support
+    /// native token-by-token streaming override this method.
+    fn infer_stream(
+        &self,
+        request: InferRequest,
+    ) -> impl Future<Output = Result<crate::stream::InferStream, ProviderError>> + Send {
+        async move {
+            let response = self.infer(request).await?;
+            Ok(crate::stream::single_response_stream(response))
+        }
+    }
+
     /// Embed texts into vector space.
     ///
     /// Not all providers support embedding. The default implementation returns
@@ -127,6 +145,14 @@ pub trait DynProvider: Send + Sync {
         request: InferRequest,
     ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>>;
 
+    /// Stream inference responses, returning a boxed future.
+    ///
+    /// The returned future resolves to an [`crate::stream::InferStream`] on success.
+    fn infer_stream_boxed(
+        &self,
+        request: InferRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::stream::InferStream, ProviderError>> + Send + '_>>;
+
     /// Run embedding, returning a boxed future.
     ///
     /// Default implementation returns an unsupported error. Override for
@@ -150,6 +176,13 @@ impl<T: Provider> DynProvider for T {
         request: InferRequest,
     ) -> Pin<Box<dyn Future<Output = Result<InferResponse, ProviderError>> + Send + '_>> {
         Box::pin(self.infer(request))
+    }
+
+    fn infer_stream_boxed(
+        &self,
+        request: InferRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::stream::InferStream, ProviderError>> + Send + '_>> {
+        Box::pin(self.infer_stream(request))
     }
 
     fn embed_boxed(

@@ -10,7 +10,7 @@ use layer0::approval::{
     ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
     ToolCallDecision,
 };
-use layer0::effect::Effect;
+use layer0::effect::{Effect, EffectKind};
 use layer0::operator::{OperatorInput, TriggerType};
 use serde_json::{Value, json};
 use skg_run_core::ResumeInput;
@@ -197,27 +197,27 @@ fn deserialize_rt(response: &ApprovalResponse) -> ApprovalResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: Orchestrator constructs ApprovalRequest from Effect::ToolApprovalRequired
+// Test 3: Orchestrator constructs ApprovalRequest from EffectKind::ToolApprovalRequired
 // ---------------------------------------------------------------------------
 
 #[test]
 fn approval_request_from_effects() {
     // Simulate what an operator would push into OperatorOutput::effects
     let effects = vec![
-        Effect::ToolApprovalRequired {
+        Effect::new(0, EffectKind::ToolApprovalRequired {
             tool_name: "delete_file".to_owned(),
             call_id: "call_001".to_owned(),
             input: json!({ "path": "/etc/passwd" }),
-        },
-        Effect::ToolApprovalRequired {
+        }),
+        Effect::new(0, EffectKind::ToolApprovalRequired {
             tool_name: "send_email".to_owned(),
             call_id: "call_002".to_owned(),
             input: json!({ "to": "external@example.com" }),
-        },
+        }),
         // Non-approval effect — must not appear in pending
-        Effect::Progress {
+        Effect::new(0, EffectKind::Progress {
             content: Content::text("Thinking..."),
-        },
+        }),
     ];
 
     // Orchestrator construction pattern: drain ToolApprovalRequired entries
@@ -227,11 +227,11 @@ fn approval_request_from_effects() {
     let pending: Vec<PendingToolCall> = effects
         .iter()
         .filter_map(|e| {
-            if let Effect::ToolApprovalRequired {
+            if let EffectKind::ToolApprovalRequired {
                 tool_name,
                 call_id,
                 input,
-            } = e
+            } = &e.kind
             {
                 Some(PendingToolCall {
                     call_id: call_id.clone(),

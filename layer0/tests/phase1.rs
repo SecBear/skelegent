@@ -292,16 +292,17 @@ fn exit_reason_safety_stop_round_trip() {
 
 #[test]
 fn effect_write_memory_round_trip() {
-    let e = Effect::WriteMemory {
+    let e = Effect::new(0, EffectKind::WriteMemory {
         scope: Scope::Session(SessionId::new("s1")),
         key: "notes".into(),
         value: json!({"text": "remember this"}),
+        memory_scope: MemoryScope::Session,
         tier: None,
         lifetime: None,
         content_kind: None,
         salience: None,
         ttl: None,
-    };
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
@@ -310,10 +311,10 @@ fn effect_write_memory_round_trip() {
 
 #[test]
 fn effect_signal_round_trip() {
-    let e = Effect::Signal {
+    let e = Effect::new(0, EffectKind::Signal {
         target: WorkflowId::new("wf-1"),
         payload: SignalPayload::new("user_feedback", json!({"rating": 5})),
-    };
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
@@ -322,10 +323,10 @@ fn effect_signal_round_trip() {
 
 #[test]
 fn effect_delegate_round_trip() {
-    let e = Effect::Delegate {
+    let e = Effect::new(0, EffectKind::Delegate {
         operator: OperatorId::new("helper"),
         input: Box::new(sample_operator_input()),
-    };
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
@@ -334,10 +335,10 @@ fn effect_delegate_round_trip() {
 
 #[test]
 fn effect_custom_round_trip() {
-    let e = Effect::Custom {
-        effect_type: "send_email".into(),
-        data: json!({"to": "user@example.com", "subject": "done"}),
-    };
+    let e = Effect::new(0, EffectKind::Custom {
+        name: "send_email".into(),
+        payload: json!({"to": "user@example.com", "subject": "done"}),
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
@@ -654,12 +655,12 @@ fn scope_custom_preserves_unknown_scope() {
 
 #[test]
 fn effect_custom_preserves_unknown_effect() {
-    let json = r##"{"type":"custom","effect_type":"send_slack","data":{"channel":"#ops"}}"##;
-    let e: Effect = serde_json::from_str(json).unwrap();
+    let json = r##"{"type":"custom","name":"send_slack","payload":{"channel":"#ops"}}"##;
+    let e: EffectKind = serde_json::from_str(json).unwrap();
     let reserialized = serde_json::to_string(&e).unwrap();
     let reparsed: serde_json::Value = serde_json::from_str(&reserialized).unwrap();
     assert_eq!(reparsed["type"], "custom");
-    assert_eq!(reparsed["effect_type"], "send_slack");
+    assert_eq!(reparsed["name"], "send_slack");
 }
 
 #[test]
@@ -818,10 +819,10 @@ fn env_error_display_remaining_variants() {
 
 #[test]
 fn effect_handoff_round_trip() {
-    let e = Effect::Handoff {
+    let e = Effect::new(0, EffectKind::Handoff {
         operator: OperatorId::new("specialist"),
-        state: json!({"context": "user needs help with billing"}),
-    };
+        metadata: Some(json!({"context": "user needs help with billing"})),
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
@@ -830,10 +831,10 @@ fn effect_handoff_round_trip() {
 
 #[test]
 fn effect_delete_memory_round_trip() {
-    let e = Effect::DeleteMemory {
+    let e = Effect::new(0, EffectKind::DeleteMemory {
         scope: Scope::Global,
         key: "temp_notes".into(),
-    };
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
@@ -865,16 +866,17 @@ fn store_options_default() {
 #[test]
 fn write_memory_with_tier_round_trip() {
     use layer0::MemoryTier;
-    let e = Effect::WriteMemory {
+    let e = Effect::new(0, EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k".into(),
         value: json!(1),
+        memory_scope: MemoryScope::Session,
         tier: Some(MemoryTier::Warm),
         lifetime: None,
         content_kind: None,
         salience: None,
         ttl: None,
-    };
+    });
     let json = serde_json::to_value(&e).unwrap();
     let back: Effect = serde_json::from_value(json.clone()).unwrap();
     let json2 = serde_json::to_value(&back).unwrap();
@@ -883,16 +885,17 @@ fn write_memory_with_tier_round_trip() {
 
 #[test]
 fn write_memory_tier_omitted_when_none() {
-    let e = Effect::WriteMemory {
+    let e = Effect::new(0, EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k".into(),
         value: json!(1),
+        memory_scope: MemoryScope::Session,
         tier: None,
         lifetime: None,
         content_kind: None,
         salience: None,
         ttl: None,
-    };
+    });
     let json = serde_json::to_value(&e).unwrap();
     assert!(
         json.get("tier").is_none(),
@@ -952,29 +955,30 @@ fn test_store_options_serde() {
 #[test]
 fn test_write_memory_effect_with_new_fields_serde() {
     use layer0::{ContentKind, DurationMs, Lifetime};
-    let e = Effect::WriteMemory {
+    let e = Effect::new(0, EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k".into(),
         value: serde_json::json!(42),
+        memory_scope: MemoryScope::Session,
         tier: None,
         lifetime: Some(Lifetime::Session),
         content_kind: Some(ContentKind::Episodic),
         salience: Some(0.5),
         ttl: Some(DurationMs::from_millis(60_000)),
-    };
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
-    if let Effect::WriteMemory {
+    if let EffectKind::WriteMemory {
         lifetime,
         content_kind,
         salience,
         ttl,
         ..
-    } = back
+    } = &back.kind
     {
-        assert_eq!(lifetime, Some(Lifetime::Session));
-        assert_eq!(content_kind, Some(ContentKind::Episodic));
-        assert_eq!(salience, Some(0.5));
+        assert_eq!(*lifetime, Some(Lifetime::Session));
+        assert_eq!(*content_kind, Some(ContentKind::Episodic));
+        assert_eq!(*salience, Some(0.5));
         assert!(ttl.is_some());
     } else {
         panic!("wrong variant");
@@ -1311,34 +1315,34 @@ fn memory_link_with_metadata_round_trip() {
 #[test]
 fn effect_link_memory_round_trip() {
     use layer0::MemoryLink;
-    let e = Effect::LinkMemory {
+    let e = Effect::new(0, EffectKind::LinkMemory {
         scope: Scope::Global,
         link: MemoryLink::new("notes/meeting", "decisions/arch", "references"),
-    };
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
     assert_eq!(json, json2);
     // Verify the type tag is correct
     let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(val["type"], "link_memory");
+    assert_eq!(val["kind"]["type"], "link_memory");
 }
 
 #[test]
 fn effect_unlink_memory_round_trip() {
-    let e = Effect::UnlinkMemory {
+    let e = Effect::new(0, EffectKind::UnlinkMemory {
         scope: Scope::Session(SessionId::new("s1")),
         from_key: "notes/meeting".into(),
         to_key: "decisions/arch".into(),
         relation: "references".into(),
-    };
+    });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string(&back).unwrap();
     assert_eq!(json, json2);
     // Verify the type tag is correct
     let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(val["type"], "unlink_memory");
+    assert_eq!(val["kind"]["type"], "unlink_memory");
 }
 
 // Compile-time proof: Box<dyn StateStore> and Box<dyn StateReader> are still
@@ -1364,9 +1368,9 @@ async fn collect_all_preserves_intermediate_events() {
             .unwrap();
         sender
             .send(DispatchEvent::EffectEmitted {
-                effect: Effect::Progress {
+                effect: Effect::new(0, EffectKind::Progress {
                     content: Content::text("progress-effect"),
-                },
+                }),
             })
             .await
             .unwrap();

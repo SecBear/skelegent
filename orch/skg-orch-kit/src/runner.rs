@@ -1,6 +1,6 @@
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::Effect;
+use layer0::effect::EffectKind;
 use layer0::error::OrchError;
 use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
@@ -143,18 +143,18 @@ impl OrchestratedRunner {
                     .await
                     .map_err(|e| KitError::Effect(e.to_string()))?
                 {
-                    EffectOutcome::Applied => match effect {
-                        Effect::WriteMemory { key, .. } => {
+                    EffectOutcome::Applied => match &effect.kind {
+                        EffectKind::WriteMemory { key, .. } => {
                             trace
                                 .events
                                 .push(ExecutionEvent::MemoryWritten { key: key.clone() });
                         }
-                        Effect::DeleteMemory { key, .. } => {
+                        EffectKind::DeleteMemory { key, .. } => {
                             trace
                                 .events
                                 .push(ExecutionEvent::MemoryDeleted { key: key.clone() });
                         }
-                        Effect::Signal { target, payload } => {
+                        EffectKind::Signal { target, payload } => {
                             trace.events.push(ExecutionEvent::Signaled {
                                 target: target.clone(),
                                 signal_type: payload.signal_type.clone(),

@@ -1,13 +1,13 @@
 //! [`SwarmOperator`] — peer-to-peer handoff with explicit transition constraints.
 //!
 //! Unlike [`SupervisorOperator`] which uses a central selector, a swarm lets
-//! each operator declare its own successor via [`Effect::Handoff`]. The swarm
+//! each operator declare its own successor via [`EffectKind::Handoff`]. The swarm
 //! validates every transition against a pre-declared adjacency map and errors
 //! hard if an undeclared transition is attempted.
 //!
 //! # Flow
 //! 1. Dispatch the entry operator.
-//! 2. If it exits [`ExitReason::HandedOff`], find the [`Effect::Handoff`] target.
+//! 2. If it exits [`ExitReason::HandedOff`], find the [`EffectKind::Handoff`] target.
 //! 3. Verify the transition `current → target` is allowed.
 //! 4. Dispatch the target; repeat until [`ExitReason::Complete`] or `max_handoffs`.
 //!
@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::Effect;
+use layer0::effect::EffectKind;
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -46,7 +46,7 @@ fn next_dispatch_id() -> DispatchId {
 /// A peer-to-peer handoff operator with explicit transition constraints.
 ///
 /// Each operator in the swarm may hand off to another by emitting
-/// [`Effect::Handoff`] and returning [`ExitReason::HandedOff`]. The swarm
+/// [`EffectKind::Handoff`] and returning [`ExitReason::HandedOff`]. The swarm
 /// validates the transition against the declared adjacency map before
 /// dispatching the next operator.
 ///
@@ -118,7 +118,7 @@ impl Operator for SwarmOperator {
             // Extract the handoff target from this round's effects before
             // moving them into the accumulator.
             let handoff_target: Option<OperatorId> = output.effects.iter().rev().find_map(|e| {
-                if let Effect::Handoff { operator, .. } = e {
+                if let EffectKind::Handoff { ref operator, .. } = e.kind {
                     Some(operator.clone())
                 } else {
                     None
@@ -146,7 +146,7 @@ impl Operator for SwarmOperator {
 
                     let target = handoff_target.ok_or_else(|| {
                         OperatorError::non_retryable(format!(
-                            "operator '{}' exited HandedOff but emitted no Effect::Handoff",
+                            "operator '{}' exited HandedOff but emitted no EffectKind::Handoff",
                             current_id.as_str()
                         ))
                     })?;
@@ -256,7 +256,7 @@ mod tests {
 
     use async_trait::async_trait;
     use layer0::content::Content;
-    use layer0::effect::Effect;
+    use layer0::effect::{Effect, EffectKind};
     use layer0::error::OperatorError;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -309,10 +309,10 @@ mod tests {
                 Content::text(self.reply.clone()),
                 ExitReason::HandedOff,
             );
-            out.effects.push(Effect::Handoff {
+            out.effects.push(Effect::new(0, EffectKind::Handoff {
                 operator: self.target.clone(),
-                state: serde_json::Value::Null,
-            });
+                metadata: None,
+            }));
             Ok(out)
         }
     }

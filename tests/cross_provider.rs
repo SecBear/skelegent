@@ -18,7 +18,9 @@ use skg_provider_anthropic::AnthropicProvider;
 use skg_provider_ollama::OllamaProvider;
 use skg_provider_openai::OpenAIProvider;
 use skg_tool::ToolRegistry;
-use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+use skg_turn::infer::InferRequest;
+use skg_turn::stream::StreamEvent;
+use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -109,31 +111,31 @@ async fn anthropic_streaming_text() {
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
     let provider = AnthropicProvider::new(api_key);
 
-    let request = StreamRequest {
-        model: Some("claude-haiku-4-5-20251001".into()),
-        messages: vec![Message::new(
-            Role::User,
-            Content::text("Say hello in exactly 3 words."),
-        )],
-        tools: vec![],
-        max_tokens: Some(64),
-        temperature: Some(0.0),
-        system: None,
-        extra: serde_json::Value::Null,
-        thinking: None,
-        tool_choice: None,
-        response_format: None,
-    };
+    let request = InferRequest::new(vec![Message::new(
+        Role::User,
+        Content::text("Say hello in exactly 3 words."),
+    )])
+    .with_model("claude-haiku-4-5-20251001")
+    .with_max_tokens(64)
+    .with_temperature(0.0)
+    .with_system("You are a concise assistant.");
 
     let events: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(vec![]));
-    let events_clone = Arc::clone(&events);
 
-    let response = provider
-        .infer_stream(request, move |event| {
-            events_clone.lock().unwrap().push(event);
-        })
+    let mut stream = provider
+        .infer_stream(request)
         .await
         .expect("streaming should succeed");
+
+    let mut response_opt = None;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("stream event should not error");
+        if let StreamEvent::Done(ref resp) = event {
+            response_opt = Some(resp.clone());
+        }
+        events.lock().unwrap().push(event);
+    }
+    let response = response_opt.expect("stream must yield Done");
 
     // Verify response has text
     let text = response.text().expect("response should have text");
@@ -237,42 +239,37 @@ async fn openai_streaming_text() {
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
     let provider = OpenAIProvider::new(api_key);
 
-    let request = StreamRequest {
-        model: Some("gpt-4o-mini".into()),
-        messages: vec![Message::new(
-            Role::User,
-            Content::text("Say hello in exactly 3 words."),
-        )],
-        tools: vec![],
-        max_tokens: Some(64),
-        temperature: Some(0.0),
-        system: None,
-        extra: serde_json::Value::Null,
-        thinking: None,
-        tool_choice: None,
-        response_format: None,
-    };
+    let request = InferRequest::new(vec![Message::new(
+        Role::User,
+        Content::text("Say hello in exactly 3 words."),
+    )])
+    .with_model("gpt-4o-mini")
+    .with_max_tokens(64)
+    .with_temperature(0.0);
 
     let events: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(vec![]));
-    let events_clone = Arc::clone(&events);
 
-    let response = provider
-        .infer_stream(request, move |event| {
-            events_clone.lock().unwrap().push(event);
-        })
+    let mut stream = provider
+        .infer_stream(request)
         .await
         .expect("streaming should succeed");
+
+    let mut response_opt = None;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("stream event should not error");
+        if let StreamEvent::Done(ref resp) = event {
+            response_opt = Some(resp.clone());
+        }
+        events.lock().unwrap().push(event);
+    }
+    let response = response_opt.expect("stream must yield Done");
 
     let text = response.text().expect("response should have text");
     assert!(!text.is_empty());
     println!("OpenAI streaming response: {text}");
 
     let captured = events.lock().unwrap();
-    assert!(
-        captured
-            .iter()
-            .any(|e| matches!(e, StreamEvent::TextDelta(_)))
-    );
+    assert!(captured.iter().any(|e| matches!(e, StreamEvent::TextDelta(_))));
     assert!(captured.iter().any(|e| matches!(e, StreamEvent::Done(_))));
     assert!(response.usage.input_tokens > 0);
     assert!(response.usage.output_tokens > 0);
@@ -326,42 +323,37 @@ async fn ollama_react_simple_prompt() {
 async fn ollama_streaming_text() {
     let provider = OllamaProvider::new();
 
-    let request = StreamRequest {
-        model: Some("llama3.2:1b".into()),
-        messages: vec![Message::new(
-            Role::User,
-            Content::text("Say hello in exactly 3 words."),
-        )],
-        tools: vec![],
-        max_tokens: Some(64),
-        temperature: Some(0.0),
-        system: None,
-        extra: serde_json::Value::Null,
-        thinking: None,
-        tool_choice: None,
-        response_format: None,
-    };
+    let request = InferRequest::new(vec![Message::new(
+        Role::User,
+        Content::text("Say hello in exactly 3 words."),
+    )])
+    .with_model("llama3.2:1b")
+    .with_max_tokens(64)
+    .with_temperature(0.0);
 
     let events: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(vec![]));
-    let events_clone = Arc::clone(&events);
 
-    let response = provider
-        .infer_stream(request, move |event| {
-            events_clone.lock().unwrap().push(event);
-        })
+    let mut stream = provider
+        .infer_stream(request)
         .await
         .expect("streaming should succeed");
+
+    let mut response_opt = None;
+    while let Some(event) = stream.next().await {
+        let event = event.expect("stream event should not error");
+        if let StreamEvent::Done(ref resp) = event {
+            response_opt = Some(resp.clone());
+        }
+        events.lock().unwrap().push(event);
+    }
+    let response = response_opt.expect("stream must yield Done");
 
     let text = response.text().expect("response should have text");
     assert!(!text.is_empty());
     println!("Ollama streaming response: {text}");
 
     let captured = events.lock().unwrap();
-    assert!(
-        captured
-            .iter()
-            .any(|e| matches!(e, StreamEvent::TextDelta(_)))
-    );
+    assert!(captured.iter().any(|e| matches!(e, StreamEvent::TextDelta(_))));
     assert!(captured.iter().any(|e| matches!(e, StreamEvent::Done(_))));
     println!(
         "Tokens: {} in, {} out",

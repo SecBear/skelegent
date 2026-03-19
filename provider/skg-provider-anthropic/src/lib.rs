@@ -11,7 +11,7 @@ use layer0::content::{Content, ContentBlock, ContentSource as L0ContentSource};
 use skg_auth::{AuthProvider, AuthRequest};
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
 use skg_turn::provider::{Provider, ProviderError};
-use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+use skg_turn::stream::{InferStream, StreamEvent};
 use skg_turn::types::*;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -489,35 +489,20 @@ impl Provider for AnthropicProvider {
         }
         .instrument(span)
     }
-}
-
-impl StreamProvider for AnthropicProvider {
     fn infer_stream(
         &self,
-        request: StreamRequest,
-        on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-    ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        request: InferRequest,
+    ) -> impl std::future::Future<Output = Result<InferStream, skg_turn::provider::ProviderError>> + Send {
+        skg_turn::assert_real_requests_allowed();
         let source = self.api_key_source.clone();
-        let infer_request = InferRequest {
-            model: request.model,
-            messages: request.messages,
-            tools: request.tools,
-            max_tokens: request.max_tokens,
-            temperature: request.temperature,
-            system: request.system,
-            extra: request.extra,
-            thinking: request.thinking,
-            tool_choice: request.tool_choice,
-            response_format: request.response_format,
-        };
-        let mut api_request = self.build_infer_request(&infer_request);
+        let mut api_request = self.build_infer_request(&request);
         api_request.stream = true;
         let client = self.client.clone();
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
-        let extra = infer_request.extra.clone();
+        let extra = request.extra.clone();
 
-        let model = infer_request.model.as_deref().unwrap_or("unknown");
+        let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer_stream", provider = "anthropic", model);
 
         async move {
@@ -571,243 +556,244 @@ impl StreamProvider for AnthropicProvider {
                 return Err(map_error_response(status, &body));
             }
 
-            // Process SSE byte stream
-            let mut stream = http_response.bytes_stream();
-            let mut buf = String::new();
+            let stream = async_stream::try_stream! {
+                // Process SSE byte stream
+                let mut byte_stream = http_response.bytes_stream();
+                let mut buf = String::new();
 
-            // Accumulation state
-            let mut model_name = String::new();
-            let mut input_tokens: u64 = 0;
-            let mut output_tokens: u64 = 0;
-            let mut cache_read_tokens: Option<u64> = None;
-            let mut cache_creation_tokens: Option<u64> = None;
-            let mut stop_reason = StopReason::EndTurn;
-            let mut text_parts: Vec<ContentBlock> = Vec::new();
-            let mut tool_calls: Vec<ToolCall> = Vec::new();
+                // Accumulation state
+                let mut model_name = String::new();
+                let mut input_tokens: u64 = 0;
+                let mut output_tokens: u64 = 0;
+                let mut cache_read_tokens: Option<u64> = None;
+                let mut cache_creation_tokens: Option<u64> = None;
+                let mut stop_reason = StopReason::EndTurn;
+                let mut text_parts: Vec<ContentBlock> = Vec::new();
+                let mut tool_calls: Vec<ToolCall> = Vec::new();
 
-            // Per-block accumulators (indexed by content_block index)
-            let mut block_texts: Vec<String> = Vec::new();
-            let mut block_tool_ids: Vec<String> = Vec::new();
-            let mut block_tool_names: Vec<String> = Vec::new();
-            let mut block_tool_inputs: Vec<String> = Vec::new();
-            // Track which indices are tool_use vs thinking vs text
-            let mut block_is_tool: Vec<bool> = Vec::new();
-            let mut block_is_thinking: Vec<bool> = Vec::new();
-            let mut block_signatures: Vec<String> = Vec::new();
+                // Per-block accumulators (indexed by content_block index)
+                let mut block_texts: Vec<String> = Vec::new();
+                let mut block_tool_ids: Vec<String> = Vec::new();
+                let mut block_tool_names: Vec<String> = Vec::new();
+                let mut block_tool_inputs: Vec<String> = Vec::new();
+                // Track which indices are tool_use vs thinking vs text
+                let mut block_is_tool: Vec<bool> = Vec::new();
+                let mut block_is_thinking: Vec<bool> = Vec::new();
+                let mut block_signatures: Vec<String> = Vec::new();
 
-            while let Some(chunk) = stream.next().await {
-                let bytes = chunk.map_err(|e| ProviderError::TransientError {
-                    message: format!("stream read error: {e}"),
-                    status: None,
-                })?;
-                buf.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(chunk) = byte_stream.next().await {
+                    let bytes = chunk.map_err(|e| ProviderError::TransientError {
+                        message: format!("stream read error: {e}"),
+                        status: None,
+                    })?;
+                    buf.push_str(&String::from_utf8_lossy(&bytes));
 
-                // Process complete SSE frames
-                while let Some(frame_end) = buf.find("\n\n") {
-                    let frame = buf[..frame_end].to_string();
-                    buf = buf[frame_end + 2..].to_string();
+                    // Process complete SSE frames
+                    while let Some(frame_end) = buf.find("\n\n") {
+                        let frame = buf[..frame_end].to_string();
+                        buf = buf[frame_end + 2..].to_string();
 
-                    // Parse SSE: extract event type and data
-                    let mut event_type = String::new();
-                    let mut data = String::new();
-                    for line in frame.lines() {
-                        if let Some(rest) = line.strip_prefix("event: ") {
-                            event_type = rest.to_string();
-                        } else if let Some(rest) = line.strip_prefix("data: ") {
-                            data = rest.to_string();
+                        // Parse SSE: extract event type and data
+                        let mut event_type = String::new();
+                        let mut data = String::new();
+                        for line in frame.lines() {
+                            if let Some(rest) = line.strip_prefix("event: ") {
+                                event_type = rest.to_string();
+                            } else if let Some(rest) = line.strip_prefix("data: ") {
+                                data = rest.to_string();
+                            }
                         }
-                    }
 
-                    if data.is_empty() {
-                        continue;
-                    }
-
-                    let parsed: StreamEventData = match serde_json::from_str(&data) {
-                        Ok(ev) => ev,
-                        Err(e) => {
-                            tracing::warn!(
-                                event_type,
-                                error = %e,
-                                "failed to parse SSE event"
-                            );
+                        if data.is_empty() {
                             continue;
                         }
-                    };
 
-                    match parsed {
-                        StreamEventData::MessageStart { message } => {
-                            model_name = message.model;
-                            input_tokens = message.usage.input_tokens;
-                            cache_read_tokens = message.usage.cache_read_input_tokens;
-                            cache_creation_tokens = message.usage.cache_creation_input_tokens;
-                        }
-                        StreamEventData::ContentBlockStart {
-                            index,
-                            content_block,
-                        } => {
-                            // Ensure accumulators are large enough
-                            while block_texts.len() <= index {
-                                block_texts.push(String::new());
-                                block_tool_ids.push(String::new());
-                                block_tool_names.push(String::new());
-                                block_tool_inputs.push(String::new());
-                                block_is_tool.push(false);
-                                block_is_thinking.push(false);
-                                block_signatures.push(String::new());
+                        let parsed: StreamEventData = match serde_json::from_str(&data) {
+                            Ok(ev) => ev,
+                            Err(e) => {
+                                tracing::warn!(
+                                    event_type,
+                                    error = %e,
+                                    "failed to parse SSE event"
+                                );
+                                continue;
                             }
-                            match &content_block {
-                                AnthropicContentBlock::Text { .. } => {
-                                    block_is_tool[index] = false;
-                                    block_is_thinking[index] = false;
+                        };
+
+                        match parsed {
+                            StreamEventData::MessageStart { message } => {
+                                model_name = message.model;
+                                input_tokens = message.usage.input_tokens;
+                                cache_read_tokens = message.usage.cache_read_input_tokens;
+                                cache_creation_tokens = message.usage.cache_creation_input_tokens;
+                            }
+                            StreamEventData::ContentBlockStart {
+                                index,
+                                content_block,
+                            } => {
+                                // Ensure accumulators are large enough
+                                while block_texts.len() <= index {
+                                    block_texts.push(String::new());
+                                    block_tool_ids.push(String::new());
+                                    block_tool_names.push(String::new());
+                                    block_tool_inputs.push(String::new());
+                                    block_is_tool.push(false);
+                                    block_is_thinking.push(false);
+                                    block_signatures.push(String::new());
                                 }
-                                AnthropicContentBlock::ToolUse { id, name, .. } => {
-                                    block_is_tool[index] = true;
-                                    block_is_thinking[index] = false;
-                                    block_tool_ids[index] = id.clone();
-                                    block_tool_names[index] = name.clone();
-                                    on_event(StreamEvent::ToolCallStart {
+                                match &content_block {
+                                    AnthropicContentBlock::Text { .. } => {
+                                        block_is_tool[index] = false;
+                                        block_is_thinking[index] = false;
+                                    }
+                                    AnthropicContentBlock::ToolUse { id, name, .. } => {
+                                        block_is_tool[index] = true;
+                                        block_is_thinking[index] = false;
+                                        block_tool_ids[index] = id.clone();
+                                        block_tool_names[index] = name.clone();
+                                        yield StreamEvent::ToolCallStart {
+                                            index,
+                                            id: id.clone(),
+                                            name: name.clone(),
+                                        };
+                                    }
+                                    AnthropicContentBlock::Thinking { .. } => {
+                                        block_is_tool[index] = false;
+                                        block_is_thinking[index] = true;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            StreamEventData::ContentBlockDelta { index, delta } => match delta {
+                                StreamDelta::TextDelta { text } => {
+                                    if index < block_texts.len() {
+                                        block_texts[index].push_str(&text);
+                                    }
+                                    yield StreamEvent::TextDelta(text);
+                                }
+                                StreamDelta::InputJsonDelta { partial_json } => {
+                                    if index < block_tool_inputs.len() {
+                                        block_tool_inputs[index].push_str(&partial_json);
+                                    }
+                                    yield StreamEvent::ToolCallDelta {
                                         index,
-                                        id: id.clone(),
-                                        name: name.clone(),
-                                    });
+                                        json_delta: partial_json,
+                                    };
                                 }
-                                AnthropicContentBlock::Thinking { .. } => {
-                                    block_is_tool[index] = false;
-                                    block_is_thinking[index] = true;
+                                StreamDelta::ThinkingDelta { thinking } => {
+                                    if index < block_texts.len() {
+                                        block_texts[index].push_str(&thinking);
+                                    }
+                                    yield StreamEvent::ThinkingDelta(thinking);
                                 }
-                                _ => {}
+                                StreamDelta::SignatureDelta { signature } => {
+                                    if index < block_signatures.len() {
+                                        block_signatures[index].push_str(&signature);
+                                    }
+                                }
+                            },
+                            StreamEventData::ContentBlockStop { index } => {
+                                if index < block_is_tool.len() {
+                                    if block_is_tool[index] {
+                                        let input_json: serde_json::Value = serde_json::from_str(
+                                            &block_tool_inputs[index],
+                                        )
+                                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                                        tool_calls.push(ToolCall {
+                                            id: block_tool_ids[index].clone(),
+                                            name: block_tool_names[index].clone(),
+                                            input: input_json,
+                                        });
+                                    } else if block_is_thinking[index] {
+                                        text_parts.push(ContentBlock::Thinking {
+                                            thinking: block_texts[index].clone(),
+                                            signature: if block_signatures[index].is_empty() {
+                                                None
+                                            } else {
+                                                Some(block_signatures[index].clone())
+                                            },
+                                        });
+                                    } else {
+                                        text_parts.push(ContentBlock::Text {
+                                            text: block_texts[index].clone(),
+                                        });
+                                    }
+                                }
                             }
+                            StreamEventData::MessageDelta { delta, usage } => {
+                                if let Some(sr) = delta.stop_reason {
+                                    stop_reason = match sr.as_str() {
+                                        "end_turn" => StopReason::EndTurn,
+                                        "tool_use" => StopReason::ToolUse,
+                                        "max_tokens" => StopReason::MaxTokens,
+                                        "refusal" => StopReason::ContentFilter,
+                                        _ => StopReason::EndTurn,
+                                    };
+                                }
+                                if let Some(u) = usage {
+                                    output_tokens = u.output_tokens;
+                                    let usage_event = TokenUsage {
+                                        input_tokens,
+                                        output_tokens,
+                                        cache_read_tokens,
+                                        cache_creation_tokens,
+                                        reasoning_tokens: None,
+                                    };
+                                    yield StreamEvent::Usage(usage_event);
+                                }
+                            }
+                            StreamEventData::Error { error } => {
+                                Err(ProviderError::TransientError {
+                                    message: format!(
+                                        "stream error ({}): {}",
+                                        error.error_type, error.message
+                                    ),
+                                    status: None,
+                                })?;
+                            }
+                            StreamEventData::MessageStop | StreamEventData::Ping => {}
                         }
-                        StreamEventData::ContentBlockDelta { index, delta } => match delta {
-                            StreamDelta::TextDelta { text } => {
-                                if index < block_texts.len() {
-                                    block_texts[index].push_str(&text);
-                                }
-                                on_event(StreamEvent::TextDelta(text));
-                            }
-                            StreamDelta::InputJsonDelta { partial_json } => {
-                                if index < block_tool_inputs.len() {
-                                    block_tool_inputs[index].push_str(&partial_json);
-                                }
-                                on_event(StreamEvent::ToolCallDelta {
-                                    index,
-                                    json_delta: partial_json,
-                                });
-                            }
-                            StreamDelta::ThinkingDelta { thinking } => {
-                                if index < block_texts.len() {
-                                    block_texts[index].push_str(&thinking);
-                                }
-                                on_event(StreamEvent::ThinkingDelta(thinking));
-                            }
-                            StreamDelta::SignatureDelta { signature } => {
-                                if index < block_signatures.len() {
-                                    block_signatures[index].push_str(&signature);
-                                }
-                            }
-                        },
-                        StreamEventData::ContentBlockStop { index } => {
-                            if index < block_is_tool.len() {
-                                if block_is_tool[index] {
-                                    let input_json: serde_json::Value = serde_json::from_str(
-                                        &block_tool_inputs[index],
-                                    )
-                                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                                    tool_calls.push(ToolCall {
-                                        id: block_tool_ids[index].clone(),
-                                        name: block_tool_names[index].clone(),
-                                        input: input_json,
-                                    });
-                                } else if block_is_thinking[index] {
-                                    text_parts.push(ContentBlock::Thinking {
-                                        thinking: block_texts[index].clone(),
-                                        signature: if block_signatures[index].is_empty() {
-                                            None
-                                        } else {
-                                            Some(block_signatures[index].clone())
-                                        },
-                                    });
-                                } else {
-                                    text_parts.push(ContentBlock::Text {
-                                        text: block_texts[index].clone(),
-                                    });
-                                }
-                            }
-                        }
-                        StreamEventData::MessageDelta { delta, usage } => {
-                            if let Some(sr) = delta.stop_reason {
-                                stop_reason = match sr.as_str() {
-                                    "end_turn" => StopReason::EndTurn,
-                                    "tool_use" => StopReason::ToolUse,
-                                    "max_tokens" => StopReason::MaxTokens,
-                                    "refusal" => StopReason::ContentFilter,
-                                    _ => StopReason::EndTurn,
-                                };
-                            }
-                            if let Some(u) = usage {
-                                output_tokens = u.output_tokens;
-                                let usage_event = TokenUsage {
-                                    input_tokens,
-                                    output_tokens,
-                                    cache_read_tokens,
-                                    cache_creation_tokens,
-                                    reasoning_tokens: None,
-                                };
-                                on_event(StreamEvent::Usage(usage_event));
-                            }
-                        }
-                        StreamEventData::Error { error } => {
-                            return Err(ProviderError::TransientError {
-                                message: format!(
-                                    "stream error ({}): {}",
-                                    error.error_type, error.message
-                                ),
-                                status: None,
-                            });
-                        }
-                        StreamEventData::MessageStop | StreamEventData::Ping => {}
                     }
                 }
-            }
 
-            // Build final response
-            let content = if text_parts.len() == 1 {
-                if let ContentBlock::Text { text } = &text_parts[0] {
-                    Content::Text(text.clone())
+                // Build final response
+                let content = if text_parts.len() == 1 {
+                    if let ContentBlock::Text { text } = &text_parts[0] {
+                        Content::Text(text.clone())
+                    } else {
+                        Content::Blocks(text_parts)
+                    }
+                } else if text_parts.is_empty() {
+                    Content::text("")
                 } else {
                     Content::Blocks(text_parts)
-                }
-            } else if text_parts.is_empty() {
-                Content::text("")
-            } else {
-                Content::Blocks(text_parts)
+                };
+
+                let usage = TokenUsage {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    reasoning_tokens: None,
+                };
+
+                let pricing = pricing::lookup(&model_name);
+                let cost = pricing::compute_cost(&pricing, &usage);
+
+                let response = InferResponse {
+                    content,
+                    tool_calls,
+                    stop_reason,
+                    usage,
+                    model: model_name,
+                    cost: Some(cost),
+                    truncated: None,
+                };
+
+                tracing::info!(input_tokens, output_tokens, "streaming inference finished");
+                yield StreamEvent::Done(response);
             };
-
-            let usage = TokenUsage {
-                input_tokens,
-                output_tokens,
-                cache_read_tokens,
-                cache_creation_tokens,
-                reasoning_tokens: None,
-            };
-
-            let pricing = pricing::lookup(&model_name);
-            let cost = pricing::compute_cost(&pricing, &usage);
-
-            let response = InferResponse {
-                content,
-                tool_calls,
-                stop_reason,
-                usage,
-                model: model_name,
-                cost: Some(cost),
-                truncated: None,
-            };
-
-            on_event(StreamEvent::Done(response.clone()));
-
-            tracing::info!(input_tokens, output_tokens, "streaming inference finished");
-            Ok(response)
+            Ok(InferStream::new(stream))
         }
         .instrument(span)
     }

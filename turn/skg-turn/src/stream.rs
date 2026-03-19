@@ -1,14 +1,18 @@
-//! Streaming inference types and trait.
+//! Streaming inference types.
 //!
-//! [`StreamProvider`] extends [`Provider`] with streaming inference.
-//! [`StreamEvent`] represents incremental chunks from the model.
-//! The caller accumulates events into a final [`InferResponse`].
+//! [`InferStream`] wraps a `Stream<Item = Result<StreamEvent, ProviderError>>` and is
+//! returned by [`crate::provider::Provider::infer_stream`]. Consumers poll it via
+//! `StreamExt::next()` from `futures_util` or `tokio_stream`.
+//!
+//! Cancellation is implicit: dropping an `InferStream` drops the inner stream, which
+//! cancels the underlying HTTP request at the next `.await` point.
 
 use crate::infer::InferResponse;
 use crate::provider::ProviderError;
-use crate::types::{TokenUsage, ToolSchema};
-use layer0::context::Message;
-use std::future::Future;
+use crate::types::TokenUsage;
+use futures_core::Stream;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 /// A single incremental event from a streaming inference call.
 #[non_exhaustive]
@@ -44,170 +48,85 @@ pub enum StreamEvent {
 
     /// Streaming is complete. Contains the fully-accumulated response.
     ///
-    /// After this event, no more events will be emitted.
+    /// After this event, no more events will be emitted. Every provider
+    /// implementation **must** emit exactly one `Done` event as the last item.
     Done(InferResponse),
 }
 
-/// Request for a streaming inference call.
+/// A streaming inference response.
 ///
-/// Same shape as [`InferRequest`], but used with [`StreamProvider::infer_stream`].
-#[derive(Debug, Clone)]
-pub struct StreamRequest {
-    /// Model to use. `None` = provider default.
-    pub model: Option<String>,
-
-    /// Conversation messages in layer0 format.
-    pub messages: Vec<Message>,
-
-    /// Available tools the model may call.
-    pub tools: Vec<ToolSchema>,
-
-    /// Maximum output tokens.
-    pub max_tokens: Option<u32>,
-
-    /// Sampling temperature.
-    pub temperature: Option<f64>,
-
-    /// System prompt.
-    pub system: Option<String>,
-
-    /// Provider-specific config passthrough.
-    pub extra: serde_json::Value,
-
-    /// Extended thinking configuration.
-    pub thinking: Option<crate::types::ThinkingConfig>,
-
-    /// Tool choice constraint.
-    pub tool_choice: Option<crate::types::ToolChoice>,
-
-    /// Requested response format.
-    pub response_format: Option<crate::types::ResponseFormat>,
-}
-
-impl From<crate::infer::InferRequest> for StreamRequest {
-    fn from(req: crate::infer::InferRequest) -> Self {
-        Self {
-            model: req.model,
-            messages: req.messages,
-            tools: req.tools,
-            max_tokens: req.max_tokens,
-            temperature: req.temperature,
-            system: req.system,
-            extra: req.extra,
-            thinking: req.thinking,
-            tool_choice: req.tool_choice,
-            response_format: req.response_format,
-        }
-    }
-}
-
-/// Callback-based streaming interface for providers.
+/// Wraps a `Stream<Item = Result<StreamEvent, ProviderError>>` for real-time
+/// consumption. The stream ends with a [`StreamEvent::Done`] event that carries
+/// the fully-accumulated [`InferResponse`].
 ///
-/// Providers that support streaming implement this trait alongside [`Provider`].
-/// The streaming model uses a callback instead of `Stream` to avoid pinning
-/// complexity and `async-stream` dependencies at the trait boundary.
+/// `InferStream` is [`Unpin`] because `Pin<Box<T>>` is always `Unpin` regardless
+/// of `T`. You can call `StreamExt::next()` on it directly without `pin_mut!`.
 ///
-/// ```ignore
-/// use skg_turn::stream::{StreamProvider, StreamEvent, StreamRequest};
+/// # Example
 ///
-/// async fn example(provider: &impl StreamProvider) {
-///     let request = StreamRequest { /* ... */ };
-///     let response = provider.infer_stream(request, |event| {
-///         match event {
-///             StreamEvent::TextDelta(text) => print!("{text}"),
-///             StreamEvent::Done(response) => println!("\nDone!"),
-///             _ => {}
-///         }
-///     }).await.unwrap();
+/// ```rust,ignore
+/// use futures_util::StreamExt;
+///
+/// let mut stream = provider.infer_stream(request).await?;
+/// while let Some(event) = stream.next().await {
+///     match event? {
+///         StreamEvent::TextDelta(text) => print!("{text}"),
+///         StreamEvent::Done(response) => { /* use final response */ }
+///         _ => {}
+///     }
 /// }
 /// ```
-pub trait StreamProvider: crate::provider::Provider {
-    /// Run streaming inference.
-    ///
-    /// The `on_event` callback is called for each streaming chunk. The final
-    /// [`StreamEvent::Done`] event contains the accumulated [`InferResponse`].
-    ///
-    /// Returns the complete [`InferResponse`] when streaming finishes.
-    fn infer_stream(
-        &self,
-        request: StreamRequest,
-        on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-    ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send;
+pub struct InferStream {
+    inner: Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
 }
 
-/// Blanket fallback: any Provider can "stream" by doing a single non-streaming
-/// call and emitting the result as one `Done` event.
+impl InferStream {
+    /// Create from any `Send + 'static` stream of `StreamEvent` results.
+    pub fn new(
+        stream: impl Stream<Item = Result<StreamEvent, ProviderError>> + Send + 'static,
+    ) -> Self {
+        Self {
+            inner: Box::pin(stream),
+        }
+    }
+}
+
+impl Stream for InferStream {
+    type Item = Result<StreamEvent, ProviderError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+/// Create an `InferStream` that emits a single [`StreamEvent::Done`] wrapping `response`.
 ///
-/// This means `stream_react_loop` works with non-streaming providers — they
-/// just don't get incremental output. No separate code path needed.
-pub async fn infer_stream_fallback<P: crate::provider::Provider>(
-    provider: &P,
-    request: StreamRequest,
-    on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-) -> Result<InferResponse, ProviderError> {
-    let infer_request = crate::infer::InferRequest {
-        model: request.model,
-        messages: request.messages,
-        tools: request.tools,
-        max_tokens: request.max_tokens,
-        temperature: request.temperature,
-        system: request.system,
-        extra: request.extra,
-        thinking: request.thinking,
-        tool_choice: request.tool_choice,
-        response_format: request.response_format,
-    };
-
-    let response = provider.infer(infer_request).await?;
-
-    // Emit text as a single delta if present
-    if let Some(text) = response.text() {
-        on_event(StreamEvent::TextDelta(text.to_string()));
+/// This is used by [`crate::provider::Provider::infer_stream`]'s default implementation
+/// for providers that do not support native token-by-token streaming.
+pub fn single_response_stream(response: InferResponse) -> InferStream {
+    struct OnceStream {
+        event: Option<Result<StreamEvent, ProviderError>>,
     }
 
-    // Emit thinking blocks as ThinkingDelta events
-    if let layer0::content::Content::Blocks(blocks) = &response.content {
-        for block in blocks {
-            if let layer0::content::ContentBlock::Thinking { thinking, .. } = block {
-                on_event(StreamEvent::ThinkingDelta(thinking.clone()));
-            }
+    impl Stream for OnceStream {
+        type Item = Result<StreamEvent, ProviderError>;
+
+        fn poll_next(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            Poll::Ready(self.event.take())
         }
     }
 
-    // Emit tool call starts
-    for (i, call) in response.tool_calls.iter().enumerate() {
-        on_event(StreamEvent::ToolCallStart {
-            index: i,
-            id: call.id.clone(),
-            name: call.name.clone(),
-        });
-        on_event(StreamEvent::ToolCallDelta {
-            index: i,
-            json_delta: call.input.to_string(),
-        });
-    }
-
-    // Emit usage
-    on_event(StreamEvent::Usage(response.usage.clone()));
-
-    // Emit done
-    on_event(StreamEvent::Done(response.clone()));
-
-    Ok(response)
+    InferStream::new(OnceStream {
+        event: Some(Ok(StreamEvent::Done(response))),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
-
-    #[test]
-    fn stream_request_from_infer_request() {
-        let infer = crate::infer::InferRequest::new(vec![]);
-        let stream: StreamRequest = infer.into();
-        assert!(stream.messages.is_empty());
-        assert!(stream.model.is_none());
-    }
 
     #[test]
     fn stream_event_text_delta() {
@@ -225,46 +144,74 @@ mod tests {
         assert!(matches!(event, StreamEvent::ToolCallStart { index: 0, .. }));
     }
 
+    /// Verify that `single_response_stream` yields exactly one `Done` event then `None`.
     #[tokio::test]
-    async fn fallback_emits_text_and_done() {
+    async fn single_response_stream_yields_done() {
+        use futures_util::StreamExt;
+
+        use layer0::content::Content;
+        let response = crate::infer::InferResponse {
+            content: Content::text("hello"),
+            tool_calls: vec![],
+            stop_reason: crate::types::StopReason::EndTurn,
+            usage: crate::types::TokenUsage::default(),
+            model: "test".into(),
+            cost: None,
+            truncated: None,
+        };
+        let mut stream = single_response_stream(response);
+
+        let event = stream.next().await.unwrap().unwrap();
+        assert!(matches!(event, StreamEvent::Done(ref r) if r.text().unwrap() == "hello"));
+
+        // Stream must be exhausted after Done.
+        assert!(stream.next().await.is_none());
+    }
+
+    /// Default `infer_stream` impl (via TestProvider) wraps the response in Done.
+    #[tokio::test]
+    async fn infer_stream_default_impl_wraps_response() {
+        use futures_util::StreamExt;
+        use crate::provider::Provider;
         use crate::test_utils::TestProvider;
 
         let provider = TestProvider::new();
         provider.respond_with_text("hello world");
 
-        let request = StreamRequest {
-            model: None,
-            messages: vec![],
-            tools: vec![],
-            max_tokens: None,
-            temperature: None,
-            system: None,
-            extra: serde_json::Value::Null,
-            thinking: None,
-            tool_choice: None,
-            response_format: None,
+        let request = crate::infer::InferRequest::new(vec![]);
+        let mut stream = provider.infer_stream(request).await.unwrap();
+
+        let event = stream.next().await.unwrap().unwrap();
+        match event {
+            StreamEvent::Done(resp) => {
+                assert_eq!(resp.text().unwrap(), "hello world");
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
+
+        // Exactly one item: Done.
+        assert!(stream.next().await.is_none());
+    }
+
+    /// Verify InferStream can be collected into a Vec (tests Stream trait impl).
+    #[tokio::test]
+    async fn stream_to_response_collect() {
+        use futures_util::StreamExt;
+
+        use layer0::content::Content;
+        let response = crate::infer::InferResponse {
+            content: Content::text("collected"),
+            tool_calls: vec![],
+            stop_reason: crate::types::StopReason::EndTurn,
+            usage: crate::types::TokenUsage::default(),
+            model: "test".into(),
+            cost: None,
+            truncated: None,
         };
+        let stream = single_response_stream(response);
+        let events: Vec<_> = stream.collect().await;
 
-        let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
-        let events_clone = Arc::clone(&events);
-
-        let response = infer_stream_fallback(&provider, request, move |event| {
-            let label = match &event {
-                StreamEvent::TextDelta(t) => format!("text:{t}"),
-                StreamEvent::Done(_) => "done".into(),
-                StreamEvent::Usage(_) => "usage".into(),
-                _ => "other".into(),
-            };
-            events_clone.lock().unwrap().push(label);
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(response.text().unwrap(), "hello world");
-
-        let captured = events.lock().unwrap();
-        assert!(captured.iter().any(|e| e.starts_with("text:")));
-        assert!(captured.iter().any(|e| e == "done"));
-        assert!(captured.iter().any(|e| e == "usage"));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Ok(StreamEvent::Done(_))));
     }
 }

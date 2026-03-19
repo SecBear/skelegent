@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::effect::{Effect, Scope};
+use layer0::effect::{Effect, EffectKind, Scope};
 use layer0::error::{OrchError, StateError};
 use layer0::middleware::{StoreStack, StoreWriteNext};
 use layer0::operator::{OperatorInput, TriggerType};
@@ -103,8 +103,8 @@ where
         effect: &Effect,
         _ctx: &DispatchContext,
     ) -> Result<EffectOutcome, Error> {
-        match effect {
-            Effect::WriteMemory {
+        match &effect.kind {
+            EffectKind::WriteMemory {
                 scope,
                 key,
                 value,
@@ -113,6 +113,7 @@ where
                 content_kind,
                 salience,
                 ttl,
+                memory_scope: _,
             } => {
                 let opts = StoreOptions {
                     tier: *tier,
@@ -142,12 +143,12 @@ where
                     Ok(EffectOutcome::Applied)
                 }
             }
-            Effect::DeleteMemory { scope, key } => {
+            EffectKind::DeleteMemory { scope, key } => {
                 // StateStore::delete is idempotent by contract — missing key is Ok.
                 self.state.delete(scope, key).await?;
                 Ok(EffectOutcome::Applied)
             }
-            Effect::Signal { target, payload } => match &self.signaler {
+            EffectKind::Signal { target, payload } => match &self.signaler {
                 Some(s) => {
                     s.signal(target, payload.clone()).await?;
                     Ok(EffectOutcome::Applied)
@@ -156,24 +157,25 @@ where
                     "signal requires a Signalable implementation".into(),
                 ))),
             },
-            Effect::Delegate { operator, input } => Ok(EffectOutcome::Delegate {
+            EffectKind::Delegate { operator, input } => Ok(EffectOutcome::Delegate {
                 operator: operator.clone(),
                 input: (*input.clone()).clone(),
             }),
-            Effect::Handoff { operator, state } => {
+            EffectKind::Handoff { operator, metadata } => {
+                let state = metadata.as_ref().cloned().unwrap_or(serde_json::Value::Null);
                 let mut input =
                     OperatorInput::new(Content::text(state.to_string()), TriggerType::Task);
-                input.metadata = state.clone();
+                input.metadata = state;
                 Ok(EffectOutcome::Handoff {
                     operator: operator.clone(),
                     input,
                 })
             }
-            Effect::LinkMemory { scope, link } => {
+            EffectKind::LinkMemory { scope, link } => {
                 self.state.link(scope, link).await?;
                 Ok(EffectOutcome::Applied)
             }
-            Effect::UnlinkMemory {
+            EffectKind::UnlinkMemory {
                 scope,
                 from_key,
                 to_key,
@@ -183,7 +185,7 @@ where
                 Ok(EffectOutcome::Applied)
             }
             // Custom effects: treat as unknown for policy handling.
-            Effect::Custom { .. } => match self.unknown_policy {
+            EffectKind::Custom { .. } => match self.unknown_policy {
                 UnknownEffectPolicy::IgnoreAndWarn => {
                     tracing::warn!("ignoring unsupported effect: {:?}", effect);
                     Ok(EffectOutcome::Skipped)

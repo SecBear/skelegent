@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::effect::{Effect, Scope};
+use layer0::effect::{Effect, EffectKind, MemoryScope, Scope};
 use layer0::error::StateError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
@@ -46,16 +46,17 @@ async fn handler_halt_hook_skips_write() {
 
     let handler = LocalEffectHandler::new(state.clone(), None).with_store_middleware(stack);
 
-    let effect = Effect::WriteMemory {
+    let effect = Effect::new(0, EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k".into(),
         value: json!("v"),
+        memory_scope: MemoryScope::Session,
         tier: None,
         lifetime: None,
         content_kind: None,
         salience: None,
         ttl: None,
-    };
+    });
 
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
     let outcome = handler
@@ -78,16 +79,17 @@ async fn handler_no_hooks_writes_normally() {
     let state = Arc::new(InMemoryStore::new());
     let handler = LocalEffectHandler::new(state.clone(), None);
 
-    let effect = Effect::WriteMemory {
+    let effect = Effect::new(0, EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k2".into(),
         value: json!(99),
+        memory_scope: MemoryScope::Session,
         tier: None,
         lifetime: None,
         content_kind: None,
         salience: None,
         ttl: None,
-    };
+    });
 
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
     let outcome = handler.handle(&effect, &ctx).await.expect("handle ok");

@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 //! OpenAI Codex (Responses API) provider for skg-turn.
 //!
-//! Implements [`Provider`] and [`StreamProvider`] for the OpenAI Responses API,
+//! Implements [`Provider`] for the OpenAI Responses API,
 //! supporting both the standard `api.openai.com/v1/responses` endpoint and the
 //! Codex backend at `chatgpt.com/backend-api/codex/responses`.
 //!
@@ -26,7 +26,7 @@ use layer0::content::{Content, ContentBlock};
 use rust_decimal::Decimal;
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
 use skg_turn::provider::{Provider, ProviderError};
-use skg_turn::stream::{StreamEvent, StreamProvider, StreamRequest};
+use skg_turn::stream::{InferStream, StreamEvent};
 use skg_turn::types::*;
 use tracing::Instrument;
 use types::*;
@@ -138,29 +138,13 @@ impl CodexProvider {
         }
     }
 
-    /// Build a [`CodexRequest`] from a [`StreamRequest`].
-    fn build_codex_stream_request(&self, request: &StreamRequest) -> CodexRequest {
-        let infer = InferRequest {
-            model: request.model.clone(),
-            messages: request.messages.clone(),
-            tools: request.tools.clone(),
-            max_tokens: request.max_tokens,
-            temperature: request.temperature,
-            system: request.system.clone(),
-            extra: request.extra.clone(),
-            thinking: request.thinking.clone(),
-            tool_choice: request.tool_choice.clone(),
-            response_format: request.response_format.clone(),
-        };
-        self.build_codex_request(&infer)
-    }
-
-    /// Send request and process SSE stream, emitting events via callback.
-    async fn stream_sse(
-        &self,
-        codex_request: CodexRequest,
-        on_event: &(dyn Fn(StreamEvent) + Send + Sync),
-    ) -> Result<InferResponse, ProviderError> {
+    /// Core streaming implementation: performs HTTP setup then returns a live
+    /// `InferStream` that yields `StreamEvent`s as SSE frames arrive.
+    ///
+    /// HTTP-level errors (auth, rate-limit, non-2xx) surface before the stream
+    /// is returned; SSE-level errors propagate as `Err` items on the stream.
+    async fn infer_stream_inner(self, request: InferRequest) -> Result<InferStream, ProviderError> {
+        let codex_request = self.build_codex_request(&request);
         let url = self.endpoint_url();
         let headers = self.build_headers();
 
@@ -195,297 +179,301 @@ impl CodexProvider {
             return Err(map_error_response(status, &body));
         }
 
-        // Process SSE stream
-        let mut stream = http_response.bytes_stream();
-        let mut buf = String::new();
+        // Seed model name from the request; may be overwritten by the response event.
+        let initial_model = codex_request.model.clone();
 
-        // Accumulation state
-        let mut model_name = codex_request.model.clone();
-        let mut usage = ResponseUsage::default();
-        let mut stop_reason = StopReason::EndTurn;
-        let mut text_blocks: Vec<String> = Vec::new();
-        let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let stream = async_stream::try_stream! {
+            let mut byte_stream = http_response.bytes_stream();
+            let mut buf = String::new();
 
-        // Per-block state (indexed by output item position)
-        let mut current_text = String::new();
-        let mut current_tool_call_id = String::new();
-        let mut current_tool_item_id = String::new();
-        let mut current_tool_name = String::new();
-        let mut current_tool_args = String::new();
-        let mut tool_call_index: usize = 0;
+            // Accumulation state
+            let mut model_name = initial_model;
+            let mut usage = ResponseUsage::default();
+            let mut stop_reason = StopReason::EndTurn;
+            let mut text_blocks: Vec<String> = Vec::new();
+            let mut tool_calls: Vec<ToolCall> = Vec::new();
 
-        while let Some(chunk) = stream.next().await {
-            let bytes = chunk.map_err(|e| ProviderError::TransientError {
-                message: format!("stream read error: {e}"),
-                status: None,
-            })?;
-            buf.push_str(&String::from_utf8_lossy(&bytes));
+            // Per-block state (indexed by output item position)
+            let mut current_text = String::new();
+            let mut current_tool_call_id = String::new();
+            let mut current_tool_item_id = String::new();
+            let mut current_tool_name = String::new();
+            let mut current_tool_args = String::new();
+            let mut tool_call_index: usize = 0;
 
-            // Process complete SSE frames
-            while let Some(frame_end) = buf.find("\n\n") {
-                let frame = buf[..frame_end].to_string();
-                buf = buf[frame_end + 2..].to_string();
+            while let Some(chunk) = byte_stream.next().await {
+                let bytes = chunk.map_err(|e| ProviderError::TransientError {
+                    message: format!("stream read error: {e}"),
+                    status: None,
+                })?;
+                buf.push_str(&String::from_utf8_lossy(&bytes));
 
-                // Extract data from SSE frame
-                let mut data = String::new();
-                for line in frame.lines() {
-                    if let Some(rest) = line.strip_prefix("data: ") {
-                        if !data.is_empty() {
-                            data.push('\n');
+                // Process complete SSE frames
+                while let Some(frame_end) = buf.find("\n\n") {
+                    let frame = buf[..frame_end].to_string();
+                    buf = buf[frame_end + 2..].to_string();
+
+                    // Extract data from SSE frame
+                    let mut data = String::new();
+                    for line in frame.lines() {
+                        if let Some(rest) = line.strip_prefix("data: ") {
+                            if !data.is_empty() {
+                                data.push('\n');
+                            }
+                            data.push_str(rest);
                         }
-                        data.push_str(rest);
                     }
-                }
 
-                if data.is_empty() {
-                    continue;
-                }
-
-                let event: SseEvent = match serde_json::from_str(&data) {
-                    Ok(ev) => ev,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to parse Codex SSE event");
+                    if data.is_empty() {
                         continue;
                     }
-                };
 
-                match event.event_type.as_str() {
-                    "response.output_item.added" => {
-                        if let Some(item) = event.data.get("item") {
-                            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                            match item_type {
-                                "message" => {
-                                    current_text = String::new();
-                                }
-                                "function_call" => {
-                                    let call_id = item
-                                        .get("call_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let item_id = item
-                                        .get("id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let name = item
-                                        .get("name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-
-                                    current_tool_call_id = call_id.clone();
-                                    current_tool_item_id = item_id;
-                                    current_tool_name = name.clone();
-                                    current_tool_args = String::new();
-
-                                    // Compose the skelegent tool ID as "call_id|item_id"
-                                    let skg_id = format!("{call_id}|{}", current_tool_item_id);
-                                    on_event(StreamEvent::ToolCallStart {
-                                        index: tool_call_index,
-                                        id: skg_id,
-                                        name,
-                                    });
-                                }
-                                _ => {}
-                            }
+                    let event: SseEvent = match serde_json::from_str(&data) {
+                        Ok(ev) => ev,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to parse Codex SSE event");
+                            continue;
                         }
-                    }
-                    "response.output_text.delta" => {
-                        if let Some(delta) = event.data.get("delta").and_then(|v| v.as_str()) {
-                            current_text.push_str(delta);
-                            on_event(StreamEvent::TextDelta(delta.to_string()));
-                        }
-                    }
-                    "response.function_call_arguments.delta" => {
-                        if let Some(delta) = event.data.get("delta").and_then(|v| v.as_str()) {
-                            current_tool_args.push_str(delta);
-                            on_event(StreamEvent::ToolCallDelta {
-                                index: tool_call_index,
-                                json_delta: delta.to_string(),
-                            });
-                        }
-                    }
-                    "response.output_item.done" => {
-                        if let Some(item) = event.data.get("item") {
-                            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    };
 
-                            match item_type {
-                                "message" => {
-                                    // Finalize text from the item itself
-                                    let final_text = extract_output_text(item);
-                                    if !final_text.is_empty() {
-                                        current_text = final_text;
+                    match event.event_type.as_str() {
+                        "response.output_item.added" => {
+                            if let Some(item) = event.data.get("item") {
+                                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                match item_type {
+                                    "message" => {
+                                        current_text = String::new();
                                     }
-                                    if !current_text.is_empty() {
-                                        text_blocks.push(current_text.clone());
+                                    "function_call" => {
+                                        let call_id = item
+                                            .get("call_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let item_id = item
+                                            .get("id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let name = item
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+
+                                        current_tool_call_id = call_id.clone();
+                                        current_tool_item_id = item_id;
+                                        current_tool_name = name.clone();
+                                        current_tool_args = String::new();
+
+                                        // Compose the skelegent tool ID as "call_id|item_id"
+                                        let skg_id = format!("{call_id}|{}", current_tool_item_id);
+                                        yield StreamEvent::ToolCallStart {
+                                            index: tool_call_index,
+                                            id: skg_id,
+                                            name,
+                                        };
                                     }
-                                    current_text = String::new();
+                                    _ => {}
                                 }
-                                "function_call" => {
-                                    // Finalize tool call
-                                    let final_args = item
-                                        .get("arguments")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or(&current_tool_args);
-                                    let input: serde_json::Value = serde_json::from_str(final_args)
-                                        .unwrap_or(serde_json::Value::Object(
-                                            serde_json::Map::new(),
-                                        ));
-                                    tool_calls.push(ToolCall {
-                                        id: format!(
-                                            "{}|{}",
-                                            current_tool_call_id, current_tool_item_id
-                                        ),
-                                        name: current_tool_name.clone(),
-                                        input,
-                                    });
-                                    tool_call_index += 1;
-                                    current_tool_args = String::new();
-                                }
-                                _ => {}
                             }
                         }
-                    }
-                    "response.completed" | "response.done" => {
-                        if let Some(response) = event.data.get("response") {
-                            if let Some(u) = response.get("usage") {
-                                usage = ResponseUsage::from_value(u);
-                                on_event(StreamEvent::Usage(TokenUsage {
-                                    input_tokens: usage.input_tokens,
-                                    output_tokens: usage.output_tokens,
-                                    cache_read_tokens: if usage.cached_tokens > 0 {
-                                        Some(usage.cached_tokens)
-                                    } else {
-                                        None
-                                    },
-                                    cache_creation_tokens: None,
-                                    reasoning_tokens: None,
-                                }));
+                        "response.output_text.delta" => {
+                            if let Some(delta) = event.data.get("delta").and_then(|v| v.as_str()) {
+                                current_text.push_str(delta);
+                                yield StreamEvent::TextDelta(delta.to_string());
                             }
-                            if let Some(status) = response.get("status").and_then(|v| v.as_str()) {
-                                stop_reason = match status {
-                                    "completed" => StopReason::EndTurn,
-                                    "incomplete" => StopReason::MaxTokens,
-                                    "failed" | "cancelled" => StopReason::EndTurn,
-                                    _ => StopReason::EndTurn,
+                        }
+                        "response.function_call_arguments.delta" => {
+                            if let Some(delta) = event.data.get("delta").and_then(|v| v.as_str()) {
+                                current_tool_args.push_str(delta);
+                                yield StreamEvent::ToolCallDelta {
+                                    index: tool_call_index,
+                                    json_delta: delta.to_string(),
                                 };
                             }
-                            if let Some(m) = response.get("model").and_then(|v| v.as_str()) {
-                                model_name = m.to_string();
+                        }
+                        "response.output_item.done" => {
+                            if let Some(item) = event.data.get("item") {
+                                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                                match item_type {
+                                    "message" => {
+                                        // Finalize text from the item itself
+                                        let final_text = extract_output_text(item);
+                                        if !final_text.is_empty() {
+                                            current_text = final_text;
+                                        }
+                                        if !current_text.is_empty() {
+                                            text_blocks.push(current_text.clone());
+                                        }
+                                        current_text = String::new();
+                                    }
+                                    "function_call" => {
+                                        // Finalize tool call
+                                        let final_args = item
+                                            .get("arguments")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or(&current_tool_args);
+                                        let input: serde_json::Value = serde_json::from_str(final_args)
+                                            .unwrap_or(serde_json::Value::Object(
+                                                serde_json::Map::new(),
+                                            ));
+                                        tool_calls.push(ToolCall {
+                                            id: format!(
+                                                "{}|{}",
+                                                current_tool_call_id, current_tool_item_id
+                                            ),
+                                            name: current_tool_name.clone(),
+                                            input,
+                                        });
+                                        tool_call_index += 1;
+                                        current_tool_args = String::new();
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
-                    }
-                    "error" | "response.failed" => {
-                        let msg = event
-                            .data
-                            .get("message")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                event
-                                    .data
-                                    .get("error")
-                                    .and_then(|e| e.get("message"))
-                                    .and_then(|v| v.as_str())
-                            })
-                            .unwrap_or("Codex stream error");
-                        return Err(ProviderError::TransientError {
-                            message: msg.to_string(),
-                            status: None,
-                        });
-                    }
-                    _ => {
-                        // Ignore: response.created, ping, reasoning events, etc.
+                        "response.completed" | "response.done" => {
+                            if let Some(response_val) = event.data.get("response") {
+                                if let Some(u) = response_val.get("usage") {
+                                    usage = ResponseUsage::from_value(u);
+                                    yield StreamEvent::Usage(TokenUsage {
+                                        input_tokens: usage.input_tokens,
+                                        output_tokens: usage.output_tokens,
+                                        cache_read_tokens: if usage.cached_tokens > 0 {
+                                            Some(usage.cached_tokens)
+                                        } else {
+                                            None
+                                        },
+                                        cache_creation_tokens: None,
+                                        reasoning_tokens: None,
+                                    });
+                                }
+                                if let Some(s) = response_val.get("status").and_then(|v| v.as_str()) {
+                                    stop_reason = match s {
+                                        "completed" => StopReason::EndTurn,
+                                        "incomplete" => StopReason::MaxTokens,
+                                        "failed" | "cancelled" => StopReason::EndTurn,
+                                        _ => StopReason::EndTurn,
+                                    };
+                                }
+                                if let Some(m) = response_val.get("model").and_then(|v| v.as_str()) {
+                                    model_name = m.to_string();
+                                }
+                            }
+                        }
+                        "error" | "response.failed" => {
+                            let msg = event
+                                .data
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .or_else(|| {
+                                    event
+                                        .data
+                                        .get("error")
+                                        .and_then(|e| e.get("message"))
+                                        .and_then(|v| v.as_str())
+                                })
+                                .unwrap_or("Codex stream error");
+                            Err(ProviderError::TransientError {
+                                message: msg.to_string(),
+                                status: None,
+                            })?;
+                        }
+                        _ => {
+                            // Ignore: response.created, ping, reasoning events, etc.
+                        }
                     }
                 }
             }
-        }
 
-        // If tool calls present but stop reason is EndTurn, fix it.
-        if !tool_calls.is_empty() && stop_reason == StopReason::EndTurn {
-            stop_reason = StopReason::ToolUse;
-        }
+            // If tool calls present but stop reason is EndTurn, fix it.
+            if !tool_calls.is_empty() && stop_reason == StopReason::EndTurn {
+                stop_reason = StopReason::ToolUse;
+            }
 
-        // Build final content.
-        let content = if text_blocks.len() == 1 {
-            Content::Text(text_blocks.into_iter().next().unwrap())
-        } else if text_blocks.is_empty() {
-            Content::text("")
-        } else {
-            Content::Blocks(
-                text_blocks
-                    .into_iter()
-                    .map(|t| ContentBlock::Text { text: t })
-                    .collect(),
-            )
-        };
-
-        // Codex is free (included in subscription), cost is zero.
-        let token_usage = TokenUsage {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_read_tokens: if usage.cached_tokens > 0 {
-                Some(usage.cached_tokens)
+            // Build final content.
+            let content = if text_blocks.len() == 1 {
+                Content::Text(text_blocks.into_iter().next().unwrap())
+            } else if text_blocks.is_empty() {
+                Content::text("")
             } else {
-                None
-            },
-            cache_creation_tokens: None,
-            reasoning_tokens: None,
+                Content::Blocks(
+                    text_blocks
+                        .into_iter()
+                        .map(|t| ContentBlock::Text { text: t })
+                        .collect(),
+                )
+            };
+
+            // Codex is free (included in subscription), cost is zero.
+            let token_usage = TokenUsage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: if usage.cached_tokens > 0 {
+                    Some(usage.cached_tokens)
+                } else {
+                    None
+                },
+                cache_creation_tokens: None,
+                reasoning_tokens: None,
+            };
+
+            let response = InferResponse {
+                content,
+                tool_calls,
+                stop_reason,
+                usage: token_usage,
+                model: model_name,
+                cost: Some(Decimal::ZERO),
+                truncated: None,
+            };
+
+            tracing::info!(
+                input_tokens = usage.input_tokens,
+                output_tokens = usage.output_tokens,
+                "codex streaming inference finished"
+            );
+
+            yield StreamEvent::Done(response);
         };
 
-        let response = InferResponse {
-            content,
-            tool_calls,
-            stop_reason,
-            usage: token_usage,
-            model: model_name,
-            cost: Some(Decimal::ZERO),
-            truncated: None,
-        };
-
-        on_event(StreamEvent::Done(response.clone()));
-
-        tracing::info!(
-            input_tokens = usage.input_tokens,
-            output_tokens = usage.output_tokens,
-            "codex streaming inference finished"
-        );
-
-        Ok(response)
+        Ok(InferStream::new(stream))
     }
 }
 
 impl Provider for CodexProvider {
+    fn infer_stream(
+        &self,
+        request: InferRequest,
+    ) -> impl std::future::Future<Output = Result<InferStream, ProviderError>> + Send {
+        skg_turn::assert_real_requests_allowed();
+        let model = request.model.as_deref().unwrap_or("unknown");
+        let span = tracing::info_span!("provider.infer_stream", provider = "codex", model);
+        self.clone().infer_stream_inner(request).instrument(span)
+    }
+
     fn infer(
         &self,
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
         skg_turn::assert_real_requests_allowed();
-        let codex_request = self.build_codex_request(&request);
-        let this = self.clone();
         let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer", provider = "codex", model);
-
+        let this = self.clone();
         async move {
-            // Non-streaming: use stream_sse with a no-op callback, then return the response.
-            this.stream_sse(codex_request, &|_| {}).await
+            let mut stream = this.infer_stream_inner(request).await?;
+            while let Some(event) = stream.next().await {
+                if let StreamEvent::Done(response) = event? {
+                    return Ok(response);
+                }
+            }
+            Err(ProviderError::InvalidResponse(
+                "codex stream ended without Done event".into(),
+            ))
         }
         .instrument(span)
-    }
-}
-
-impl StreamProvider for CodexProvider {
-    fn infer_stream(
-        &self,
-        request: StreamRequest,
-        on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
-    ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
-        let codex_request = self.build_codex_stream_request(&request);
-        let this = self.clone();
-        let model = request.model.as_deref().unwrap_or("unknown");
-        let span = tracing::info_span!("provider.infer_stream", provider = "codex", model);
-
-        async move { this.stream_sse(codex_request, &on_event).await }.instrument(span)
     }
 }
 

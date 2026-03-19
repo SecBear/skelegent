@@ -83,6 +83,7 @@ skg-provider-codex = { path = "provider/skg-provider-codex", version = "0.4.1" }
 skg-secret = { path = "secret/skg-secret", version = "0.4.1" }
 skg-orch-local = { path = "orch/skg-orch-local", version = "0.4.1" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+futures-util = "0.3"
 async-trait = "0.1"
 serde_json = "1"
 rust_decimal = { version = "1", features = ["serde-str"] }

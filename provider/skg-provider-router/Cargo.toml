@@ -12,3 +12,4 @@ thiserror = "2"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 layer0 = { path = "../../layer0" }
+futures-util = "0.3"

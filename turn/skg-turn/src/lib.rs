@@ -30,4 +30,5 @@ pub use infer_middleware::{
 };
 pub use provider::{DynProvider, Provider, ProviderError, box_provider};
 pub use safety::{allow_real_requests, assert_real_requests_allowed, deny_real_requests};
+pub use stream::{InferStream, StreamEvent, single_response_stream};
 pub use types::*;

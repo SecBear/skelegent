@@ -930,16 +930,16 @@ mod tests {
     /// must appear in the final output — neither should shadow the other.
     #[tokio::test]
     async fn collect_extends_output_effects_not_replaces() {
-        use crate::effect::Effect;
+        use crate::effect::{Effect, EffectKind};
 
-        let channel_effect = Effect::Custom {
-            effect_type: "channel-effect".into(),
-            data: serde_json::json!({}),
-        };
-        let output_effect = Effect::Custom {
-            effect_type: "output-effect".into(),
-            data: serde_json::json!({}),
-        };
+        let channel_effect = Effect::new(0, EffectKind::Custom {
+            name: "channel-effect".into(),
+            payload: serde_json::json!({}),
+        });
+        let output_effect = Effect::new(0, EffectKind::Custom {
+            name: "output-effect".into(),
+            payload: serde_json::json!({}),
+        });
 
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("extend-test"));
         tokio::spawn(async move {
@@ -968,8 +968,8 @@ mod tests {
         let types: Vec<&str> = result
             .effects
             .iter()
-            .filter_map(|e| match e {
-                Effect::Custom { effect_type, .. } => Some(effect_type.as_str()),
+            .filter_map(|e| match &e.kind {
+                EffectKind::Custom { name, .. } => Some(name.as_str()),
                 _ => None,
             })
             .collect();
@@ -981,7 +981,7 @@ mod tests {
     fn dispatch_event_serde_round_trip() {
         use crate::approval::ApprovalRequest;
         use crate::content::Content;
-        use crate::effect::Effect;
+        use crate::effect::{Effect, EffectKind};
         use crate::error::OrchError;
         use crate::operator::{ExitReason, OperatorOutput};
 
@@ -997,10 +997,10 @@ mod tests {
             artifact: Artifact::new("a1", vec![Content::text("output")]),
         });
         round_trip(DispatchEvent::EffectEmitted {
-            effect: Effect::Custom {
-                effect_type: "ping".into(),
-                data: serde_json::json!({}),
-            },
+            effect: Effect::new(0, EffectKind::Custom {
+                name: "ping".into(),
+                payload: serde_json::json!({}),
+            }),
         });
         round_trip(DispatchEvent::Completed {
             output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
@@ -1018,7 +1018,7 @@ mod tests {
     fn event_type_names() {
         use crate::approval::ApprovalRequest;
         use crate::content::Content;
-        use crate::effect::Effect;
+        use crate::effect::{Effect, EffectKind};
         use crate::error::OrchError;
         use crate::operator::{ExitReason, OperatorOutput};
 
@@ -1033,10 +1033,10 @@ mod tests {
         );
         assert_eq!(
             DispatchEvent::EffectEmitted {
-                effect: Effect::Custom {
-                    effect_type: "x".into(),
-                    data: serde_json::json!({}),
-                },
+                effect: Effect::new(0, EffectKind::Custom {
+                    name: "x".into(),
+                    payload: serde_json::json!({}),
+                }),
             }
             .event_type(),
             "dispatch.effect_emitted"

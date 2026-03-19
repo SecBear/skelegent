@@ -906,12 +906,12 @@ mod tests {
 
     #[tokio::test]
     async fn push_effect_stores_and_drains() {
-        use layer0::effect::Effect;
+        use layer0::effect::{Effect, EffectKind};
         let mut ctx = Context::new();
-        let effect = Effect::DeleteMemory {
+        let effect = Effect::new(0, EffectKind::DeleteMemory {
             scope: layer0::effect::Scope::Global,
             key: "test_key".into(),
-        };
+        });
         ctx.push_effect(effect.clone());
         assert_eq!(ctx.effects().len(), 1);
         let drained = ctx.drain_effects();
@@ -921,16 +921,16 @@ mod tests {
 
     #[tokio::test]
     async fn extend_effects_stores_multiple() {
-        use layer0::effect::Effect;
+        use layer0::effect::{Effect, EffectKind};
         let mut ctx = Context::new();
-        let e1 = Effect::DeleteMemory {
+        let e1 = Effect::new(0, EffectKind::DeleteMemory {
             scope: layer0::effect::Scope::Global,
             key: "a".into(),
-        };
-        let e2 = Effect::DeleteMemory {
+        });
+        let e2 = Effect::new(0, EffectKind::DeleteMemory {
             scope: layer0::effect::Scope::Global,
             key: "b".into(),
-        };
+        });
         ctx.extend_effects(vec![e1, e2]);
         assert_eq!(ctx.effects().len(), 2);
     }

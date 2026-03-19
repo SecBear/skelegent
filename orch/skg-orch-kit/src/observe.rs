@@ -27,7 +27,7 @@ impl ContextObserver {
     /// not mistake channel failure for a normal event.
     pub async fn recv(&mut self) -> Observation {
         match self.rx.recv().await {
-            Ok(event) => Observation::Event(event),
+            Ok(event) => Observation::Event(Box::new(event)),
             Err(broadcast::error::RecvError::Closed) => Observation::Closed,
             Err(broadcast::error::RecvError::Lagged(skipped)) => Observation::Lagged(skipped),
         }
@@ -36,7 +36,7 @@ impl ContextObserver {
     /// Try to receive one context event without waiting.
     pub fn try_recv(&mut self) -> ObservationTry {
         match self.rx.try_recv() {
-            Ok(event) => ObservationTry::Event(event),
+            Ok(event) => ObservationTry::Event(Box::new(event)),
             Err(broadcast::error::TryRecvError::Empty) => ObservationTry::Empty,
             Err(broadcast::error::TryRecvError::Closed) => ObservationTry::Closed,
             Err(broadcast::error::TryRecvError::Lagged(skipped)) => ObservationTry::Lagged(skipped),
@@ -53,7 +53,7 @@ impl ContextObserver {
 
         loop {
             match self.try_recv() {
-                ObservationTry::Event(event) => events.push(event),
+                ObservationTry::Event(event) => events.push(*event),
                 ObservationTry::Lagged(skipped) => {
                     // Broadcast channel repositioned — keep draining post-lag events
                     total_lagged += skipped;
@@ -91,7 +91,7 @@ impl ContextObserver {
 #[derive(Debug)]
 pub enum Observation {
     /// A context event was received.
-    Event(ContextEvent),
+    Event(Box<ContextEvent>),
     /// The observer fell behind and skipped this many events.
     Lagged(u64),
     /// All senders were dropped; no more events can arrive.
@@ -102,7 +102,7 @@ pub enum Observation {
 #[derive(Debug, Clone)]
 pub enum ObservationTry {
     /// A context event was received.
-    Event(ContextEvent),
+    Event(Box<ContextEvent>),
     /// No event is currently buffered.
     Empty,
     /// The observer fell behind and skipped this many events.

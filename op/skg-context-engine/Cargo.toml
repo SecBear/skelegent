@@ -23,6 +23,7 @@ tokio = { version = "1", features = ["time", "sync"] }
 thiserror = "2"
 tracing = "0.1"
 schemars = { version = "0.8", optional = true }
+futures-util = "0.3"
 
 [dev-dependencies]
 layer0 = { path = "../../layer0", features = ["test-utils"], version = "0.4.1" }
