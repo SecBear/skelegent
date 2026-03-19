@@ -1,0 +1,17 @@
+[package]
+name = "echo-agent"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "echo-agent"
+path = "src/main.rs"
+
+[dependencies]
+layer0 = { path = "../../layer0" }
+skg-context-engine = { path = "../../op/skg-context-engine" }
+skg-tool = { path = "../../turn/skg-tool" }
+skg-turn = { path = "../../turn/skg-turn", features = ["test-utils"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"

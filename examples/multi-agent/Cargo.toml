@@ -1,0 +1,19 @@
+[package]
+name = "multi-agent"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "multi-agent"
+path = "src/main.rs"
+
+[dependencies]
+layer0 = { path = "../../layer0", version = "0.4.1" }
+skg-context-engine = { path = "../../op/skg-context-engine", version = "0.4.1" }
+skg-turn = { path = "../../turn/skg-turn", version = "0.4.1", features = ["test-utils"] }
+skg-orch-local = { path = "../../orch/skg-orch-local", version = "0.4.1" }
+skg-orch-patterns = { path = "../../orch/skg-orch-patterns", version = "0.4.1" }
+skg-tool = { path = "../../turn/skg-tool", version = "0.4.1" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

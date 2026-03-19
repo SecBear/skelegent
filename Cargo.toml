@@ -52,8 +52,12 @@ members = [
   "env/skg-env-docker",
   "runner/skg-runner",
   "examples/hello-claude",
+  "examples/echo-agent",
+  "examples/workflow",
   "a2a/skg-a2a-core",
   "turn/skg-tool-openapi",
+  "examples/react-chatbot",
+  "examples/multi-agent",
 ]
 
 [workspace.package]

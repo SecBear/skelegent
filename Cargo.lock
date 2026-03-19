@@ -401,6 +401,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "echo-agent"
+version = "0.0.0"
+dependencies = [
+ "layer0",
+ "serde_json",
+ "skg-context-engine",
+ "skg-tool",
+ "skg-turn",
+ "tokio",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1218,6 +1230,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "multi-agent"
+version = "0.0.0"
+dependencies = [
+ "layer0",
+ "serde_json",
+ "skg-context-engine",
+ "skg-orch-local",
+ "skg-orch-patterns",
+ "skg-tool",
+ "skg-turn",
+ "tokio",
+]
+
+[[package]]
 name = "multimap"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1711,6 +1737,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
+]
+
+[[package]]
+name = "react-chatbot"
+version = "0.0.0"
+dependencies = [
+ "layer0",
+ "serde_json",
+ "skg-context-engine",
+ "skg-tool",
+ "skg-turn",
+ "tokio",
 ]
 
 [[package]]
@@ -4027,6 +4065,17 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "workflow"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "layer0",
+ "skg-orch-local",
+ "skg-orch-patterns",
+ "tokio",
 ]
 
 [[package]]
