@@ -57,7 +57,7 @@ impl McpClient {
         Ok(Self { service })
     }
 
-    /// Connect to an MCP server via streamable HTTP (supersedes SSE).
+    /// Connect to an MCP server via streamable HTTP.
     ///
     /// The URL should point to the MCP server's HTTP endpoint
     /// (e.g., `http://localhost:8080/mcp`).
@@ -66,13 +66,30 @@ impl McpClient {
     ///
     /// Returns [`McpError::Connection`] if the HTTP connection or MCP
     /// handshake fails.
-    pub async fn connect_sse(url: &str) -> Result<Self, McpError> {
+    pub async fn connect_http(url: &str) -> Result<Self, McpError> {
         let transport = StreamableHttpClientTransport::from_uri(url);
         let service: RunningService<RoleClient, ()> = ()
             .serve(transport)
             .await
             .map_err(|e| McpError::Connection(e.to_string()))?;
         Ok(Self { service })
+    }
+
+    /// Connect to an MCP server via streamable HTTP.
+    ///
+    /// # Deprecated
+    ///
+    /// Renamed to [`connect_http`](McpClient::connect_http). SSE was the
+    /// transport name from an earlier version of the MCP spec; the current
+    /// transport is Streamable HTTP.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError::Connection`] if the HTTP connection or MCP
+    /// handshake fails.
+    #[deprecated(since = "0.4.2", note = "Renamed to connect_http")]
+    pub async fn connect_sse(url: &str) -> Result<Self, McpError> {
+        Self::connect_http(url).await
     }
 
     /// Discover all tools from the connected MCP server.

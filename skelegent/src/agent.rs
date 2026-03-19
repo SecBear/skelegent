@@ -15,7 +15,9 @@ use layer0::content::Content;
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
-use skg_tool::ToolRegistry;
+use skg_context_engine::ToolFilter;
+use skg_tool::{ToolDyn, ToolRegistry};
+use std::sync::Arc;
 #[cfg(any(
     feature = "provider-anthropic",
     feature = "provider-openai",
@@ -46,6 +48,9 @@ pub fn agent(model: &str) -> AgentBuilder {
         tools: ToolRegistry::new(),
         max_turns: None,
         max_tokens: None,
+        temperature: None,
+        max_tool_retries: None,
+        tool_filter: None,
     }
 }
 
@@ -56,6 +61,12 @@ pub struct AgentBuilder {
     tools: ToolRegistry,
     max_turns: Option<u32>,
     max_tokens: Option<u32>,
+    /// Sampling temperature forwarded to [`ReactLoopConfig::temperature`].
+    temperature: Option<f64>,
+    /// Tool retry budget forwarded to [`ReactLoopConfig::max_tool_retries`].
+    max_tool_retries: Option<u32>,
+    /// Per-turn tool filter forwarded to [`ReactLoopConfig::tool_filter`].
+    tool_filter: Option<ToolFilter>,
 }
 
 impl AgentBuilder {
@@ -65,9 +76,20 @@ impl AgentBuilder {
         self
     }
 
-    /// Set the tool registry.
+    /// Set the tool registry, replacing any previously registered tools.
+    ///
+    /// Use [`.tool()`] to add individual tools without replacing the entire registry.
     pub fn tools(mut self, tools: ToolRegistry) -> Self {
         self.tools = tools;
+        self
+    }
+
+    /// Register a single tool into the agent's tool registry.
+    ///
+    /// Adds to any tools already registered via [`.tools()`]. Calling `.tool()` and
+    /// `.tools()` in any order composes — the last write for a given tool name wins.
+    pub fn tool(mut self, tool: Arc<dyn ToolDyn>) -> Self {
+        self.tools.register(tool);
         self
     }
 
@@ -82,6 +104,42 @@ impl AgentBuilder {
         self.max_tokens = Some(max);
         self
     }
+
+    /// Set the sampling temperature passed to the model.
+    ///
+    /// Typical range is `0.0` (deterministic) to `1.0` (more creative). The
+    /// acceptable range depends on the provider; values outside the valid range
+    /// are forwarded as-is and the provider will return an error.
+    pub fn temperature(mut self, temperature: f64) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set the maximum number of times to retry a tool call that fails with
+    /// [`skg_tool::ToolError::InvalidInput`].
+    ///
+    /// When a tool rejects its input, the model receives the error and the tool's
+    /// schema so it can correct the call. Each call ID tracks its own retry budget
+    /// independently. Defaults to `2` when not set.
+    pub fn max_tool_retries(mut self, retries: u32) -> Self {
+        self.max_tool_retries = Some(retries);
+        self
+    }
+
+    /// Set a per-turn tool filter predicate.
+    ///
+    /// Called before each inference turn. Tools for which the predicate returns
+    /// `false` are hidden from the model for that turn but remain in the registry
+    /// for dispatch (in case the model references a tool that was visible in a
+    /// prior turn and the response is still in-flight).
+    pub fn tool_filter(mut self, filter: ToolFilter) -> Self {
+        self.tool_filter = Some(filter);
+        self
+    }
+
+    // TODO: .on_event(impl Fn(DispatchEvent) + Send + Sync + 'static) — store a
+    // streaming event callback for future use. Skipped until DispatchEvent is
+    // stabilized and the streaming pipeline supports per-operator callbacks.
 
     /// Build the agent, resolving the model string to a provider.
     ///
@@ -100,6 +158,9 @@ impl AgentBuilder {
             self.tools,
             self.max_turns.unwrap_or(10),
             self.max_tokens.unwrap_or(4096),
+            self.temperature,
+            self.max_tool_retries.unwrap_or(2),
+            self.tool_filter,
         )
     }
 }
@@ -178,6 +239,9 @@ fn build_cognitive_operator<P: Provider + 'static>(
     tools: ToolRegistry,
     max_turns: u32,
     max_tokens: u32,
+    temperature: Option<f64>,
+    max_tool_retries: u32,
+    tool_filter: Option<ToolFilter>,
 ) -> Box<dyn Operator> {
     use skg_context_engine::{
         CognitiveOperator, ReactLoopConfig,
@@ -193,6 +257,9 @@ fn build_cognitive_operator<P: Provider + 'static>(
             system_prompt,
             model: None, // model already selected by provider
             max_tokens: Some(max_tokens),
+            temperature,
+            max_tool_retries,
+            tool_filter,
             ..Default::default()
         },
     )
@@ -208,6 +275,145 @@ fn build_cognitive_operator<P: Provider + 'static>(
     Box::new(op)
 }
 
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
+fn resolve_model(
+    model: &str,
+    system_prompt: String,
+    tools: ToolRegistry,
+    max_turns: u32,
+    max_tokens: u32,
+    temperature: Option<f64>,
+    max_tool_retries: u32,
+    tool_filter: Option<ToolFilter>,
+) -> Result<BuiltAgent, AgentBuildError> {
+    let operator: Box<dyn Operator> = if model.starts_with("claude-")
+        || model.starts_with("anthropic:")
+    {
+        #[cfg(feature = "provider-anthropic")]
+        {
+            let api_key =
+                std::env::var("ANTHROPIC_API_KEY").map_err(|_| AgentBuildError::MissingApiKey {
+                    env_var: "ANTHROPIC_API_KEY",
+                })?;
+            let provider = skg_provider_anthropic::AnthropicProvider::new(api_key);
+            build_cognitive_operator(
+                provider,
+                system_prompt,
+                tools,
+                max_turns,
+                max_tokens,
+                temperature,
+                max_tool_retries,
+                tool_filter,
+            )
+        }
+        #[cfg(not(feature = "provider-anthropic"))]
+        {
+            return Err(AgentBuildError::FeatureNotEnabled {
+                feature: "provider-anthropic",
+            });
+        }
+    } else if model.starts_with("gpt-")
+        || model.starts_with("openai:")
+        || model.starts_with("o1-")
+        || model.starts_with("o3-")
+    {
+        #[cfg(feature = "provider-openai")]
+        {
+            let api_key =
+                std::env::var("OPENAI_API_KEY").map_err(|_| AgentBuildError::MissingApiKey {
+                    env_var: "OPENAI_API_KEY",
+                })?;
+            let provider = skg_provider_openai::OpenAIProvider::new(api_key);
+            build_cognitive_operator(
+                provider,
+                system_prompt,
+                tools,
+                max_turns,
+                max_tokens,
+                temperature,
+                max_tool_retries,
+                tool_filter,
+            )
+        }
+        #[cfg(not(feature = "provider-openai"))]
+        {
+            return Err(AgentBuildError::FeatureNotEnabled {
+                feature: "provider-openai",
+            });
+        }
+    } else if model.starts_with("ollama:") {
+        #[cfg(feature = "provider-ollama")]
+        {
+            let provider = skg_provider_ollama::OllamaProvider::new();
+            build_cognitive_operator(
+                provider,
+                system_prompt,
+                tools,
+                max_turns,
+                max_tokens,
+                temperature,
+                max_tool_retries,
+                tool_filter,
+            )
+        }
+        #[cfg(not(feature = "provider-ollama"))]
+        {
+            return Err(AgentBuildError::FeatureNotEnabled {
+                feature: "provider-ollama",
+            });
+        }
+    } else {
+        return Err(AgentBuildError::UnknownModel(model.to_string()));
+    };
+
+    Ok(BuiltAgent { operator })
+}
+
+#[cfg(not(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama"
+)))]
+fn resolve_model(
+    model: &str,
+    _system_prompt: String,
+    _tools: ToolRegistry,
+    _max_turns: u32,
+    _max_tokens: u32,
+    _temperature: Option<f64>,
+    _max_tool_retries: u32,
+    _tool_filter: Option<ToolFilter>,
+) -> Result<BuiltAgent, AgentBuildError> {
+    if model.starts_with("claude-") || model.starts_with("anthropic:") {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-anthropic",
+        });
+    }
+
+    if model.starts_with("gpt-")
+        || model.starts_with("openai:")
+        || model.starts_with("o1-")
+        || model.starts_with("o3-")
+    {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-openai",
+        });
+    }
+
+    if model.starts_with("ollama:") {
+        return Err(AgentBuildError::FeatureNotEnabled {
+            feature: "provider-ollama",
+        });
+    }
+
+    Err(AgentBuildError::UnknownModel(model.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,7 +421,6 @@ mod tests {
         CognitiveOperator, ReactLoopConfig,
         rules::{BudgetGuard, BudgetGuardConfig},
     };
-    use skg_turn::infer::InferResponse;
     use skg_turn::test_utils::{FunctionProvider, make_text_response};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -288,127 +493,104 @@ mod tests {
         assert_eq!(output.exit_reason, layer0::operator::ExitReason::Complete);
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
-}
 
-#[cfg(not(any(
-    feature = "provider-anthropic",
-    feature = "provider-openai",
-    feature = "provider-ollama"
-)))]
-fn resolve_model(
-    model: &str,
-    _system_prompt: String,
-    _tools: ToolRegistry,
-    _max_turns: u32,
-    _max_tokens: u32,
-) -> Result<BuiltAgent, AgentBuildError> {
-    Err(AgentBuildError::UnknownModel(format!(
-        "{model} — no provider features enabled (provider-anthropic, provider-openai, provider-ollama)"
-    )))
-}
+    /// Verify that temperature set on [`ReactLoopConfig`] is forwarded to the provider's
+    /// [`InferRequest`]. We don't test `AgentBuilder::temperature()` end-to-end (that would
+    /// require a real provider feature), but we verify the config→request path is correct.
+    #[tokio::test]
+    async fn agent_builder_temperature() {
+        use std::sync::Mutex;
+        use skg_turn::infer::InferRequest;
 
-#[cfg(any(
-    feature = "provider-anthropic",
-    feature = "provider-openai",
-    feature = "provider-ollama"
-))]
-fn resolve_model(
-    model: &str,
-    system_prompt: String,
-    tools: ToolRegistry,
-    max_turns: u32,
-    max_tokens: u32,
-) -> Result<BuiltAgent, AgentBuildError> {
-    let operator: Box<dyn Operator> = if model.starts_with("claude-")
-        || model.starts_with("anthropic:")
-    {
-        #[cfg(feature = "provider-anthropic")]
-        {
-            let api_key =
-                std::env::var("ANTHROPIC_API_KEY").map_err(|_| AgentBuildError::MissingApiKey {
-                    env_var: "ANTHROPIC_API_KEY",
-                })?;
-            let provider = skg_provider_anthropic::AnthropicProvider::new(api_key);
-            build_cognitive_operator(provider, system_prompt, tools, max_turns, max_tokens)
-        }
-        #[cfg(not(feature = "provider-anthropic"))]
-        {
-            return Err(AgentBuildError::FeatureNotEnabled {
-                feature: "provider-anthropic",
-            });
-        }
-    } else if model.starts_with("gpt-")
-        || model.starts_with("openai:")
-        || model.starts_with("o1-")
-        || model.starts_with("o3-")
-    {
-        #[cfg(feature = "provider-openai")]
-        {
-            let api_key =
-                std::env::var("OPENAI_API_KEY").map_err(|_| AgentBuildError::MissingApiKey {
-                    env_var: "OPENAI_API_KEY",
-                })?;
-            let provider = skg_provider_openai::OpenAIProvider::new(api_key);
-            build_cognitive_operator(provider, system_prompt, tools, max_turns, max_tokens)
-        }
-        #[cfg(not(feature = "provider-openai"))]
-        {
-            return Err(AgentBuildError::FeatureNotEnabled {
-                feature: "provider-openai",
-            });
-        }
-    } else if model.starts_with("ollama:") {
-        #[cfg(feature = "provider-ollama")]
-        {
-            let provider = skg_provider_ollama::OllamaProvider::new();
-            build_cognitive_operator(provider, system_prompt, tools, max_turns, max_tokens)
-        }
-        #[cfg(not(feature = "provider-ollama"))]
-        {
-            return Err(AgentBuildError::FeatureNotEnabled {
-                feature: "provider-ollama",
-            });
-        }
-    } else {
-        return Err(AgentBuildError::UnknownModel(model.to_string()));
-    };
-
-    Ok(BuiltAgent { operator })
-}
-
-#[cfg(not(any(
-    feature = "provider-anthropic",
-    feature = "provider-openai",
-    feature = "provider-ollama"
-)))]
-fn resolve_model(
-    model: &str,
-    _system_prompt: String,
-    _tools: ToolRegistry,
-    _max_turns: u32,
-    _max_tokens: u32,
-) -> Result<BuiltAgent, AgentBuildError> {
-    if model.starts_with("claude-") || model.starts_with("anthropic:") {
-        return Err(AgentBuildError::FeatureNotEnabled {
-            feature: "provider-anthropic",
+        let captured: Arc<Mutex<Option<InferRequest>>> = Arc::new(Mutex::new(None));
+        let captured_inner = captured.clone();
+        let provider = FunctionProvider::new(move |req| {
+            *captured_inner.lock().unwrap() = Some(req);
+            Ok(make_text_response("done"))
         });
+
+        let op: Box<dyn Operator> = Box::new(CognitiveOperator::new(
+            "test",
+            provider,
+            ToolRegistry::new(),
+            ReactLoopConfig {
+                system_prompt: "system".into(),
+                temperature: Some(0.7),
+                ..Default::default()
+            },
+        ));
+        let agent = BuiltAgent { operator: op };
+        let _ = agent.run("Hello").await.unwrap();
+
+        let guard = captured.lock().unwrap();
+        let req = guard.as_ref().expect("provider was not called");
+        assert_eq!(req.temperature, Some(0.7), "temperature must be forwarded to InferRequest");
     }
 
-    if model.starts_with("gpt-")
-        || model.starts_with("openai:")
-        || model.starts_with("o1-")
-        || model.starts_with("o3-")
-    {
-        return Err(AgentBuildError::FeatureNotEnabled {
-            feature: "provider-openai",
-        });
-    }
+    /// Verify that a tool registered via [`AgentBuilder::tool()`] (or directly on a
+    /// [`ToolRegistry`]) is included in the [`InferRequest`] schema list sent to the model.
+    #[tokio::test]
+    async fn agent_builder_single_tool() {
+        use skg_tool::ToolError;
+        use std::pin::Pin;
 
-    if model.starts_with("ollama:") {
-        return Err(AgentBuildError::FeatureNotEnabled {
-            feature: "provider-ollama",
-        });
-    }
+        struct PingTool;
 
-    Err(AgentBuildError::UnknownModel(model.to_string()))
+        impl ToolDyn for PingTool {
+            fn name(&self) -> &str {
+                "ping"
+            }
+            fn description(&self) -> &str {
+                "pings"
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                serde_json::json!({ "type": "object" })
+            }
+            fn call(
+                &self,
+                _input: serde_json::Value,
+                _ctx: &DispatchContext,
+            ) -> Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>
+                        + Send
+                        + '_,
+                >,
+            > {
+                Box::pin(async { Ok(serde_json::json!("pong")) })
+            }
+        }
+
+        let captured: Arc<std::sync::Mutex<Option<skg_turn::infer::InferRequest>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let captured_inner = captured.clone();
+        let provider = FunctionProvider::new(move |req| {
+            *captured_inner.lock().unwrap() = Some(req);
+            Ok(make_text_response("done"))
+        });
+
+        // Register the tool via the registry directly (mirrors what .tool() does).
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(PingTool));
+
+        let op: Box<dyn Operator> = Box::new(CognitiveOperator::new(
+            "test",
+            provider,
+            registry,
+            ReactLoopConfig {
+                system_prompt: "system".into(),
+                ..Default::default()
+            },
+        ));
+        let agent = BuiltAgent { operator: op };
+        let _ = agent.run("Hello").await.unwrap();
+
+        let guard = captured.lock().unwrap();
+        let req = guard.as_ref().expect("provider was not called");
+        assert!(
+            req.tools.iter().any(|t| t.name == "ping"),
+            "tool 'ping' must appear in InferRequest.tools; got: {:?}",
+            req.tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
+        );
+    }
 }

@@ -19,8 +19,8 @@ Backed by the [`rmcp`](https://crates.io/crates/rmcp) library.
 
 ## Exports
 
-- **`McpClient`** — `connect_stdio(Command)`, `connect_sse(url)`, `discover_tools()`,
-  `discover_tools_with_aliases(aliases)`, `close()`
+- **`McpClient`** — `connect_stdio(Command)`, `connect_http(url)`, `discover_tools()`,
+  `discover_tools_with_aliases(aliases)`, `close()` (`connect_sse` is deprecated)
 - **`McpServer`** — `new(registry, name, version)`, `serve_stdio()`
 - **`McpError`** — `Connection(String)`, `Protocol(String)`
 

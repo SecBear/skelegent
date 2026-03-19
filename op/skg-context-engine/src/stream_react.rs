@@ -14,10 +14,12 @@ use crate::context::Context;
 use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
 use crate::ops::tool::{ExecuteTool, format_tool_result};
-use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error};
+use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error, is_handoff_sentinel};
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::duration::DurationMs;
+use layer0::effect::Effect;
+use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use skg_tool::ToolRegistry;
 use skg_turn::infer::InferResponse;
@@ -111,10 +113,34 @@ pub async fn stream_react_loop<P: StreamProvider>(
                 ))
                 .await
             {
-                Ok(value) => match &config.tool_result_formatter {
-                    Some(f) => f(&call.name, &value),
-                    None => format_tool_result(&value),
-                },
+                Ok(value) => {
+                    // Detect HandoffTool sentinel BEFORE formatting.
+                    if is_handoff_sentinel(&value) {
+                        let target = value
+                            .get("target")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let reason = value
+                            .get("reason")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        ctx.push_effect(Effect::Handoff {
+                            operator: OperatorId::from(target.as_str()),
+                            state: serde_json::json!({ "reason": reason }),
+                        });
+                        return Ok(make_context_output(
+                            Content::text(""),
+                            ExitReason::HandedOff,
+                            ctx,
+                        ));
+                    }
+                    match &config.tool_result_formatter {
+                        Some(f) => f(&call.name, &value),
+                        None => format_tool_result(&value),
+                    }
+                }
                 Err(EngineError::Exit { reason, .. }) => {
                     return Ok(make_context_output(Content::text(""), reason, ctx));
                 }

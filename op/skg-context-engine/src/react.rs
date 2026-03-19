@@ -20,6 +20,7 @@ use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
 use layer0::effect::Effect;
+use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use serde_json::Value;
 use skg_tool::{ToolDyn, ToolError, ToolRegistry};
@@ -197,6 +198,20 @@ pub fn check_exit(stop_reason: &StopReason) -> ExitReason {
         _ => ExitReason::Complete,
     }
 }
+
+/// Return true when a tool result value is a [`HandoffTool`] sentinel.
+///
+/// A sentinel is identified by `{ "__handoff": true, ... }`. The check
+/// is performed on the raw `serde_json::Value` before any formatting so
+/// the orchestration layer can intercept it regardless of how the result
+/// would otherwise appear to the model.
+pub fn is_handoff_sentinel(value: &serde_json::Value) -> bool {
+    value
+        .get("__handoff")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 
 /// Check which tool calls require approval and return the corresponding effects.
 ///
@@ -542,6 +557,29 @@ pub async fn react_loop<P: Provider>(
             let (result_str, is_error) = match tool_result {
                 Ok(value) => {
                     tracing::debug!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, "tool succeeded");
+                    // Detect HandoffTool sentinel BEFORE formatting — check the raw
+                    // Value so the check is independent of any custom formatter.
+                    if is_handoff_sentinel(&value) {
+                        let target = value
+                            .get("target")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let reason = value
+                            .get("reason")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        ctx.push_effect(Effect::Handoff {
+                            operator: OperatorId::from(target.as_str()),
+                            state: serde_json::json!({ "reason": reason }),
+                        });
+                        return Ok(make_context_output(
+                            Content::text(""),
+                            ExitReason::HandedOff,
+                            ctx,
+                        ));
+                    }
                     let s = match &config.tool_result_formatter {
                         Some(f) => f(&call.name, &value),
                         None => format_tool_result(&value),
@@ -2671,6 +2709,118 @@ mod tests {
                 .iter()
                 .any(|m| m.text_content().contains("Expected schema")),
             "non-InvalidInput errors must not inject retry schema messages"
+        );
+    }
+
+    // --- Handoff sentinel tests ---
+
+    struct HandoffSentinelTool;
+
+    impl ToolDyn for HandoffSentinelTool {
+        fn name(&self) -> &str {
+            "transfer_to_routing_agent"
+        }
+        fn description(&self) -> &str {
+            "hand off to routing agent"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({ "type": "object" })
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &DispatchContext,
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
+        > {
+            Box::pin(async {
+                Ok(json!({
+                    "__handoff": true,
+                    "target": "routing-agent",
+                    "reason": "needs routing"
+                }))
+            })
+        }
+    }
+
+    /// HandoffTool sentinel must exit the loop with HandedOff + one Handoff effect.
+    #[tokio::test]
+    async fn handoff_sentinel_exits_loop() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call(
+            "transfer_to_routing_agent",
+            "hoff_1",
+            json!({ "reason": "needs routing" }),
+        );
+        // If the loop does not exit, it would call the provider a second time.
+        provider.respond_with_text("should never reach");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(HandoffSentinelTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("route me")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx =
+            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::HandedOff);
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "loop must exit after handoff — provider must not be called again"
+        );
+
+        let handoff_effects: Vec<_> = output
+            .effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Handoff { .. }))
+            .collect();
+        assert_eq!(handoff_effects.len(), 1, "exactly one Handoff effect must be emitted");
+        match &handoff_effects[0] {
+            Effect::Handoff { operator, state } => {
+                assert_eq!(operator.as_str(), "routing-agent");
+                assert_eq!(state["reason"], "needs routing");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Normal tool results must not trigger a handoff — loop continues to completion.
+    #[tokio::test]
+    async fn non_handoff_tool_result_continues() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("search", "c1", json!({ "query": "hi" }));
+        provider.respond_with_text("all done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(MockTool { name: "search" }));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("search for hi")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx =
+            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            provider.call_count(),
+            2,
+            "loop must continue after a non-handoff tool result"
+        );
+        assert!(
+            output.effects.iter().all(|e| !matches!(e, Effect::Handoff { .. })),
+            "no Handoff effect must be emitted for a normal tool result"
         );
     }
 }

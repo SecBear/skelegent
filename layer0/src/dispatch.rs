@@ -104,6 +104,8 @@ pub trait Dispatcher: Send + Sync {
 /// exactly one terminal event ([`Completed`](Self::Completed) or
 /// [`Failed`](Self::Failed)). After the terminal event, no more
 /// events are emitted and [`DispatchHandle::recv`] returns `None`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum DispatchEvent {
     /// Intermediate progress (reasoning step, partial output, status update).
@@ -147,6 +149,7 @@ pub enum DispatchEvent {
     /// Terminal event. No further events follow.
     Failed {
         /// The error.
+        #[serde(with = "orch_error_serde")]
         error: OrchError,
     },
 
@@ -158,6 +161,40 @@ pub enum DispatchEvent {
     /// (human, policy engine, or automated gate) and resumes the run with
     /// an [`crate::approval::ApprovalResponse`].
     AwaitingApproval(crate::approval::ApprovalRequest),
+}
+
+impl DispatchEvent {
+    /// Returns the SSE event name for this dispatch event.
+    ///
+    /// Used as the `event:` field in the SSE wire format. Each variant maps to
+    /// a stable `"dispatch.*"` string that frontend consumers can switch on.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            Self::Progress { .. } => "dispatch.progress",
+            Self::ArtifactProduced { .. } => "dispatch.artifact_produced",
+            Self::EffectEmitted { .. } => "dispatch.effect_emitted",
+            Self::Completed { .. } => "dispatch.completed",
+            Self::Failed { .. } => "dispatch.failed",
+            Self::AwaitingApproval(_) => "dispatch.awaiting_approval",
+        }
+    }
+
+    /// Formats this event as a Server-Sent Events line.
+    ///
+    /// Output format:
+    /// ```text
+    /// event: {event_type}
+    /// data: {json}
+    ///
+    /// ```
+    ///
+    /// The trailing `\n\n` terminates the SSE event per the SSE spec (RFC).
+    /// Serialization errors produce a JSON error object rather than panicking.
+    pub fn to_sse_line(&self) -> String {
+        let json = serde_json::to_string(self)
+            .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {e}\"}}" ));
+        format!("event: {}\ndata: {}\n\n", self.event_type(), json)
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -707,6 +744,23 @@ impl std::fmt::Debug for EffectEmitter {
     }
 }
 
+// Serde adapter for OrchError: serializes as Display string, deserializes as DispatchFailed.
+// OrchError cannot derive Serialize/Deserialize because several variants hold Box<dyn Error>.
+// For SSE consumers the error message is sufficient.
+mod orch_error_serde {
+    use crate::error::OrchError;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(error: &OrchError, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&error.to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<OrchError, D::Error> {
+        let msg = String::deserialize(d)?;
+        Ok(OrchError::DispatchFailed(msg))
+    }
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // TESTS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -922,4 +976,109 @@ mod tests {
         assert!(types.contains(&"output-effect"), "output-effect missing");
         assert!(types.contains(&"channel-effect"), "channel-effect missing");
     }
+
+    #[test]
+    fn dispatch_event_serde_round_trip() {
+        use crate::approval::ApprovalRequest;
+        use crate::content::Content;
+        use crate::effect::Effect;
+        use crate::error::OrchError;
+        use crate::operator::{ExitReason, OperatorOutput};
+
+        // Helper: serialize then deserialize and assert no panic.
+        fn round_trip(ev: DispatchEvent) {
+            let json = serde_json::to_string(&ev).expect("serialize");
+            assert!(!json.is_empty());
+            let _: DispatchEvent = serde_json::from_str(&json).expect("deserialize");
+        }
+
+        round_trip(DispatchEvent::Progress { content: Content::text("thinking") });
+        round_trip(DispatchEvent::ArtifactProduced {
+            artifact: Artifact::new("a1", vec![Content::text("output")]),
+        });
+        round_trip(DispatchEvent::EffectEmitted {
+            effect: Effect::Custom {
+                effect_type: "ping".into(),
+                data: serde_json::json!({}),
+            },
+        });
+        round_trip(DispatchEvent::Completed {
+            output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+        });
+        // Failed: error serialized as string, deserializes as DispatchFailed.
+        round_trip(DispatchEvent::Failed {
+            error: OrchError::DispatchFailed("something went wrong".into()),
+        });
+        round_trip(DispatchEvent::AwaitingApproval(ApprovalRequest::new(
+            "run-1", "wp-1", vec![],
+        )));
+    }
+
+    #[test]
+    fn event_type_names() {
+        use crate::approval::ApprovalRequest;
+        use crate::content::Content;
+        use crate::effect::Effect;
+        use crate::error::OrchError;
+        use crate::operator::{ExitReason, OperatorOutput};
+
+        assert_eq!(
+            DispatchEvent::Progress { content: Content::text("x") }.event_type(),
+            "dispatch.progress"
+        );
+        assert_eq!(
+            DispatchEvent::ArtifactProduced { artifact: Artifact::new("a", vec![]) }
+                .event_type(),
+            "dispatch.artifact_produced"
+        );
+        assert_eq!(
+            DispatchEvent::EffectEmitted {
+                effect: Effect::Custom {
+                    effect_type: "x".into(),
+                    data: serde_json::json!({}),
+                },
+            }
+            .event_type(),
+            "dispatch.effect_emitted"
+        );
+        assert_eq!(
+            DispatchEvent::Completed {
+                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+            }
+            .event_type(),
+            "dispatch.completed"
+        );
+        assert_eq!(
+            DispatchEvent::Failed {
+                error: OrchError::DispatchFailed("x".into()),
+            }
+            .event_type(),
+            "dispatch.failed"
+        );
+        assert_eq!(
+            DispatchEvent::AwaitingApproval(ApprovalRequest::new("r", "w", vec![]))
+                .event_type(),
+            "dispatch.awaiting_approval"
+        );
+    }
+
+    #[test]
+    fn sse_format() {
+        use crate::content::Content;
+
+        let ev = DispatchEvent::Progress { content: Content::text("step 1") };
+        let line = ev.to_sse_line();
+        assert!(
+            line.starts_with("event: dispatch.progress\ndata: "),
+            "unexpected prefix: {line:?}"
+        );
+        assert!(line.ends_with("\n\n"), "missing trailing blank: {line:?}");
+        // Extract and validate the JSON payload.
+        let data_start = line.find("data: ").unwrap() + 6;
+        let data_end = line.len() - 2; // strip trailing \n\n
+        let data = &line[data_start..data_end];
+        let v: serde_json::Value = serde_json::from_str(data).expect("valid JSON");
+        assert_eq!(v["type"], "progress");
+    }
+
 }

@@ -6,6 +6,7 @@
 //! (local function, MCP server, HTTP endpoint) implements [`ToolDyn`].
 
 pub mod adapter;
+pub mod schema;
 
 #[cfg(feature = "macros")]
 pub use skg_tool_macro::skg_tool;

@@ -182,6 +182,11 @@ pub enum ExitReason {
     /// either execute the tools and re-enter the loop, or inject a denial
     /// message and re-enter.
     AwaitingApproval,
+    /// The current operator handed off control to another operator.
+    ///
+    /// The calling layer should inspect [`OperatorOutput::effects`] for an
+    /// [`Effect::Handoff`] entry to find the target operator.
+    HandedOff,
     /// Future exit reasons.
     Custom(String),
 }
@@ -305,6 +310,7 @@ impl std::fmt::Display for ExitReason {
             Self::Error => write!(f, "error"),
             Self::SafetyStop { reason } => write!(f, "safety_stop: {reason}"),
             Self::AwaitingApproval => write!(f, "awaiting_approval"),
+            Self::HandedOff => write!(f, "handed_off"),
             Self::Custom(reason) => write!(f, "custom: {reason}"),
         }
     }
