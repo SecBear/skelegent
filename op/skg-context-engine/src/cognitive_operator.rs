@@ -109,12 +109,37 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         dispatch_ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut ctx = self.create_context();
+        let mut config = self.config.clone();
+
+        // Apply system_addendum from per-request config, if any.
+        // Appended after a blank separator so the base identity
+        // remains coherent and the addendum reads as augmentation.
+        if let Some(ref op_config) = input.config
+            && let Some(ref addendum) = op_config.system_addendum
+        {
+            if config.system_prompt.is_empty() {
+                config.system_prompt = addendum.clone();
+            } else {
+                config.system_prompt = format!("{base}\n\n{addendum}", base = config.system_prompt, addendum = addendum);
+            }
+        }
 
         // Inject system prompt into context
-        if !self.config.system_prompt.is_empty() {
-            ctx.inject_system(&self.config.system_prompt)
+        if !config.system_prompt.is_empty() {
+            ctx.inject_system(&config.system_prompt)
                 .await
                 .map_err(OperatorError::context_assembly)?;
+        }
+
+        // Seed context with pre-assembled messages from caller, if any.
+        // Injected before the new user message so the model sees inherited
+        // history first.
+        if let Some(messages) = input.context {
+            if !messages.is_empty() {
+                ctx.inject_messages(messages)
+                    .await
+                    .map_err(OperatorError::context_assembly)?;
+            }
         }
 
         // Inject user message
@@ -122,7 +147,6 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             .await
             .map_err(OperatorError::context_assembly)?;
 
-        let mut config = self.config.clone();
 
         // Apply allowed_operators from dispatch input as a tool filter.
         // When a parent sets allowed_operators, only those tools are visible
@@ -416,8 +440,8 @@ mod tests {
 
     #[test]
     fn map_engine_error_transient_tool_becomes_retryable() {
-        use layer0::error::OperatorError;
         use crate::error::EngineError;
+        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::Transient("network blip".into()));
         let mapped = map_engine_error(err);
         assert!(
@@ -428,8 +452,8 @@ mod tests {
 
     #[test]
     fn map_engine_error_rate_limited_tool_becomes_retryable() {
-        use layer0::error::OperatorError;
         use crate::error::EngineError;
+        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::RateLimited {
             retry_after: None,
             message: "429".into(),
@@ -443,8 +467,8 @@ mod tests {
 
     #[test]
     fn map_engine_error_execution_failed_tool_becomes_non_retryable() {
-        use layer0::error::OperatorError;
         use crate::error::EngineError;
+        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::ExecutionFailed("boom".into()));
         let mapped = map_engine_error(err);
         assert!(
@@ -455,8 +479,8 @@ mod tests {
 
     #[test]
     fn map_engine_error_tool_not_found_becomes_non_retryable() {
-        use layer0::error::OperatorError;
         use crate::error::EngineError;
+        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::NotFound("my_tool".into()));
         let mapped = map_engine_error(err);
         assert!(
@@ -464,4 +488,73 @@ mod tests {
             "not-found tool error should map to NonRetryable, got {mapped:?}"
         );
     }
+
+    // ── system_addendum ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn system_addendum_appended() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
+        let op = make_op(provider);
+        let input = simple_input("hi")
+            .with_config(OperatorConfig::default().with_system_addendum("Be brief."));
+
+        op.execute(input, &test_ctx()).await.unwrap();
+
+        let req = op.provider.last_request().unwrap();
+        let system = req.system.expect("system field must be set");
+        assert!(
+            system.contains("You are helpful."),
+            "base prompt missing: {system:?}"
+        );
+        assert!(system.contains("Be brief."), "addendum missing: {system:?}");
+    }
+
+    #[tokio::test]
+    async fn no_addendum_unchanged() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
+        let op = make_op(provider);
+
+        op.execute(simple_input("hi"), &test_ctx()).await.unwrap();
+
+        let req = op.provider.last_request().unwrap();
+        assert_eq!(
+            req.system.as_deref(),
+            Some("You are helpful."),
+            "system prompt must be unchanged without addendum"
+        );
+    }
+
+    #[tokio::test]
+    async fn input_context_seeded() {
+        use layer0::context::Role;
+
+        let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
+        let op = make_op(provider);
+
+        let preassembled = vec![
+            Message::new(Role::User, Content::text("earlier question")),
+            Message::new(Role::Assistant, Content::text("earlier answer")),
+        ];
+        let input = simple_input("follow-up").with_context(preassembled);
+
+        op.execute(input, &test_ctx()).await.unwrap();
+
+        let req = op.provider.last_request().unwrap();
+        let texts: Vec<String> = req.messages.iter().map(|m| m.text_content()).collect();
+        assert!(
+            texts.iter().any(|t| t == "earlier question"),
+            "pre-assembled user message missing: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "earlier answer"),
+            "pre-assembled assistant message missing: {texts:?}"
+        );
+        // The new trigger message must be last
+        assert_eq!(
+            req.messages.last().unwrap().text_content(),
+            "follow-up",
+            "user message must be last in request"
+        );
+    }
+
 }
