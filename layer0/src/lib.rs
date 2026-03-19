@@ -63,6 +63,7 @@ pub mod lifecycle;
 pub mod middleware;
 pub mod operator;
 pub mod secret;
+pub mod reducer;
 pub mod state;
 
 #[cfg(feature = "test-utils")]
@@ -99,3 +100,4 @@ pub use state::{
     ContentKind, Lifetime, MemoryLink, MemoryTier, SearchOptions, SearchResult, StateReader,
     StateStore, StoreOptions,
 };
+pub use reducer::{AppendList, MergeObject, Overwrite, ReducerRegistry, StateReducer, Sum};

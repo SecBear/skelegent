@@ -79,6 +79,7 @@
 //! }
 //! ```
 
+pub mod builder;
 pub mod assembly;
 pub mod boundary;
 pub mod cognitive_operator;
@@ -96,6 +97,7 @@ pub mod stream_react;
 
 // Re-exports
 pub use boundary::{InferBoundary, StreamInferBoundary};
+pub use builder::{CognitiveBuilder, NoProvider, WithProvider};
 pub use cognitive_operator::{CognitiveOperator, map_engine_error};
 pub use compile::{CompileConfig, CompiledContext, InferResult};
 pub use context::{Context, Extensions, TurnMetrics};

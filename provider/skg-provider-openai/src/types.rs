@@ -33,6 +33,12 @@ pub struct OpenAIRequest {
     /// Stream options (e.g. include_usage).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<serde_json::Value>,
+    /// Tool choice constraint for the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<serde_json::Value>,
+    /// Requested response format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<serde_json::Value>,
 }
 
 /// A message in the OpenAI Chat Completions API format.

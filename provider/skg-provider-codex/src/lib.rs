@@ -148,6 +148,9 @@ impl CodexProvider {
             temperature: request.temperature,
             system: request.system.clone(),
             extra: request.extra.clone(),
+            thinking: request.thinking.clone(),
+            tool_choice: request.tool_choice.clone(),
+            response_format: request.response_format.clone(),
         };
         self.build_codex_request(&infer)
     }

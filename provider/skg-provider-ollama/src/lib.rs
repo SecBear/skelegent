@@ -361,6 +361,9 @@ impl StreamProvider for OllamaProvider {
             temperature: request.temperature,
             system: request.system,
             extra: request.extra,
+            thinking: request.thinking,
+            tool_choice: request.tool_choice,
+            response_format: request.response_format,
         };
         let mut api_request = self.build_infer_request(&infer_request);
         api_request.stream = true;

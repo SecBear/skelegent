@@ -341,6 +341,9 @@ impl StreamProvider for MiddlewareProvider {
             temperature: request.temperature,
             system: request.system,
             extra: request.extra,
+            thinking: request.thinking,
+            tool_choice: request.tool_choice,
+            response_format: request.response_format,
         };
         let stack_future = self.infer_via_stack(infer_request);
         async move {

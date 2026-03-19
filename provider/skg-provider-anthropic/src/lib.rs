@@ -141,13 +141,47 @@ impl AnthropicProvider {
             })
             .collect();
 
+        // Build thinking config
+        let thinking = match &request.thinking {
+            Some(ThinkingConfig::Enabled { budget_tokens }) => {
+                // Anthropic requires temperature to be unset when thinking is enabled.
+                Some(serde_json::json!({ "type": "enabled", "budget_tokens": budget_tokens }))
+            }
+            Some(ThinkingConfig::Adaptive) => {
+                // Provider-decided; use Anthropic's auto mode if set via extra, otherwise skip.
+                request.extra.get("thinking").cloned()
+            }
+            Some(ThinkingConfig::Disabled) | None => None,
+        };
+        // Anthropic requirement: temperature must not be set when thinking is enabled.
+        if thinking.is_some() && request.temperature.is_some() {
+            tracing::warn!(
+                "thinking is enabled but temperature is set; clearing temperature (Anthropic requirement)"
+            );
+        }
+        let temperature = if thinking.is_some() { None } else { request.temperature };
+
+        // Build tool_choice; ToolChoice::None means suppress tools entirely.
+        let (final_tools, tool_choice) = match &request.tool_choice {
+            Some(ToolChoice::None) => (vec![], None),
+            Some(ToolChoice::Auto) => (tools, Some(serde_json::json!({ "type": "auto" }))),
+            Some(ToolChoice::Any) => (tools, Some(serde_json::json!({ "type": "any" }))),
+            Some(ToolChoice::Tool { name }) => {
+                (tools, Some(serde_json::json!({ "type": "tool", "name": name })))
+            }
+            None => (tools, None),
+        };
+
         AnthropicRequest {
             model,
             max_tokens,
             messages,
             system: build_anthropic_system(&request.system, &request.extra),
-            tools,
+            tools: final_tools,
             stream: false,
+            temperature,
+            thinking,
+            tool_choice,
         }
     }
 }
@@ -238,6 +272,10 @@ fn content_block_to_anthropic(block: &ContentBlock) -> Option<AnthropicContentBl
             },
             media_type: media_type.clone(),
         }),
+        ContentBlock::Thinking { thinking, signature } => Some(AnthropicContentBlock::Thinking {
+            thinking: thinking.clone(),
+            signature: signature.clone(),
+        }),
         // Skip custom blocks — not supported by Anthropic API
         _ => None,
     }
@@ -276,6 +314,12 @@ fn parse_anthropic_infer_response(
                         }
                     },
                     media_type: media_type.clone(),
+                });
+            }
+            AnthropicContentBlock::Thinking { thinking, signature } => {
+                text_parts.push(ContentBlock::Thinking {
+                    thinking: thinking.clone(),
+                    signature: signature.clone(),
                 });
             }
         }
@@ -462,6 +506,9 @@ impl StreamProvider for AnthropicProvider {
             temperature: request.temperature,
             system: request.system,
             extra: request.extra,
+            thinking: request.thinking,
+            tool_choice: request.tool_choice,
+            response_format: request.response_format,
         };
         let mut api_request = self.build_infer_request(&infer_request);
         api_request.stream = true;
@@ -543,8 +590,10 @@ impl StreamProvider for AnthropicProvider {
             let mut block_tool_ids: Vec<String> = Vec::new();
             let mut block_tool_names: Vec<String> = Vec::new();
             let mut block_tool_inputs: Vec<String> = Vec::new();
-            // Track which indices are tool_use vs text
+            // Track which indices are tool_use vs thinking vs text
             let mut block_is_tool: Vec<bool> = Vec::new();
+            let mut block_is_thinking: Vec<bool> = Vec::new();
+            let mut block_signatures: Vec<String> = Vec::new();
 
             while let Some(chunk) = stream.next().await {
                 let bytes = chunk.map_err(|e| ProviderError::TransientError {
@@ -603,13 +652,17 @@ impl StreamProvider for AnthropicProvider {
                                 block_tool_names.push(String::new());
                                 block_tool_inputs.push(String::new());
                                 block_is_tool.push(false);
+                                block_is_thinking.push(false);
+                                block_signatures.push(String::new());
                             }
                             match &content_block {
                                 AnthropicContentBlock::Text { .. } => {
                                     block_is_tool[index] = false;
+                                    block_is_thinking[index] = false;
                                 }
                                 AnthropicContentBlock::ToolUse { id, name, .. } => {
                                     block_is_tool[index] = true;
+                                    block_is_thinking[index] = false;
                                     block_tool_ids[index] = id.clone();
                                     block_tool_names[index] = name.clone();
                                     on_event(StreamEvent::ToolCallStart {
@@ -617,6 +670,10 @@ impl StreamProvider for AnthropicProvider {
                                         id: id.clone(),
                                         name: name.clone(),
                                     });
+                                }
+                                AnthropicContentBlock::Thinking { .. } => {
+                                    block_is_tool[index] = false;
+                                    block_is_thinking[index] = true;
                                 }
                                 _ => {}
                             }
@@ -637,6 +694,17 @@ impl StreamProvider for AnthropicProvider {
                                     json_delta: partial_json,
                                 });
                             }
+                            StreamDelta::ThinkingDelta { thinking } => {
+                                if index < block_texts.len() {
+                                    block_texts[index].push_str(&thinking);
+                                }
+                                on_event(StreamEvent::ThinkingDelta(thinking));
+                            }
+                            StreamDelta::SignatureDelta { signature } => {
+                                if index < block_signatures.len() {
+                                    block_signatures[index].push_str(&signature);
+                                }
+                            }
                         },
                         StreamEventData::ContentBlockStop { index } => {
                             if index < block_is_tool.len() {
@@ -649,6 +717,15 @@ impl StreamProvider for AnthropicProvider {
                                         id: block_tool_ids[index].clone(),
                                         name: block_tool_names[index].clone(),
                                         input: input_json,
+                                    });
+                                } else if block_is_thinking[index] {
+                                    text_parts.push(ContentBlock::Thinking {
+                                        thinking: block_texts[index].clone(),
+                                        signature: if block_signatures[index].is_empty() {
+                                            None
+                                        } else {
+                                            Some(block_signatures[index].clone())
+                                        },
                                     });
                                 } else {
                                     text_parts.push(ContentBlock::Text {
@@ -873,6 +950,37 @@ mod tests {
         let err = map_error_response(status, body);
         assert!(matches!(err, ProviderError::ContentBlocked { .. }));
         assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn anthropic_tool_choice_mapping() {
+        use skg_turn::types::ToolChoice;
+        let provider = AnthropicProvider::new("sk-test");
+
+        // Auto: tool_choice field set to {"type": "auto"}
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::Auto);
+        let ar = provider.build_infer_request(&req);
+        assert_eq!(ar.tool_choice, Some(serde_json::json!({"type": "auto"})));
+
+        // Any: tool_choice = {"type": "any"}
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::Any);
+        let ar = provider.build_infer_request(&req);
+        assert_eq!(ar.tool_choice, Some(serde_json::json!({"type": "any"})));
+
+        // Tool: tool_choice = {"type": "tool", "name": "..."}
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::Tool { name: "search".into() });
+        let ar = provider.build_infer_request(&req);
+        assert_eq!(ar.tool_choice, Some(serde_json::json!({"type": "tool", "name": "search"})));
+
+        // None: tools cleared, no tool_choice field
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::None);
+        let ar = provider.build_infer_request(&req);
+        assert!(ar.tool_choice.is_none());
+        assert!(ar.tools.is_empty());
     }
 }
 

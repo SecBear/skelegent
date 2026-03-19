@@ -80,6 +80,16 @@ pub enum ContentBlock {
         is_error: bool,
     },
 
+    /// A thinking/reasoning block from the model.
+    #[serde(rename = "thinking")]
+    Thinking {
+        /// The thinking text.
+        thinking: String,
+        /// Opaque signature for forwarding across turns (Anthropic requirement).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+
     /// Escape hatch for future content types.
     /// If a new modality is invented, it goes here first.
     /// When it stabilizes, it graduates to a named variant.

@@ -83,6 +83,57 @@ pub struct TokenUsage {
     pub reasoning_tokens: Option<u64>,
 }
 
+/// Configuration for extended thinking / reasoning.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThinkingConfig {
+    /// Enable thinking with a token budget.
+    Enabled {
+        /// Maximum tokens the model may use for reasoning.
+        budget_tokens: u32,
+    },
+    /// Let the provider decide (Anthropic "auto" mode).
+    Adaptive,
+    /// Explicitly disable thinking.
+    Disabled,
+}
+
+/// Controls which tools the model can use.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolChoice {
+    /// Model decides whether to use tools.
+    Auto,
+    /// Model must use at least one tool.
+    Any,
+    /// Model must use this specific tool.
+    Tool {
+        /// Name of the tool the model must call.
+        name: String,
+    },
+    /// Model must not use tools (or tool calls are suppressed).
+    None,
+}
+
+/// Requested response format.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    /// Plain text (default).
+    Text,
+    /// JSON object (model constrained to valid JSON).
+    Json,
+    /// JSON conforming to a specific schema (OpenAI structured output).
+    JsonSchema {
+        /// Schema name identifier.
+        name: String,
+        /// The JSON schema.
+        schema: serde_json::Value,
+        /// Whether to enforce strict schema compliance (OpenAI-specific).
+        strict: bool,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

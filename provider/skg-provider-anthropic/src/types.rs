@@ -20,6 +20,15 @@ pub struct AnthropicRequest {
     /// Whether to stream the response via SSE.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stream: bool,
+    /// Sampling temperature (must be None when thinking is enabled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    /// Extended thinking configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<serde_json::Value>,
+    /// Tool choice constraint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<serde_json::Value>,
 }
 
 /// A message in the Anthropic API format.
@@ -79,6 +88,15 @@ pub enum AnthropicContentBlock {
         source: AnthropicImageSource,
         /// MIME type.
         media_type: String,
+    },
+    /// Thinking/reasoning block.
+    #[serde(rename = "thinking")]
+    Thinking {
+        /// The thinking text.
+        thinking: String,
+        /// Opaque signature for multi-turn forwarding.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
 }
 
@@ -233,6 +251,7 @@ pub enum StreamEventData {
 /// Incremental delta within a content block.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::enum_variant_names)] // All variants are deltas by design
 pub enum StreamDelta {
     /// Text chunk.
     #[serde(rename = "text_delta")]
@@ -245,6 +264,18 @@ pub enum StreamDelta {
     InputJsonDelta {
         /// JSON fragment to append.
         partial_json: String,
+    },
+    /// Thinking text chunk.
+    #[serde(rename = "thinking_delta")]
+    ThinkingDelta {
+        /// The thinking text fragment.
+        thinking: String,
+    },
+    /// Signature chunk for a thinking block.
+    #[serde(rename = "signature_delta")]
+    SignatureDelta {
+        /// The signature fragment.
+        signature: String,
     },
 }
 

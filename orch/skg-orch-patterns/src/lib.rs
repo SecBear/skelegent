@@ -12,8 +12,11 @@
 //! | [`OperatorTool`] | Wraps an operator as a [`skg_tool::ToolDyn`] |
 //! | [`SequentialOperator`] | Pipeline: each output feeds the next input |
 //! | [`ParallelOperator`] | Fan-out to N operators with a configurable reducer |
+//! | [`FanOutOperator`] | Fan-out to one operator with N data-derived inputs |
 //! | [`LoopOperator`] | Repeat until a predicate fires |
 //! | [`SpeakerSelector`] | Pluggable routing trait for supervisor patterns |
+//! | [`SupervisorOperator`] | LLM-driven routing via a pluggable selector |
+//! | [`SwarmOperator`] | Peer-to-peer handoff with transition constraints |
 //! | [`WorkflowBuilder`] | Fluent API that compiles to pattern operators |
 
 pub mod builder;
@@ -23,14 +26,18 @@ pub mod operator_tool;
 pub mod parallel;
 pub mod selector;
 pub mod sequential;
+pub mod supervisor;
+pub mod swarm;
 
 pub use builder::WorkflowBuilder;
 pub use handoff_tool::HandoffTool;
 pub use loop_op::LoopOperator;
 pub use operator_tool::OperatorTool;
-pub use parallel::{ParallelOperator, ReducerFn};
+pub use parallel::{FanOutOperator, ParallelOperator, ReducerFn, SplitterFn};
 pub use selector::{RandomSelector, RoundRobinSelector, SelectorError, SpeakerSelector};
 pub use sequential::SequentialOperator;
+pub use supervisor::SupervisorOperator;
+pub use swarm::{SwarmBuilder, SwarmOperator};
 
 #[cfg(test)]
 mod tests {
@@ -366,5 +373,67 @@ mod tests {
         // Reducer concatenates both.
         assert!(text.contains("[PRE]"), "prefix step missing: {text}");
         assert_eq!(output.exit_reason, ExitReason::Complete);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+    // FanOutOperator
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Splitter produces 3 inputs; all dispatched to same operator; reducer concatenates.
+    #[tokio::test]
+    async fn fan_out_splits_and_reduces() {
+        let mut orch = LocalOrch::new();
+        orch.register(OperatorId::new("worker"), Arc::new(EchoOperator));
+        let orch = Arc::new(orch);
+
+        let fo = FanOutOperator::with_default_reducer(
+            OperatorId::new("worker"),
+            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
+            Box::new(|input: &OperatorInput| {
+                let base = input.message.as_text().unwrap_or("").to_string();
+                vec![
+                    OperatorInput::new(Content::text(format!("{base}-0")), TriggerType::User),
+                    OperatorInput::new(Content::text(format!("{base}-1")), TriggerType::User),
+                    OperatorInput::new(Content::text(format!("{base}-2")), TriggerType::User),
+                ]
+            }),
+        );
+
+        let ctx = test_ctx("fan");
+        let output = fo
+            .execute(simple_input("chunk"), &ctx)
+            .await
+            .expect("fan-out should complete");
+
+        let text = output.message.as_text().expect("should be text");
+        // EchoOperator echoes each split input; default reducer concatenates all three.
+        assert!(text.contains("chunk-0"), "branch 0 missing: {text}");
+        assert!(text.contains("chunk-1"), "branch 1 missing: {text}");
+        assert!(text.contains("chunk-2"), "branch 2 missing: {text}");
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+    }
+
+    /// Splitter returns empty vec; reducer receives empty input and produces empty text.
+    #[tokio::test]
+    async fn fan_out_empty_split() {
+        let mut orch = LocalOrch::new();
+        orch.register(OperatorId::new("worker"), Arc::new(EchoOperator));
+        let orch = Arc::new(orch);
+
+        let fo = FanOutOperator::with_default_reducer(
+            OperatorId::new("worker"),
+            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
+            Box::new(|_input: &OperatorInput| vec![]),
+        );
+
+        let ctx = test_ctx("fan-empty");
+        let output = fo
+            .execute(simple_input("ignored"), &ctx)
+            .await
+            .expect("empty fan-out should complete");
+
+        // Default reducer on empty vec: parts.join("") → empty string, Complete exit.
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let text = output.message.as_text().unwrap_or("");
+        assert!(text.is_empty(), "expected empty text from empty split, got: {text:?}");
     }
 }

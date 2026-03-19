@@ -120,6 +120,9 @@ async fn anthropic_streaming_text() {
         temperature: Some(0.0),
         system: None,
         extra: serde_json::Value::Null,
+        thinking: None,
+        tool_choice: None,
+        response_format: None,
     };
 
     let events: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(vec![]));
@@ -245,6 +248,9 @@ async fn openai_streaming_text() {
         temperature: Some(0.0),
         system: None,
         extra: serde_json::Value::Null,
+        thinking: None,
+        tool_choice: None,
+        response_format: None,
     };
 
     let events: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(vec![]));
@@ -331,6 +337,9 @@ async fn ollama_streaming_text() {
         temperature: Some(0.0),
         system: None,
         extra: serde_json::Value::Null,
+        thinking: None,
+        tool_choice: None,
+        response_format: None,
     };
 
     let events: Arc<Mutex<Vec<StreamEvent>>> = Arc::new(Mutex::new(vec![]));

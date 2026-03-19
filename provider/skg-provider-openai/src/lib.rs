@@ -316,6 +316,33 @@ impl OpenAIProvider {
             .get("parallel_tool_calls")
             .and_then(|v| v.as_bool());
 
+
+        // Map ToolChoice to OpenAI wire format.
+        let tool_choice = match &request.tool_choice {
+            Some(skg_turn::types::ToolChoice::Auto) => Some(serde_json::Value::String("auto".into())),
+            Some(skg_turn::types::ToolChoice::Any) => Some(serde_json::Value::String("required".into())),
+            Some(skg_turn::types::ToolChoice::Tool { name }) => Some(serde_json::json!({
+                "type": "function",
+                "function": { "name": name }
+            })),
+            Some(skg_turn::types::ToolChoice::None) => Some(serde_json::Value::String("none".into())),
+            None => None,
+        };
+
+        // Map ResponseFormat to OpenAI wire format.
+        let response_format = match &request.response_format {
+            Some(skg_turn::types::ResponseFormat::Text) => Some(serde_json::json!({"type": "text"})),
+            Some(skg_turn::types::ResponseFormat::Json) => Some(serde_json::json!({"type": "json_object"})),
+            Some(skg_turn::types::ResponseFormat::JsonSchema { name, schema, strict }) => Some(serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": name,
+                    "schema": schema,
+                    "strict": strict
+                }
+            })),
+            None => None,
+        };
         OpenAIRequest {
             model,
             messages,
@@ -327,6 +354,8 @@ impl OpenAIProvider {
             reasoning_effort,
             stream: false,
             stream_options: None,
+            tool_choice,
+            response_format,
         }
     }
 
@@ -612,6 +641,9 @@ impl StreamProvider for OpenAIProvider {
             temperature: request.temperature,
             system: request.system,
             extra: request.extra,
+            thinking: request.thinking,
+            tool_choice: request.tool_choice,
+            response_format: request.response_format,
         };
         let mut api_request = self.build_infer_request(&infer_request);
         api_request.stream = true;
@@ -1018,6 +1050,70 @@ mod tests {
         let expected = "https://proxy.example.com/v1/embeddings";
         let actual = provider.api_url.replace("/chat/completions", "/embeddings");
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn openai_tool_choice_mapping() {
+        use skg_turn::types::ToolChoice;
+        let provider = OpenAIProvider::new("sk-test");
+
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::Auto);
+        let or_ = provider.build_infer_request(&req);
+        assert_eq!(or_.tool_choice, Some(serde_json::Value::String("auto".into())));
+
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::Any);
+        let or_ = provider.build_infer_request(&req);
+        assert_eq!(or_.tool_choice, Some(serde_json::Value::String("required".into())));
+
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::Tool { name: "my_tool".into() });
+        let or_ = provider.build_infer_request(&req);
+        assert_eq!(
+            or_.tool_choice,
+            Some(serde_json::json!({"type": "function", "function": {"name": "my_tool"}}))
+        );
+
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::None);
+        let or_ = provider.build_infer_request(&req);
+        assert_eq!(or_.tool_choice, Some(serde_json::Value::String("none".into())));
+    }
+
+    #[test]
+    fn openai_response_format_mapping() {
+        use skg_turn::types::ResponseFormat;
+        let provider = OpenAIProvider::new("sk-test");
+
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_response_format(ResponseFormat::Text);
+        let or_ = provider.build_infer_request(&req);
+        assert_eq!(or_.response_format, Some(serde_json::json!({"type": "text"})));
+
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_response_format(ResponseFormat::Json);
+        let or_ = provider.build_infer_request(&req);
+        assert_eq!(or_.response_format, Some(serde_json::json!({"type": "json_object"})));
+
+        let req = skg_turn::infer::InferRequest::new(vec![])
+            .with_response_format(ResponseFormat::JsonSchema {
+                name: "result".into(),
+                schema: serde_json::json!({"type": "object"}),
+                strict: true,
+            });
+        let or_ = provider.build_infer_request(&req);
+        assert_eq!(
+            or_.response_format,
+            Some(serde_json::json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "result",
+                    "schema": {"type": "object"},
+                    "strict": true
+                }
+            }))
+        );
     }
 }
 

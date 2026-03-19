@@ -139,6 +139,7 @@ impl Message {
                     ContentBlock::File { .. } => 1000,
                     ContentBlock::Data { data, .. } => data.to_string().len() / 4,
                     ContentBlock::Custom { data, .. } => data.to_string().len() / 4,
+                    ContentBlock::Thinking { thinking, .. } => thinking.len() / 4,
                 })
                 .sum(),
         };

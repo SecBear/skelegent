@@ -11,6 +11,7 @@ use layer0::context::Message;
 use std::future::Future;
 
 /// A single incremental event from a streaming inference call.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     /// A chunk of text content from the model.
@@ -37,6 +38,9 @@ pub enum StreamEvent {
 
     /// Token usage update (may arrive mid-stream or at the end).
     Usage(TokenUsage),
+
+    /// Incremental thinking/reasoning text.
+    ThinkingDelta(String),
 
     /// Streaming is complete. Contains the fully-accumulated response.
     ///
@@ -69,6 +73,15 @@ pub struct StreamRequest {
 
     /// Provider-specific config passthrough.
     pub extra: serde_json::Value,
+
+    /// Extended thinking configuration.
+    pub thinking: Option<crate::types::ThinkingConfig>,
+
+    /// Tool choice constraint.
+    pub tool_choice: Option<crate::types::ToolChoice>,
+
+    /// Requested response format.
+    pub response_format: Option<crate::types::ResponseFormat>,
 }
 
 impl From<crate::infer::InferRequest> for StreamRequest {
@@ -81,6 +94,9 @@ impl From<crate::infer::InferRequest> for StreamRequest {
             temperature: req.temperature,
             system: req.system,
             extra: req.extra,
+            thinking: req.thinking,
+            tool_choice: req.tool_choice,
+            response_format: req.response_format,
         }
     }
 }
@@ -137,6 +153,9 @@ pub async fn infer_stream_fallback<P: crate::provider::Provider>(
         temperature: request.temperature,
         system: request.system,
         extra: request.extra,
+        thinking: request.thinking,
+        tool_choice: request.tool_choice,
+        response_format: request.response_format,
     };
 
     let response = provider.infer(infer_request).await?;
@@ -144,6 +163,15 @@ pub async fn infer_stream_fallback<P: crate::provider::Provider>(
     // Emit text as a single delta if present
     if let Some(text) = response.text() {
         on_event(StreamEvent::TextDelta(text.to_string()));
+    }
+
+    // Emit thinking blocks as ThinkingDelta events
+    if let layer0::content::Content::Blocks(blocks) = &response.content {
+        for block in blocks {
+            if let layer0::content::ContentBlock::Thinking { thinking, .. } = block {
+                on_event(StreamEvent::ThinkingDelta(thinking.clone()));
+            }
+        }
     }
 
     // Emit tool call starts
@@ -212,6 +240,9 @@ mod tests {
             temperature: None,
             system: None,
             extra: serde_json::Value::Null,
+            thinking: None,
+            tool_choice: None,
+            response_format: None,
         };
 
         let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));

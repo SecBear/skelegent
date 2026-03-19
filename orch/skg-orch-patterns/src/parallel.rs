@@ -133,3 +133,102 @@ impl Operator for ParallelOperator {
         Ok((self.reducer)(outputs))
     }
 }
+
+
+/// Splitter function: given one input, produces N inputs to fan out to the same operator.
+///
+/// An empty return is valid — the reducer receives an empty `Vec` and the
+/// operator returns whatever the reducer produces from nothing.
+pub type SplitterFn = Box<dyn Fn(&OperatorInput) -> Vec<OperatorInput> + Send + Sync>;
+
+/// Fan-out to the **same** operator with N different inputs produced by `splitter`.
+///
+/// Contrast with [`ParallelOperator`], which fans out to N *different* operators
+/// with the same input. `FanOutOperator` fans out to one operator with N inputs
+/// determined at runtime from the incoming data.
+///
+/// All branches are dispatched concurrently via [`tokio::task::JoinSet`]. The
+/// `reducer` combines the collected outputs into a single [`OperatorOutput`].
+/// If any branch dispatch or execution fails the whole operator returns that
+/// error (remaining tasks are cancelled when `JoinSet` is dropped).
+pub struct FanOutOperator {
+    /// The single operator ID all split inputs are dispatched to.
+    operator: OperatorId,
+    /// Dispatcher used to invoke each branch.
+    dispatcher: Arc<dyn Dispatcher>,
+    /// Produces N inputs from the original input.
+    splitter: SplitterFn,
+    /// Combines branch outputs into a single result.
+    reducer: ReducerFn,
+}
+
+impl FanOutOperator {
+    /// Create a `FanOutOperator` with a custom splitter and the default concatenating reducer.
+    pub fn with_default_reducer(
+        operator: OperatorId,
+        dispatcher: Arc<dyn Dispatcher>,
+        splitter: SplitterFn,
+    ) -> Self {
+        Self::new(operator, dispatcher, splitter, Box::new(default_reducer))
+    }
+
+    /// Create a `FanOutOperator` with a custom splitter and a custom reducer.
+    pub fn new(
+        operator: OperatorId,
+        dispatcher: Arc<dyn Dispatcher>,
+        splitter: SplitterFn,
+        reducer: ReducerFn,
+    ) -> Self {
+        Self {
+            operator,
+            dispatcher,
+            splitter,
+            reducer,
+        }
+    }
+}
+
+#[async_trait]
+impl Operator for FanOutOperator {
+    async fn execute(
+        &self,
+        input: OperatorInput,
+        ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
+        let split_inputs = (self.splitter)(&input);
+        let capacity = split_inputs.len();
+
+        let mut join_set: tokio::task::JoinSet<Result<OperatorOutput, OperatorError>> =
+            tokio::task::JoinSet::new();
+
+        for branch_input in split_inputs {
+            let child_ctx = ctx.child(next_dispatch_id(), self.operator.clone());
+            let dispatcher = Arc::clone(&self.dispatcher);
+
+            join_set.spawn(async move {
+                dispatcher
+                    .dispatch(&child_ctx, branch_input)
+                    .await
+                    .map_err(|e| OperatorError::non_retryable(e.to_string()))?
+                    .collect()
+                    .await
+                    .map_err(|e| OperatorError::non_retryable(e.to_string()))
+            });
+        }
+
+        let mut outputs: Vec<OperatorOutput> = Vec::with_capacity(capacity);
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(output)) => outputs.push(output),
+                Ok(Err(e)) => return Err(e),
+                Err(join_err) => {
+                    return Err(OperatorError::non_retryable(format!(
+                        "fan-out branch task panicked: {join_err}"
+                    )));
+                }
+            }
+        }
+
+        Ok((self.reducer)(outputs))
+    }
+}

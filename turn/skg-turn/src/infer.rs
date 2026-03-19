@@ -40,8 +40,16 @@ pub struct InferRequest {
 
     /// Provider-specific config passthrough (e.g., thinking blocks, caching).
     pub extra: serde_json::Value,
-}
 
+    /// Extended thinking configuration.
+    pub thinking: Option<crate::types::ThinkingConfig>,
+
+    /// Tool choice constraint.
+    pub tool_choice: Option<crate::types::ToolChoice>,
+
+    /// Requested response format.
+    pub response_format: Option<crate::types::ResponseFormat>,
+}
 impl InferRequest {
     /// Create a minimal inference request with just messages.
     pub fn new(messages: Vec<Message>) -> Self {
@@ -53,6 +61,9 @@ impl InferRequest {
             temperature: None,
             system: None,
             extra: serde_json::Value::Null,
+            thinking: None,
+            tool_choice: None,
+            response_format: None,
         }
     }
 
@@ -89,6 +100,24 @@ impl InferRequest {
     /// Set provider-specific extra config.
     pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
         self.extra = extra;
+        self
+    }
+
+    /// Set extended thinking configuration.
+    pub fn with_thinking(mut self, config: crate::types::ThinkingConfig) -> Self {
+        self.thinking = Some(config);
+        self
+    }
+
+    /// Set tool choice constraint.
+    pub fn with_tool_choice(mut self, choice: crate::types::ToolChoice) -> Self {
+        self.tool_choice = Some(choice);
+        self
+    }
+
+    /// Set the requested response format.
+    pub fn with_response_format(mut self, format: crate::types::ResponseFormat) -> Self {
+        self.response_format = Some(format);
         self
     }
 }
@@ -357,5 +386,77 @@ mod tests {
         };
         let content: Content = resp.into();
         assert_eq!(content.as_text(), Some("Converted"));
+    }
+
+    #[test]
+    fn thinking_config_serde_round_trip() {
+        use crate::types::ThinkingConfig;
+        for config in [
+            ThinkingConfig::Enabled { budget_tokens: 1024 },
+            ThinkingConfig::Adaptive,
+            ThinkingConfig::Disabled,
+        ] {
+            let json = serde_json::to_value(&config).unwrap();
+            let back: ThinkingConfig = serde_json::from_value(json).unwrap();
+            assert_eq!(config, back);
+        }
+    }
+
+    #[test]
+    fn tool_choice_serde_round_trip() {
+        use crate::types::ToolChoice;
+        for choice in [
+            ToolChoice::Auto,
+            ToolChoice::Any,
+            ToolChoice::Tool { name: "search".into() },
+            ToolChoice::None,
+        ] {
+            let json = serde_json::to_value(&choice).unwrap();
+            let back: ToolChoice = serde_json::from_value(json).unwrap();
+            assert_eq!(choice, back);
+        }
+    }
+
+    #[test]
+    fn response_format_serde_round_trip() {
+        use crate::types::ResponseFormat;
+        let formats = [
+            ResponseFormat::Text,
+            ResponseFormat::Json,
+            ResponseFormat::JsonSchema {
+                name: "my_schema".into(),
+                schema: serde_json::json!({"type": "object"}),
+                strict: true,
+            },
+        ];
+        for fmt in formats {
+            let json = serde_json::to_value(&fmt).unwrap();
+            let back: ResponseFormat = serde_json::from_value(json).unwrap();
+            assert_eq!(fmt, back);
+        }
+    }
+
+    #[test]
+    fn infer_request_builder_methods() {
+        use crate::types::{ThinkingConfig, ToolChoice, ResponseFormat};
+        let req = InferRequest::new(vec![])
+            .with_thinking(ThinkingConfig::Enabled { budget_tokens: 2048 })
+            .with_tool_choice(ToolChoice::Any)
+            .with_response_format(ResponseFormat::Json);
+        assert_eq!(req.thinking, Some(ThinkingConfig::Enabled { budget_tokens: 2048 }));
+        assert_eq!(req.tool_choice, Some(ToolChoice::Any));
+        assert_eq!(req.response_format, Some(ResponseFormat::Json));
+    }
+
+    #[test]
+    fn content_block_thinking_round_trip() {
+        use layer0::content::ContentBlock;
+        let block = ContentBlock::Thinking {
+            thinking: "I need to think...".into(),
+            signature: Some("sig123".into()),
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        let back: ContentBlock = serde_json::from_value(json).unwrap();
+        assert_eq!(block, back);
     }
 }

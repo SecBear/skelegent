@@ -53,6 +53,7 @@ members = [
   "runner/skg-runner",
   "examples/hello-claude",
   "a2a/skg-a2a-core",
+  "turn/skg-tool-openapi",
 ]
 
 [workspace.package]

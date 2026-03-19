@@ -92,6 +92,24 @@ impl<P: Provider> CognitiveOperator<P> {
         self
     }
 
+    /// Create an ergonomic typestate builder for constructing a [`CognitiveOperator`].
+    ///
+    /// The builder enforces at compile time that a provider is supplied before
+    /// [`build()`](crate::CognitiveBuilder::build) is called.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let op = CognitiveOperator::builder()
+    ///     .system_prompt("You are helpful.")
+    ///     .max_tokens(2048)
+    ///     .provider(my_provider)
+    ///     .build();
+    /// ```
+    pub fn builder() -> crate::CognitiveBuilder<crate::NoProvider> {
+        crate::CognitiveBuilder::new()
+    }
+
     fn create_context(&self) -> Context {
         match &self.rule_factory {
             Some(factory) => Context::with_rules(factory()),
