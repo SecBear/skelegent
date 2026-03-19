@@ -2,9 +2,9 @@
 
 use crate::{Boundary, RecordContext, RecordEntry, RecordSink};
 use async_trait::async_trait;
+use layer0::dispatch_context::DispatchContext;
 use layer0::environment::EnvironmentSpec;
 use layer0::error::EnvError;
-use layer0::dispatch_context::DispatchContext;
 use layer0::middleware::{ExecMiddleware, ExecNext};
 use layer0::operator::{OperatorInput, OperatorOutput};
 use std::sync::Arc;
@@ -117,7 +117,17 @@ mod tests {
         let input = OperatorInput::new(Content::text("run this"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let result = recorder.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec, &EchoExec).await;
+        let result = recorder
+            .run(
+                &DispatchContext::new(
+                    layer0::id::DispatchId::new("test"),
+                    layer0::id::OperatorId::new("test"),
+                ),
+                input,
+                &spec,
+                &EchoExec,
+            )
+            .await;
         assert!(result.is_ok());
 
         let entries = sink.entries().await;
@@ -164,7 +174,17 @@ mod tests {
         let input = OperatorInput::new(Content::text("fail"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let result = recorder.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec, &FailExec).await;
+        let result = recorder
+            .run(
+                &DispatchContext::new(
+                    layer0::id::DispatchId::new("test"),
+                    layer0::id::OperatorId::new("test"),
+                ),
+                input,
+                &spec,
+                &FailExec,
+            )
+            .await;
         assert!(result.is_err());
 
         let entries = sink.entries().await;

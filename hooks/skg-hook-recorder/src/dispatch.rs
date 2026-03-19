@@ -92,8 +92,7 @@ impl DispatchMiddleware for DispatchRecorder {
                 let intercepted = handle.intercept(move |event| {
                     let (payload, error) = match event {
                         DispatchEvent::Completed { output } => {
-                            let p = serde_json::to_value(output)
-                                .unwrap_or(serde_json::Value::Null);
+                            let p = serde_json::to_value(output).unwrap_or(serde_json::Value::Null);
                             (p, None)
                         }
                         DispatchEvent::Failed { error } => {
@@ -284,7 +283,10 @@ mod tests {
         let ctx = DispatchContext::new(DispatchId::new("d-hf"), OperatorId::from("op"));
         let input = OperatorInput::new(Content::text("x"), TriggerType::User);
 
-        let handle = recorder.dispatch(&ctx, input, &HandleFailNext).await.unwrap();
+        let handle = recorder
+            .dispatch(&ctx, input, &HandleFailNext)
+            .await
+            .unwrap();
         // collect() drains events; the Failed terminal event triggers the intercept.
         let result = handle.collect().await;
         assert!(result.is_err(), "expected Err from Failed event");
@@ -296,7 +298,10 @@ mod tests {
         let post = &entries[1];
         assert_eq!(post.phase, Phase::Post);
         assert_eq!(post.boundary, Boundary::Dispatch);
-        assert!(post.error.is_some(), "post error must be set for Failed event");
+        assert!(
+            post.error.is_some(),
+            "post error must be set for Failed event"
+        );
         assert!(
             post.payload_json.get("error").is_some(),
             "post payload must contain error field, got: {}",

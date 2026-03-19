@@ -238,9 +238,9 @@ impl DispatchMiddleware for ExfilGuardMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::dispatch::Artifact;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{ExitReason, OperatorOutput, TriggerType};
-    use layer0::dispatch::Artifact;
 
     struct MockDispatchNext {
         output_text: String,
@@ -423,7 +423,11 @@ mod tests {
             .collect_all()
             .await
             .unwrap();
-        assert_eq!(collected.events.len(), 1, "expected one ArtifactProduced event");
+        assert_eq!(
+            collected.events.len(),
+            1,
+            "expected one ArtifactProduced event"
+        );
         match &collected.events[0] {
             DispatchEvent::ArtifactProduced { artifact } => {
                 let text = artifact.parts[0].as_text().unwrap();

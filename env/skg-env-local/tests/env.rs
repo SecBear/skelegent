@@ -195,7 +195,10 @@ async fn resolves_injects_and_emits_events() {
         },
     ));
 
-    let output = env.run(&make_ctx(), simple_input("inject"), &spec).await.unwrap();
+    let output = env
+        .run(&make_ctx(), simple_input("inject"), &spec)
+        .await
+        .unwrap();
     assert_eq!(output.message, Content::text(SECRET_VALUE));
     assert!(std::env::var(VAR_NAME).is_err());
 
@@ -231,7 +234,10 @@ async fn credential_failures_are_sanitized_and_audited() {
         },
     ));
 
-    let err = env.run(&make_ctx(), simple_input("inject"), &spec).await.unwrap_err();
+    let err = env
+        .run(&make_ctx(), simple_input("inject"), &spec)
+        .await
+        .unwrap_err();
     match &err {
         EnvError::CredentialFailed(msg) => {
             assert!(msg.contains("anthropic-api-key"));

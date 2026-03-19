@@ -325,7 +325,11 @@ async fn integration_compose_all_implementations() {
 
     // 8. Run a turn through the environment (passthrough)
     let env_output = env
-        .run(&test_ctx("env-wrapped"), simple_input("env-wrapped"), &EnvironmentSpec::default())
+        .run(
+            &test_ctx("env-wrapped"),
+            simple_input("env-wrapped"),
+            &EnvironmentSpec::default(),
+        )
         .await
         .unwrap();
     assert_eq!(env_output.message, Content::text("env-wrapped"));

@@ -11,9 +11,9 @@ pub struct AnthropicRequest {
     pub max_tokens: u32,
     /// Conversation messages.
     pub messages: Vec<AnthropicMessage>,
-    /// Optional system prompt.
+    /// Optional system prompt (plain string or content blocks for prompt caching).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
+    pub system: Option<AnthropicSystemContent>,
     /// Tools available to the model.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<AnthropicTool>,
@@ -100,6 +100,32 @@ pub enum AnthropicImageSource {
     },
 }
 
+/// System prompt: a plain string or an array of content blocks (for prompt caching).
+///
+/// When `cache_control` is needed, the system prompt must be serialised as an array
+/// of content blocks. The `#[serde(untagged)]` attribute handles both wire shapes.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum AnthropicSystemContent {
+    /// Plain text — no cache control.
+    Text(String),
+    /// One or more content blocks, each with optional `cache_control`.
+    Blocks(Vec<AnthropicSystemBlock>),
+}
+
+/// A single block in the `system` array used when prompt caching is required.
+#[derive(Debug, Serialize)]
+pub struct AnthropicSystemBlock {
+    /// Block type — always `"text"` for system prompts.
+    #[serde(rename = "type")]
+    pub block_type: &'static str,
+    /// Text content.
+    pub text: String,
+    /// Cache control directive, e.g. `{"type": "ephemeral"}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<serde_json::Value>,
+}
+
 /// Tool definition for the Anthropic API.
 #[derive(Debug, Serialize)]
 pub struct AnthropicTool {
@@ -109,6 +135,11 @@ pub struct AnthropicTool {
     pub description: String,
     /// JSON Schema for the tool input.
     pub input_schema: serde_json::Value,
+    /// Optional cache control for prompt caching (e.g. `{"type": "ephemeral"}`).
+    ///
+    /// Populated from [`ToolSchema::extra`]`["cache_control"]` when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<serde_json::Value>,
 }
 
 /// Anthropic API response body.

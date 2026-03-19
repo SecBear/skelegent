@@ -3,11 +3,11 @@
 //!
 //! Implements the [`skg_turn::Provider`] trait for Anthropic's Messages API.
 
+mod pricing;
 mod types;
 
 use futures_util::StreamExt;
 use layer0::content::{Content, ContentBlock, ContentSource as L0ContentSource};
-use rust_decimal::Decimal;
 use skg_auth::{AuthProvider, AuthRequest};
 use skg_turn::infer::{InferRequest, InferResponse, ToolCall};
 use skg_turn::provider::{Provider, ProviderError};
@@ -126,13 +126,17 @@ impl AnthropicProvider {
             .tools
             .iter()
             .map(|t| {
-                // TODO: plumb ToolSchema.extra — Anthropic supports `cache_control`
-                // per-tool; merge t.extra into AnthropicTool (requires adding the field
-                // or serializing via flatten) once the wire-format contract is settled.
+                // Pass cache_control from ToolSchema.extra, if present.
+                let cache_control = t
+                    .extra
+                    .as_ref()
+                    .and_then(|e| e.get("cache_control"))
+                    .cloned();
                 AnthropicTool {
                     name: t.name.clone(),
                     description: t.description.clone(),
                     input_schema: t.input_schema.clone(),
+                    cache_control,
                 }
             })
             .collect();
@@ -141,10 +145,47 @@ impl AnthropicProvider {
             model,
             max_tokens,
             messages,
-            system: request.system.clone(),
+            system: build_anthropic_system(&request.system, &request.extra),
             tools,
             stream: false,
         }
+    }
+}
+
+/// Build the Anthropic `system` field from the request's system prompt and extra config.
+///
+/// If `extra["system_cache_control"]` is present, the system prompt is wrapped in a
+/// content-block array so Anthropic's caching API can attach the directive. Otherwise
+/// it falls through to a plain string, which avoids any wire-format regression.
+fn build_anthropic_system(
+    system: &Option<String>,
+    extra: &serde_json::Value,
+) -> Option<AnthropicSystemContent> {
+    let text = system.as_ref()?.clone();
+    if let Some(cache_control) = extra.get("system_cache_control").cloned() {
+        Some(AnthropicSystemContent::Blocks(vec![AnthropicSystemBlock {
+            block_type: "text",
+            text,
+            cache_control: Some(cache_control),
+        }]))
+    } else {
+        Some(AnthropicSystemContent::Text(text))
+    }
+}
+
+/// Convert an `anthropic_beta` extra value to a comma-joined header string.
+///
+/// Accepts a JSON string or an array of JSON strings. Returns an empty string
+/// if the value is neither — callers must skip setting the header in that case.
+fn extra_to_beta_header(beta: &serde_json::Value) -> String {
+    match beta {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => String::new(),
     }
 }
 
@@ -268,9 +309,8 @@ fn parse_anthropic_infer_response(
         reasoning_tokens: None,
     };
 
-    let input_cost = Decimal::from(response.usage.input_tokens) * Decimal::new(25, 8);
-    let output_cost = Decimal::from(response.usage.output_tokens) * Decimal::new(125, 8);
-    let cost = input_cost + output_cost;
+    let pricing = pricing::lookup(&response.model);
+    let cost = pricing::compute_cost(&pricing, &usage);
 
     Ok(InferResponse {
         content,
@@ -325,11 +365,13 @@ impl Provider for AnthropicProvider {
         &self,
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        skg_turn::assert_real_requests_allowed();
         let source = self.api_key_source.clone();
         let api_request = self.build_infer_request(&request);
         let client = self.client.clone();
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
+        let extra = request.extra.clone();
 
         let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer", provider = "anthropic", model);
@@ -346,6 +388,12 @@ impl Provider for AnthropicProvider {
                     .header("x-app", "cli");
             } else {
                 builder = builder.header("x-api-key", key);
+                if let Some(beta) = extra.get("anthropic_beta") {
+                    let hdr = extra_to_beta_header(beta);
+                    if !hdr.is_empty() {
+                        builder = builder.header("anthropic-beta", hdr);
+                    }
+                }
             }
             let http_request = builder
                 .header("anthropic-version", &api_version)
@@ -420,6 +468,7 @@ impl StreamProvider for AnthropicProvider {
         let client = self.client.clone();
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
+        let extra = infer_request.extra.clone();
 
         let model = infer_request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer_stream", provider = "anthropic", model);
@@ -436,6 +485,12 @@ impl StreamProvider for AnthropicProvider {
                     .header("x-app", "cli");
             } else {
                 builder = builder.header("x-api-key", key);
+                if let Some(beta) = extra.get("anthropic_beta") {
+                    let hdr = extra_to_beta_header(beta);
+                    if !hdr.is_empty() {
+                        builder = builder.header("anthropic-beta", hdr);
+                    }
+                }
             }
             let http_response = builder
                 .header("anthropic-version", &api_version)
@@ -659,9 +714,8 @@ impl StreamProvider for AnthropicProvider {
                 reasoning_tokens: None,
             };
 
-            let input_cost = Decimal::from(input_tokens) * Decimal::new(25, 8);
-            let output_cost = Decimal::from(output_tokens) * Decimal::new(125, 8);
-            let cost = input_cost + output_cost;
+            let pricing = pricing::lookup(&model_name);
+            let cost = pricing::compute_cost(&pricing, &usage);
 
             let response = InferResponse {
                 content,
@@ -726,9 +780,62 @@ mod tests {
                 },
                 "required": ["location"]
             }),
+            cache_control: None,
         };
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "get_weather");
+    }
+
+    #[test]
+    fn tool_cache_control_in_extra_is_forwarded() {
+        use skg_turn::types::ToolSchema;
+        let schema = ToolSchema::new(
+            "search",
+            "Search the web",
+            json!({"type": "object", "properties": {}}),
+        )
+        .with_extra(json!({"cache_control": {"type": "ephemeral"}}));
+        let provider = AnthropicProvider::new("sk-test");
+        let request = skg_turn::infer::InferRequest::new(vec![])
+            .with_tools(vec![schema]);
+        let api_req = provider.build_infer_request(&request);
+        let json = serde_json::to_value(&api_req.tools[0]).unwrap();
+        assert_eq!(json["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn system_cache_control_in_extra_produces_block_array() {
+        let provider = AnthropicProvider::new("sk-test");
+        let request = skg_turn::infer::InferRequest::new(vec![])
+            .with_system("You are helpful")
+            .with_extra(json!({"system_cache_control": {"type": "ephemeral"}}));
+        let api_req = provider.build_infer_request(&request);
+        let json = serde_json::to_value(&api_req).unwrap();
+        // system must be an array, not a string
+        assert!(json["system"].is_array(), "system should be a block array");
+        assert_eq!(json["system"][0]["type"], "text");
+        assert_eq!(json["system"][0]["text"], "You are helpful");
+        assert_eq!(json["system"][0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn system_without_cache_control_is_plain_string() {
+        let provider = AnthropicProvider::new("sk-test");
+        let request = skg_turn::infer::InferRequest::new(vec![])
+            .with_system("You are helpful");
+        let api_req = provider.build_infer_request(&request);
+        let json = serde_json::to_value(&api_req).unwrap();
+        assert_eq!(json["system"], "You are helpful");
+    }
+
+    #[test]
+    fn extra_to_beta_header_handles_string_and_array() {
+        let hdr = extra_to_beta_header(&json!("prompt-caching-2024-07-31"));
+        assert_eq!(hdr, "prompt-caching-2024-07-31");
+        let hdr = extra_to_beta_header(&json!(["a", "b", "c"]));
+        assert_eq!(hdr, "a,b,c");
+        let hdr = extra_to_beta_header(&json!(42));
+        assert_eq!(hdr, "");
     }
 
     #[test]

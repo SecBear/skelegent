@@ -10,8 +10,8 @@ use layer0::dispatch_context::DispatchContext;
 use layer0::error::{EnvError, OrchError};
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
 use layer0::operator::OperatorInput;
-use std::time::Duration;
 use rand::Rng;
+use std::time::Duration;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CONFIGURATION
@@ -66,8 +66,7 @@ impl BackoffStrategy {
                     .saturating_mul(1u32.checked_shl(attempt).unwrap_or(u32::MAX))
                     .min(*max_backoff);
                 // Sample uniformly from [0, window]. Nanosecond precision.
-                let cap_nanos =
-                    u64::try_from(window.as_nanos()).unwrap_or(u64::MAX);
+                let cap_nanos = u64::try_from(window.as_nanos()).unwrap_or(u64::MAX);
                 Duration::from_nanos(rand::thread_rng().gen_range(0..=cap_nanos))
             }
         }

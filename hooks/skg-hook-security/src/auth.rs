@@ -206,8 +206,14 @@ mod tests {
         // Must show key count for diagnostics.
         assert!(s.contains("<2 keys>"), "expected count in debug: {s}");
         // Must not leak any actual key material.
-        assert!(!s.contains("valid-key-1"), "key material leaked in debug: {s}");
-        assert!(!s.contains("valid-key-2"), "key material leaked in debug: {s}");
+        assert!(
+            !s.contains("valid-key-1"),
+            "key material leaked in debug: {s}"
+        );
+        assert!(
+            !s.contains("valid-key-2"),
+            "key material leaked in debug: {s}"
+        );
     }
 
     // -- AuthGuard header parsing -------------------------------------------

@@ -111,6 +111,12 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         let mut ctx = self.create_context();
         let mut config = self.config.clone();
 
+        // Resolve dynamic system prompt, if a resolver is set.
+        // Takes precedence over the static system_prompt field.
+        if let Some(ref f) = config.system_prompt_fn {
+            config.system_prompt = f(dispatch_ctx);
+        }
+
         // Apply system_addendum from per-request config, if any.
         // Appended after a blank separator so the base identity
         // remains coherent and the addendum reads as augmentation.
@@ -552,6 +558,56 @@ mod tests {
             req.messages.last().unwrap().text_content(),
             "follow-up",
             "user message must be last in request"
+        );
+    }
+
+    // ── system_prompt_fn ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn dynamic_system_prompt_resolved() {
+        use crate::react::SystemPromptFn;
+
+        let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
+        let resolver: SystemPromptFn = Arc::new(|_ctx| "Dynamic prompt for tenant X".to_string());
+        let config = ReactLoopConfig {
+            system_prompt: "Static fallback".into(),
+            model: Some("test-model".into()),
+            system_prompt_fn: Some(resolver),
+            ..Default::default()
+        };
+        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), config);
+
+        op.execute(simple_input("hi"), &test_ctx()).await.unwrap();
+
+        let req = op.provider.last_request().unwrap();
+        let system = req.system.expect("system field must be set");
+        assert!(
+            system.contains("Dynamic prompt for tenant X"),
+            "dynamic prompt missing: {system:?}"
+        );
+        assert!(
+            !system.contains("Static fallback"),
+            "static prompt must not appear when fn is set: {system:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn static_prompt_when_no_fn() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
+        let config = ReactLoopConfig {
+            system_prompt: "Static only".into(),
+            model: Some("test-model".into()),
+            ..Default::default()  // system_prompt_fn: None
+        };
+        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), config);
+
+        op.execute(simple_input("hi"), &test_ctx()).await.unwrap();
+
+        let req = op.provider.last_request().unwrap();
+        assert_eq!(
+            req.system.as_deref(),
+            Some("Static only"),
+            "static prompt must be used when no fn is set"
         );
     }
 

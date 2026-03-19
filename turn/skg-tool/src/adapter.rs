@@ -10,8 +10,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use layer0::operator::Operator;
 use layer0::{
-    Content, DispatchContext, DurationMs, ExitReason, OperatorError,
-    OperatorInput, OperatorOutput, OrchError, SubDispatchRecord, ToolMetadata,
+    Content, DispatchContext, DurationMs, ExitReason, OperatorError, OperatorInput, OperatorOutput,
+    OrchError, SubDispatchRecord, ToolMetadata,
 };
 
 use crate::{ToolConcurrencyHint, ToolDyn, ToolRegistry};
@@ -341,14 +341,20 @@ mod tests {
     #[tokio::test]
     async fn tool_operator_forwards_ctx_to_tool() {
         let seen = Arc::new(Mutex::new(None));
-        let tool = Arc::new(CtxCaptureTool { seen: Arc::clone(&seen) });
+        let tool = Arc::new(CtxCaptureTool {
+            seen: Arc::clone(&seen),
+        });
         let op = ToolOperator::new(tool);
 
         let ctx = DispatchContext::new(DispatchId::new("my-dispatch"), OperatorId::new("my-op"));
         let input = make_input("{}");
         op.execute(input, &ctx).await.expect("should succeed");
 
-        let captured = seen.lock().unwrap().take().expect("tool must have been called");
+        let captured = seen
+            .lock()
+            .unwrap()
+            .take()
+            .expect("tool must have been called");
         assert_eq!(captured.0, "my-dispatch", "dispatch_id was not forwarded");
         assert_eq!(captured.1, "my-op", "operator_id was not forwarded");
     }

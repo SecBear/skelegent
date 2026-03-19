@@ -431,7 +431,17 @@ mod tests {
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let output = env.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec).await.unwrap();
+        let output = env
+            .run(
+                &DispatchContext::new(
+                    layer0::id::DispatchId::new("test"),
+                    layer0::id::OperatorId::new("test"),
+                ),
+                input,
+                &spec,
+            )
+            .await
+            .unwrap();
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.message.as_text().unwrap(), "hello");
     }
@@ -444,7 +454,16 @@ mod tests {
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let spec = EnvironmentSpec::default();
 
-        let result = env.run(&DispatchContext::new(layer0::id::DispatchId::new("test"), layer0::id::OperatorId::new("test")), input, &spec).await;
+        let result = env
+            .run(
+                &DispatchContext::new(
+                    layer0::id::DispatchId::new("test"),
+                    layer0::id::OperatorId::new("test"),
+                ),
+                input,
+                &spec,
+            )
+            .await;
         assert!(result.is_err());
     }
 

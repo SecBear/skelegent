@@ -802,7 +802,17 @@ mod tests {
             crate::operator::TriggerType::User,
         );
         let spec = EnvironmentSpec::default();
-        let result = stack.run_with(&DispatchContext::new(crate::id::DispatchId::new("test"), crate::id::OperatorId::new("test")), input, &spec, &EchoExec).await;
+        let result = stack
+            .run_with(
+                &DispatchContext::new(
+                    crate::id::DispatchId::new("test"),
+                    crate::id::OperatorId::new("test"),
+                ),
+                input,
+                &spec,
+                &EchoExec,
+            )
+            .await;
         assert!(result.is_ok());
     }
 }

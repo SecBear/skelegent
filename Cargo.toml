@@ -21,6 +21,7 @@ members = [
   "orch/skg-orch-local",
   "orch/skg-orch-kit",
   "orch/skg-orch-env",
+  "orch/skg-orch-patterns",
   "turn/skg-tool",
   "turn/skg-tool-macro",
   "turn/skg-turn",

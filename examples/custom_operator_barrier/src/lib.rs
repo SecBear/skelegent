@@ -157,7 +157,8 @@ impl Operator for BarrierOperator {
                             batch.push((id, name, input));
                         }
                         ContentBlock::Text { text } if text.trim() == "BARRIER" => {
-                            flush(&self.tools, &mut batch, &mut out_blocks, &mut metadata, ctx).await;
+                            flush(&self.tools, &mut batch, &mut out_blocks, &mut metadata, ctx)
+                                .await;
                         }
                         other => {
                             // Pass-through any other content blocks
@@ -180,10 +181,10 @@ impl Operator for BarrierOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::id::{DispatchId, OperatorId};
     use serde_json::json;
     use skg_tool::{ToolDyn, ToolError};
     use std::sync::Arc;
-    use layer0::id::{DispatchId, OperatorId};
 
     struct Echo;
     impl ToolDyn for Echo {

@@ -1,0 +1,24 @@
+[package]
+name = "skg-orch-patterns"
+version = "0.4.1"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Multi-agent composition patterns for skelegent (sequential, parallel, loop, handoff)"
+readme = "README.md"
+categories = ["asynchronous"]
+keywords = ["skelegent", "ai", "agent", "orchestration", "workflow"]
+
+[dependencies]
+layer0 = { path = "../../layer0", version = "0.4.1" }
+skg-tool = { path = "../../turn/skg-tool", version = "0.4.1" }
+async-trait = "0.1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt"] }
+tracing = "0.1"
+
+[dev-dependencies]
+layer0 = { path = "../../layer0", features = ["test-utils"], version = "0.4.1" }
+skg-orch-local = { path = "../skg-orch-local", version = "0.4.1" }
+tokio = { version = "1", features = ["full", "test-util"] }

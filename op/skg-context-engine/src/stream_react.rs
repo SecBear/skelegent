@@ -232,6 +232,8 @@ mod tests {
             tool_filter: None,
             tool_result_formatter: None,
             tool_error_formatter: None,
+            system_prompt_fn: None,
+            max_tool_retries: 2,
         }
     }
 

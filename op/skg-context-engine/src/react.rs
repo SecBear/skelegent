@@ -22,12 +22,13 @@ use layer0::duration::DurationMs;
 use layer0::effect::Effect;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use serde_json::Value;
-use skg_tool::{ToolDyn, ToolRegistry};
+use skg_tool::{ToolDyn, ToolError, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
 use std::fmt;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 /// Predicate for dynamic tool availability.
 ///
@@ -42,6 +43,13 @@ pub type ToolResultFormatter = Arc<dyn Fn(&str, &serde_json::Value) -> String + 
 /// Formatter for tool errors: receives `(tool_name, error_message)` and returns the string
 /// to inject into LLM context.
 pub type ToolErrorFormatter = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
+
+/// Dynamic system prompt resolver.
+///
+/// Called at the start of each dispatch with the [`DispatchContext`].
+/// The returned string becomes the system prompt for that invocation.
+/// Takes precedence over [`ReactLoopConfig::system_prompt`] when set.
+pub type SystemPromptFn = Arc<dyn Fn(&DispatchContext) -> String + Send + Sync>;
 
 /// Configuration for [`react_loop()`].
 pub struct ReactLoopConfig {
@@ -72,6 +80,21 @@ pub struct ReactLoopConfig {
     /// Returns the string to inject into the LLM context.
     /// Defaults to the built-in [`format_tool_error`] behavior when `None`.
     pub tool_error_formatter: Option<ToolErrorFormatter>,
+    /// Optional dynamic system prompt resolver.
+    ///
+    /// When set, called at the start of each dispatch to generate the system prompt.
+    /// Takes precedence over the static [`system_prompt`](Self::system_prompt) field.
+    pub system_prompt_fn: Option<SystemPromptFn>,
+    /// Maximum number of times to retry a tool call on [`ToolError::InvalidInput`].
+    ///
+    /// When a tool rejects its input, the error message and the tool's expected schema
+    /// are fed back to the model as a structured retry message so it can correct the call.
+    /// Each call ID tracks its own retry count independently, so multiple concurrent tool
+    /// calls each get the full budget. After this many retries the standard
+    /// error-formatting path is used instead.
+    ///
+    /// Default is `2`.
+    pub max_tool_retries: u32,
 }
 
 impl Clone for ReactLoopConfig {
@@ -84,6 +107,8 @@ impl Clone for ReactLoopConfig {
             tool_filter: self.tool_filter.clone(),
             tool_result_formatter: self.tool_result_formatter.clone(),
             tool_error_formatter: self.tool_error_formatter.clone(),
+            system_prompt_fn: self.system_prompt_fn.clone(),
+            max_tool_retries: self.max_tool_retries,
         }
     }
 }
@@ -98,6 +123,8 @@ impl Default for ReactLoopConfig {
             tool_filter: None,
             tool_result_formatter: None,
             tool_error_formatter: None,
+            system_prompt_fn: None,
+            max_tool_retries: 2,
         }
     }
 }
@@ -121,6 +148,11 @@ impl fmt::Debug for ReactLoopConfig {
                 "tool_error_formatter",
                 &self.tool_error_formatter.as_ref().map(|_| "<formatter>"),
             )
+            .field(
+                "system_prompt_fn",
+                &self.system_prompt_fn.as_ref().map(|_| "Some(Fn)"),
+            )
+            .field("max_tool_retries", &self.max_tool_retries)
             .finish()
     }
 }
@@ -446,6 +478,7 @@ pub async fn react_loop<P: Provider>(
     dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
 ) -> Result<OperatorOutput, EngineError> {
+    let mut tool_retry_counts: HashMap<String, u32> = HashMap::new();
     loop {
         // Enter InferBoundary: drains pending interventions + fires Before rules.
         // Compile AFTER so any context mutations (injected messages, tool changes)
@@ -506,26 +539,57 @@ pub async fn react_loop<P: Provider>(
                 tool_span,
             )
             .await;
-            let result_str = match tool_result {
+            let (result_str, is_error) = match tool_result {
                 Ok(value) => {
                     tracing::debug!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, "tool succeeded");
-                    match &config.tool_result_formatter {
+                    let s = match &config.tool_result_formatter {
                         Some(f) => f(&call.name, &value),
                         None => format_tool_result(&value),
-                    }
+                    };
+                    (s, false)
                 }
                 Err(e) => {
                     tracing::warn!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, error = %e, "tool failed");
-                    match &config.tool_error_formatter {
-                        Some(f) => f(&call.name, &e.to_string()),
-                        None => format_tool_error(&e),
+                    // InvalidInput: feed schema + error back so the model can correct the call.
+                    if let EngineError::Tool(ToolError::InvalidInput(ref msg)) = e {
+                        let count = tool_retry_counts.entry(call.id.clone()).or_insert(0);
+                        if *count < config.max_tool_retries {
+                            *count += 1;
+                            let schema_str = tools
+                                .get(&call.name)
+                                .map(|t| t.input_schema().to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            (
+                                format!(
+                                    "Tool '{}' rejected the input: {}\nExpected schema: {}\nPlease fix the input and try again.",
+                                    call.name, msg, schema_str
+                                ),
+                                true,
+                            )
+                        } else {
+                            (
+                                match &config.tool_error_formatter {
+                                    Some(f) => f(&call.name, &e.to_string()),
+                                    None => format_tool_error(&e),
+                                },
+                                false,
+                            )
+                        }
+                    } else {
+                        (
+                            match &config.tool_error_formatter {
+                                Some(f) => f(&call.name, &e.to_string()),
+                                None => format_tool_error(&e),
+                            },
+                            false,
+                        )
                     }
                 }
             };
 
             // Append tool result to context
             let result_msg =
-                InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
+                InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
             if let Err(err) = ctx.inject_message(result_msg).await {
                 return structured_exit_output(err, ctx);
             }
@@ -610,6 +674,7 @@ pub async fn react_loop_structured<P: Provider>(
     };
 
     let mut output_retries: u32 = 0;
+    let mut tool_retry_counts: HashMap<String, u32> = HashMap::new();
 
     loop {
         // Enter InferBoundary: drains pending interventions + fires Before rules.
@@ -696,6 +761,7 @@ pub async fn react_loop_structured<P: Provider>(
                     dispatch_ctx,
                     &output.tool_name,
                     config,
+                    &mut tool_retry_counts,
                 )
                 .await?;
                 match dispatch {
@@ -721,6 +787,7 @@ pub async fn react_loop_structured<P: Provider>(
                         dispatch_ctx,
                         &output.tool_name,
                         config,
+                        &mut tool_retry_counts,
                     )
                     .await?;
                     match dispatch {
@@ -760,6 +827,7 @@ async fn dispatch_function_tools(
     dispatch_ctx: &DispatchContext,
     output_tool_name: &str,
     config: &ReactLoopConfig,
+    tool_retry_counts: &mut HashMap<String, u32>,
 ) -> Result<ToolDispatchOutcome, EngineError> {
     // Check for approval-required tools first (excluding output tool)
     let function_calls: Vec<_> = response
@@ -779,7 +847,7 @@ async fn dispatch_function_tools(
         if call.name == output_tool_name {
             continue;
         }
-        let result_str = match ctx
+        let (result_str, is_error) = match ctx
             .run(ExecuteTool::new(
                 call.clone(),
                 tools.clone(),
@@ -787,20 +855,55 @@ async fn dispatch_function_tools(
             ))
             .await
         {
-            Ok(value) => match &config.tool_result_formatter {
-                Some(f) => f(&call.name, &value),
-                None => format_tool_result(&value),
-            },
+            Ok(value) => {
+                let s = match &config.tool_result_formatter {
+                    Some(f) => f(&call.name, &value),
+                    None => format_tool_result(&value),
+                };
+                (s, false)
+            }
             Err(EngineError::Exit { reason, .. }) => {
                 return Ok(ToolDispatchOutcome::Exit(reason));
             }
-            Err(e) => match &config.tool_error_formatter {
-                Some(f) => f(&call.name, &e.to_string()),
-                None => format_tool_error(&e),
-            },
+            Err(e) => {
+                // InvalidInput: feed schema + error back so the model can correct the call.
+                if let EngineError::Tool(ToolError::InvalidInput(ref msg)) = e {
+                    let count = tool_retry_counts.entry(call.id.clone()).or_insert(0);
+                    if *count < config.max_tool_retries {
+                        *count += 1;
+                        let schema_str = tools
+                            .get(&call.name)
+                            .map(|t| t.input_schema().to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        (
+                            format!(
+                                "Tool '{}' rejected the input: {}\nExpected schema: {}\nPlease fix the input and try again.",
+                                call.name, msg, schema_str
+                            ),
+                            true,
+                        )
+                    } else {
+                        (
+                            match &config.tool_error_formatter {
+                                Some(f) => f(&call.name, &e.to_string()),
+                                None => format_tool_error(&e),
+                            },
+                            false,
+                        )
+                    }
+                } else {
+                    (
+                        match &config.tool_error_formatter {
+                            Some(f) => f(&call.name, &e.to_string()),
+                            None => format_tool_error(&e),
+                        },
+                        false,
+                    )
+                }
+            }
         };
         let result_msg =
-            InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
+            InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
         if let Err(err) = ctx.inject_message(result_msg).await {
             match err {
                 EngineError::Exit { reason, .. } => return Ok(ToolDispatchOutcome::Exit(reason)),
@@ -864,6 +967,8 @@ mod tests {
             tool_filter: None,
             tool_result_formatter: None,
             tool_error_formatter: None,
+            system_prompt_fn: None,
+            max_tool_retries: 2,
         }
     }
 
@@ -1623,6 +1728,8 @@ mod tests {
             })),
             tool_result_formatter: None,
             tool_error_formatter: None,
+            system_prompt_fn: None,
+            max_tool_retries: 2,
         };
 
         let ctx = Context::new();
@@ -1684,6 +1791,8 @@ mod tests {
             })),
             tool_result_formatter: None,
             tool_error_formatter: None,
+            system_prompt_fn: None,
+            max_tool_retries: 2,
         };
 
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -2288,6 +2397,8 @@ mod tests {
                 format!("<tool_result tool=\"{tool_name}\">{_value}</tool_result>")
             })),
             tool_error_formatter: None,
+            system_prompt_fn: None,
+            max_tool_retries: 2,
         };
 
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -2328,6 +2439,8 @@ mod tests {
             tool_error_formatter: Some(Arc::new(|tool_name: &str, error: &str| {
                 format!("<error tool=\"{tool_name}\">{error}</error>")
             })),
+            system_prompt_fn: None,
+            max_tool_retries: 2,
         };
 
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -2362,6 +2475,202 @@ mod tests {
         assert!(
             config.tool_error_formatter.is_none(),
             "default config must not set tool_error_formatter"
+        );
+    }
+
+    // === InvalidInput retry tests ===
+
+    /// Tool that always returns `ToolError::InvalidInput`.
+    struct AlwaysInvalidInputTool;
+
+    impl ToolDyn for AlwaysInvalidInputTool {
+        fn name(&self) -> &str {
+            "picky"
+        }
+        fn description(&self) -> &str {
+            "always rejects input with InvalidInput"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({
+                "type": "object",
+                "properties": { "q": { "type": "string" } },
+                "required": ["q"]
+            })
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &DispatchContext,
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>
+                    + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async {
+                Err(ToolError::InvalidInput("missing required field 'q'".into()))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_input_injects_retry_message_with_schema() {
+        // When a tool returns InvalidInput the react loop injects a structured retry
+        // message that includes the error and the tool's expected schema, rather than
+        // falling through to the generic error formatter.
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("picky", "c1", json!({}));
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(AlwaysInvalidInputTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx =
+            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let config = ReactLoopConfig {
+            max_tool_retries: 2,
+            ..ReactLoopConfig::default()
+        };
+
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert!(
+            ctx.messages().iter().any(|m| {
+                let t = m.text_content();
+                t.contains("rejected the input")
+                    && t.contains("Expected schema")
+                    && t.contains("Please fix")
+            }),
+            "retry message with schema must appear in context"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_input_max_retries_zero_uses_error_formatter() {
+        // When max_tool_retries = 0, InvalidInput immediately falls through to the
+        // standard error-formatting path — no retry message is injected.
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("picky", "c1", json!({}));
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(AlwaysInvalidInputTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx =
+            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let config = ReactLoopConfig {
+            max_tool_retries: 0,
+            ..ReactLoopConfig::default()
+        };
+
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert!(
+            !ctx.messages()
+                .iter()
+                .any(|m| m.text_content().contains("Expected schema")),
+            "no retry schema text expected when max_tool_retries is 0"
+        );
+        assert!(
+            ctx.messages()
+                .iter()
+                .any(|m| m.text_content().contains("Error:")),
+            "standard error format must be used when retries are disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_input_retry_count_exhausted_uses_error_formatter() {
+        // When the same call_id exceeds max_tool_retries the fallback error formatter
+        // is used and no further retry messages are injected.
+        let provider = TestProvider::new();
+        // Same call_id used across two turns: first retries, second exhausts the budget.
+        provider.respond_with_tool_call("picky", "dup", json!({}));
+        provider.respond_with_tool_call("picky", "dup", json!({}));
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(AlwaysInvalidInputTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx =
+            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        // max_tool_retries = 1: first InvalidInput retries, second falls through.
+        let config = ReactLoopConfig {
+            max_tool_retries: 1,
+            ..ReactLoopConfig::default()
+        };
+
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let messages = ctx.messages();
+        assert!(
+            messages.iter().any(|m| m.text_content().contains("Expected schema")),
+            "first InvalidInput must inject retry message with schema"
+        );
+        assert!(
+            messages.iter().any(|m| m.text_content().contains("Error:")),
+            "second InvalidInput (budget exhausted) must use standard error formatter"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_invalid_input_errors_not_retried() {
+        // ExecutionFailed and other non-InvalidInput errors must use the existing
+        // error-formatting path and never inject retry messages.
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("fail", "c1", json!({}));
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(AlwaysFailingTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx =
+            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let config = ReactLoopConfig {
+            max_tool_retries: 2,
+            ..ReactLoopConfig::default()
+        };
+
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert!(
+            !ctx.messages()
+                .iter()
+                .any(|m| m.text_content().contains("Expected schema")),
+            "non-InvalidInput errors must not inject retry schema messages"
         );
     }
 }

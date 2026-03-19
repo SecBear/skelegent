@@ -15,6 +15,7 @@ pub mod infer_middleware;
 pub mod provider;
 pub mod stream;
 pub mod types;
+pub mod safety;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -28,4 +29,5 @@ pub use infer_middleware::{
     InferStack, InferStackBuilder,
 };
 pub use provider::{DynProvider, Provider, ProviderError, box_provider};
+pub use safety::{allow_real_requests, assert_real_requests_allowed, deny_real_requests};
 pub use types::*;

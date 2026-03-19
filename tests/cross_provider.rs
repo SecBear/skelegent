@@ -65,6 +65,7 @@ async fn anthropic_react_simple_prompt() {
         tool_filter: None,
             tool_result_formatter: None,
             tool_error_formatter: None,
+        ..ReactLoopConfig::default()
     };
 
     let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -190,6 +191,7 @@ async fn openai_react_simple_prompt() {
         tool_filter: None,
             tool_result_formatter: None,
             tool_error_formatter: None,
+        ..ReactLoopConfig::default()
     };
 
     let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -301,6 +303,7 @@ async fn ollama_react_simple_prompt() {
         tool_filter: None,
             tool_result_formatter: None,
             tool_error_formatter: None,
+        ..ReactLoopConfig::default()
     };
 
     let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)

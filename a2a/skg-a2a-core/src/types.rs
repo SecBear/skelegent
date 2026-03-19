@@ -822,5 +822,4 @@ mod tests {
         let back: StreamResponse = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, StreamResponse::StatusUpdate { .. }));
     }
-
 }

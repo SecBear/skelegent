@@ -443,6 +443,7 @@ impl Provider for OpenAIProvider {
         &self,
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        skg_turn::assert_real_requests_allowed();
         let api_key_result = self.resolve_api_key();
         let api_request = self.build_infer_request(&request);
         let http_opt = api_key_result.map(|key| {

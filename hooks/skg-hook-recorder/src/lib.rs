@@ -34,17 +34,17 @@ pub mod dispatch;
 pub mod embed;
 pub mod exec;
 pub mod infer;
+pub mod secret;
 pub mod sink;
 pub mod store;
-pub mod secret;
 
 pub use dispatch::DispatchRecorder;
 pub use embed::EmbedRecorder;
 pub use exec::ExecRecorder;
 pub use infer::InferRecorder;
+pub use secret::SecretRecorder;
 pub use sink::InMemorySink;
 pub use store::StoreRecorder;
-pub use secret::SecretRecorder;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // SCHEMA VERSION

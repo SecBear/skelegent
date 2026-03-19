@@ -457,6 +457,7 @@ impl Provider for CodexProvider {
         &self,
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
+        skg_turn::assert_real_requests_allowed();
         let codex_request = self.build_codex_request(&request);
         let this = self.clone();
         let model = request.model.as_deref().unwrap_or("unknown");

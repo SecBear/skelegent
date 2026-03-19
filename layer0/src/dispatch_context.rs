@@ -129,6 +129,15 @@ impl DispatchContext {
         self
     }
 
+    /// Insert a typed value into the extension map.
+    ///
+    /// Convenience builder for setting up context before dispatch.
+    /// Equivalent to `ctx.extensions_mut().insert(val)` but chainable.
+    pub fn with_extension<T: Send + Sync + 'static>(mut self, val: T) -> Self {
+        self.extensions.insert(val);
+        self
+    }
+
     /// Get the deadline, if any.
     pub fn deadline(&self) -> Option<tokio::time::Instant> {
         self.deadline
@@ -393,6 +402,17 @@ impl Extensions {
             .and_then(|arc| Arc::clone(arc).downcast::<T>().ok())
     }
 
+    /// Get a mutable reference to a typed value.
+    ///
+    /// Returns `None` if the value is absent **or** if the underlying `Arc`
+    /// has more than one strong reference (i.e., after a clone of the
+    /// `Extensions` map). Use [`get`](Self::get) for shared read access.
+    pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T> {
+        let arc = self.map.get_mut(&TypeId::of::<T>())?;
+        let any: &mut dyn Any = Arc::get_mut(arc)?;
+        any.downcast_mut::<T>()
+    }
+
     /// Check whether a value of the given type is present.
     pub fn contains<T: Send + Sync + 'static>(&self) -> bool {
         self.map.contains_key(&TypeId::of::<T>())
@@ -543,6 +563,33 @@ mod tests {
         let old = ext.insert(99u64);
         assert_eq!(*old.unwrap(), 42);
         assert_eq!(*ext.get::<u64>().unwrap(), 99);
+    }
+
+    #[test]
+    fn extensions_get_mut_unique_arc() {
+        let mut ext = Extensions::new();
+        ext.insert(100u32);
+        // Only one Arc reference — get_mut succeeds.
+        *ext.get_mut::<u32>().unwrap() = 200;
+        assert_eq!(*ext.get::<u32>().unwrap(), 200);
+    }
+
+    #[test]
+    fn extensions_get_mut_after_clone_returns_none() {
+        let mut ext = Extensions::new();
+        ext.insert(100u32);
+        // Cloning raises the strong count — get_mut returns None.
+        let _cloned = ext.clone();
+        assert!(ext.get_mut::<u32>().is_none());
+    }
+
+    #[test]
+    fn with_extension_builder() {
+        let ctx = DispatchContext::new(DispatchId::new("d-ext"), OperatorId::new("op"))
+            .with_extension(42u64)
+            .with_extension("hello".to_string());
+        assert_eq!(*ctx.extensions().get::<u64>().unwrap(), 42);
+        assert_eq!(ctx.extensions().get::<String>().unwrap().as_str(), "hello");
     }
 
     #[test]
