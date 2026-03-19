@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
+use layer0::effect::{EffectKind, HandoffContext};
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -106,6 +107,16 @@ impl Operator for SupervisorOperator {
                 .await
                 .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
 
+            // Extract the handoff context from this round's effects BEFORE
+            // draining them, so we can use context.task as the next input.
+            let handoff_ctx: Option<HandoffContext> = output.effects.iter().rev().find_map(|e| {
+                if let EffectKind::Handoff { ref context, .. } = e.kind {
+                    Some(context.clone())
+                } else {
+                    None
+                }
+            });
+
             // Absorb effects before examining the exit reason.
             all_effects.append(&mut output.effects);
 
@@ -115,11 +126,20 @@ impl Operator for SupervisorOperator {
                     return Ok(output);
                 }
                 ExitReason::HandedOff => {
-                    // Record this round's output in the history so the selector
-                    // can factor it into the next routing decision.
-                    history.push(output.message.clone());
-                    current_input =
-                        OperatorInput::new(output.message.clone(), TriggerType::Task);
+                    // Use context.task as the next input — it is the task the
+                    // handing-off operator wants the next speaker to act on.
+                    // Fall back to output.message if no Handoff effect was emitted.
+                    let next_task = handoff_ctx
+                        .as_ref()
+                        .map(|c| c.task.clone())
+                        .unwrap_or_else(|| output.message.clone());
+                    history.push(next_task.clone());
+                    let mut next_input = OperatorInput::new(next_task, TriggerType::Task);
+                    // Forward conversation history if the handing-off operator supplied it.
+                    if let Some(hist) = handoff_ctx.and_then(|c| c.history) {
+                        next_input.context = Some(hist);
+                    }
+                    current_input = next_input;
                 }
                 // Unexpected exit (budget, timeout, error, …) — surface immediately.
                 _ => {
@@ -147,7 +167,7 @@ mod tests {
 
     use async_trait::async_trait;
     use layer0::content::Content;
-    use layer0::effect::{Effect, EffectKind};
+    use layer0::effect::{Effect, EffectKind, HandoffContext};
     use layer0::error::OperatorError;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -184,13 +204,16 @@ mod tests {
         }
     }
 
-    /// Emits `Effect::Handoff` and exits with `HandedOff`.
+    /// Emits `Effect::Handoff` with a `HandoffContext` and exits with `HandedOff`.
     ///
+    /// `task` is the explicit next-step message the handing-off operator supplies.
     /// Carries a `target` ID so the swarm tests can inspect transition logic,
     /// but the supervisor ignores the handoff target — it uses the selector.
     struct HandoffOp {
         target: OperatorId,
         reply: String,
+        /// Task to pass in HandoffContext (defaults to reply if empty).
+        task: String,
     }
 
     #[async_trait]
@@ -204,9 +227,18 @@ mod tests {
                 Content::text(self.reply.clone()),
                 ExitReason::HandedOff,
             );
+            let next_task = if self.task.is_empty() {
+                self.reply.clone()
+            } else {
+                self.task.clone()
+            };
             out.effects.push(Effect::new(0, EffectKind::Handoff {
                 operator: self.target.clone(),
-                metadata: None,
+                context: HandoffContext {
+                    task: Content::text(next_task),
+                    history: None,
+                    metadata: None,
+                },
             }));
             Ok(out)
         }
@@ -223,6 +255,7 @@ mod tests {
             Arc::new(HandoffOp {
                 target: OperatorId::new("agent-b"),
                 reply: "from-a".into(),
+                task: "".into(),
             }),
         );
         orch.register(
@@ -268,6 +301,7 @@ mod tests {
             Arc::new(HandoffOp {
                 target: OperatorId::new("looping-agent"),
                 reply: "loop".into(),
+                task: "".into(),
             }),
         );
         let orch = Arc::new(orch);
@@ -291,5 +325,86 @@ mod tests {
         );
         // 3 rounds × 1 Handoff effect each.
         assert_eq!(output.effects.len(), 3);
+    }
+
+    /// Verifies that `context.task` from `HandoffContext` flows through as the
+    /// next operator's input — NOT `output.message`.
+    #[tokio::test]
+    async fn handoff_context_preserves_task() {
+        /// Operator that hands off with an explicit `task` distinct from its reply.
+        struct ExplicitTaskHandoffOp;
+
+        #[async_trait]
+        impl Operator for ExplicitTaskHandoffOp {
+            async fn execute(
+                &self,
+                _input: OperatorInput,
+                _ctx: &DispatchContext,
+            ) -> Result<OperatorOutput, OperatorError> {
+                let mut out = OperatorOutput::new(
+                    Content::text("output-message-not-the-task"),
+                    ExitReason::HandedOff,
+                );
+                out.effects.push(Effect::new(0, EffectKind::Handoff {
+                    operator: OperatorId::new("receiver"),
+                    context: HandoffContext {
+                        task: Content::text("explicit-task-for-receiver"),
+                        history: None,
+                        metadata: None,
+                    },
+                }));
+                Ok(out)
+            }
+        }
+
+        /// Operator that records the input it received.
+        struct RecordingOp {
+            received: std::sync::Arc<std::sync::Mutex<String>>,
+        }
+
+        #[async_trait]
+        impl Operator for RecordingOp {
+            async fn execute(
+                &self,
+                input: OperatorInput,
+                _ctx: &DispatchContext,
+            ) -> Result<OperatorOutput, OperatorError> {
+                *self.received.lock().unwrap() =
+                    input.message.as_text().unwrap_or("").to_string();
+                Ok(OperatorOutput::new(
+                    Content::text("done"),
+                    ExitReason::Complete,
+                ))
+            }
+        }
+
+        let received = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let mut orch = LocalOrch::new();
+        orch.register(OperatorId::new("sender"), Arc::new(ExplicitTaskHandoffOp));
+        orch.register(
+            OperatorId::new("receiver"),
+            Arc::new(RecordingOp { received: received.clone() }),
+        );
+        let orch = Arc::new(orch);
+
+        // Round-robin: sender first, receiver second.
+        let supervisor = SupervisorOperator::new(
+            vec![OperatorId::new("sender"), OperatorId::new("receiver")],
+            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
+            Arc::new(RoundRobinSelector::new()),
+            3,
+        );
+
+        let output = supervisor
+            .execute(simple_input("start"), &test_ctx("sup-task"))
+            .await
+            .expect("supervisor must complete");
+
+        assert_eq!(output.exit_reason, ER::Complete);
+        assert_eq!(
+            *received.lock().unwrap(),
+            "explicit-task-for-receiver",
+            "receiver must get context.task, not output.message"
+        );
     }
 }

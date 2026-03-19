@@ -287,7 +287,12 @@ impl Provider for OllamaProvider {
         &self,
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
-        skg_turn::assert_real_requests_allowed();
+        // Capture validation state before moving into the async block.
+        // These checks must happen before `assert_real_requests_allowed` so that
+        // tests exercising rejection never hit the network guard.
+        let tool_choice_set = request.tool_choice.is_some();
+        let response_format_is_json_schema =
+            matches!(request.response_format, Some(ResponseFormat::JsonSchema { .. }));
         let api_request = self.build_infer_request(&request);
         let http_request = self
             .client
@@ -299,6 +304,20 @@ impl Provider for OllamaProvider {
         let span = tracing::info_span!("provider.infer", provider = "ollama", model);
 
         async move {
+            // Reject unsupported first-class features before any network I/O.
+            if tool_choice_set {
+                return Err(ProviderError::InvalidRequest {
+                    message: "Ollama does not support tool_choice".into(),
+                    status: None,
+                });
+            }
+            if response_format_is_json_schema {
+                return Err(ProviderError::InvalidRequest {
+                    message: "Ollama does not support JSON Schema response format".into(),
+                    status: None,
+                });
+            }
+            skg_turn::assert_real_requests_allowed();
             let http_response =
                 http_request
                     .send()
@@ -349,7 +368,9 @@ impl Provider for OllamaProvider {
         &self,
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferStream, ProviderError>> + Send {
-        skg_turn::assert_real_requests_allowed();
+        let tool_choice_set = request.tool_choice.is_some();
+        let response_format_is_json_schema =
+            matches!(request.response_format, Some(ResponseFormat::JsonSchema { .. }));
         let mut api_request = self.build_infer_request(&request);
         api_request.stream = true;
 
@@ -363,6 +384,19 @@ impl Provider for OllamaProvider {
         let span = tracing::info_span!("provider.infer_stream", provider = "ollama", model);
 
         async move {
+            if tool_choice_set {
+                return Err(ProviderError::InvalidRequest {
+                    message: "Ollama does not support tool_choice".into(),
+                    status: None,
+                });
+            }
+            if response_format_is_json_schema {
+                return Err(ProviderError::InvalidRequest {
+                    message: "Ollama does not support JSON Schema response format".into(),
+                    status: None,
+                });
+            }
+            skg_turn::assert_real_requests_allowed();
             let http_response =
                 http_request
                     .send()
@@ -658,5 +692,35 @@ mod tests {
             }
         ));
         assert!(err.is_retryable());
+    }
+
+    #[tokio::test]
+    /// Ollama rejects [`InferRequest`]s that set `tool_choice` — it has no native API for it.
+    async fn ollama_rejects_tool_choice() {
+        let provider = OllamaProvider::new();
+        let request = InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::Auto);
+        let err = provider.infer(request).await.unwrap_err();
+        assert!(
+            matches!(err, ProviderError::InvalidRequest { .. }),
+            "expected InvalidRequest, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    /// Ollama rejects `JsonSchema` response_format — only `Text` and `Json` are allowed.
+    async fn ollama_rejects_json_schema_response_format() {
+        let provider = OllamaProvider::new();
+        let request = InferRequest::new(vec![])
+            .with_response_format(ResponseFormat::JsonSchema {
+                name: "my_schema".into(),
+                schema: serde_json::json!({}),
+                strict: true,
+            });
+        let err = provider.infer(request).await.unwrap_err();
+        assert!(
+            matches!(err, ProviderError::InvalidRequest { .. }),
+            "expected InvalidRequest, got: {err:?}"
+        );
     }
 }

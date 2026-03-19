@@ -19,7 +19,7 @@ use layer0::approval::{ApprovalResponse, ToolCallAction};
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
-use layer0::effect::{Effect, EffectKind};
+use layer0::effect::{Effect, EffectKind, HandoffContext};
 use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use serde_json::Value;
@@ -177,7 +177,7 @@ impl ReactLoopConfig {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             tools: schemas,
-            extra: serde_json::Value::Null,
+            provider_options: Default::default(),
         }
     }
 }
@@ -572,7 +572,11 @@ pub async fn react_loop<P: Provider>(
                             .to_string();
                         ctx.push_effect(Effect::new(0, EffectKind::Handoff {
                             operator: OperatorId::from(target.as_str()),
-                            metadata: Some(serde_json::json!({ "reason": reason })),
+                            context: HandoffContext {
+                                task: Content::text(reason),
+                                history: None,
+                                metadata: None,
+                            },
                         }));
                         return Ok(make_context_output(
                             Content::text(""),
@@ -2783,10 +2787,13 @@ mod tests {
             .collect();
         assert_eq!(handoff_effects.len(), 1, "exactly one Handoff effect must be emitted");
         match &handoff_effects[0].kind {
-            EffectKind::Handoff { operator, metadata } => {
+            EffectKind::Handoff { operator, context } => {
                 assert_eq!(operator.as_str(), "routing-agent");
-                let meta = metadata.as_ref().expect("metadata present");
-                assert_eq!(meta["reason"], "needs routing");
+                assert_eq!(
+                    context.task.as_text().unwrap_or(""),
+                    "needs routing",
+                    "context.task must carry the handoff reason"
+                );
             }
             _ => unreachable!(),
         }

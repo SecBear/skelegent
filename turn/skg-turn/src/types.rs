@@ -83,20 +83,6 @@ pub struct TokenUsage {
     pub reasoning_tokens: Option<u64>,
 }
 
-/// Configuration for extended thinking / reasoning.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ThinkingConfig {
-    /// Enable thinking with a token budget.
-    Enabled {
-        /// Maximum tokens the model may use for reasoning.
-        budget_tokens: u32,
-    },
-    /// Let the provider decide (Anthropic "auto" mode).
-    Adaptive,
-    /// Explicitly disable thinking.
-    Disabled,
-}
 
 /// Controls which tools the model can use.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

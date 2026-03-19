@@ -144,6 +144,21 @@ impl CodexProvider {
     /// HTTP-level errors (auth, rate-limit, non-2xx) surface before the stream
     /// is returned; SSE-level errors propagate as `Err` items on the stream.
     async fn infer_stream_inner(self, request: InferRequest) -> Result<InferStream, ProviderError> {
+        // Reject unsupported first-class features before any network I/O.
+        // Codex does not surface tool_choice or response_format in its API.
+        if request.tool_choice.is_some() {
+            return Err(ProviderError::InvalidRequest {
+                message: "Codex does not support tool_choice".into(),
+                status: None,
+            });
+        }
+        if request.response_format.is_some() {
+            return Err(ProviderError::InvalidRequest {
+                message: "Codex does not support response_format".into(),
+                status: None,
+            });
+        }
+        skg_turn::assert_real_requests_allowed();
         let codex_request = self.build_codex_request(&request);
         let url = self.endpoint_url();
         let headers = self.build_headers();
@@ -448,7 +463,7 @@ impl Provider for CodexProvider {
         &self,
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferStream, ProviderError>> + Send {
-        skg_turn::assert_real_requests_allowed();
+        // Validation and network guard are enforced inside infer_stream_inner.
         let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer_stream", provider = "codex", model);
         self.clone().infer_stream_inner(request).instrument(span)
@@ -458,7 +473,7 @@ impl Provider for CodexProvider {
         &self,
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferResponse, ProviderError>> + Send {
-        skg_turn::assert_real_requests_allowed();
+        // Validation and network guard are enforced inside infer_stream_inner.
         let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer", provider = "codex", model);
         let this = self.clone();
@@ -583,5 +598,36 @@ mod tests {
         let codex = p.build_codex_request(&req);
         assert!(codex.stream);
         assert_eq!(codex.store, Some(false));
+    }
+
+    #[tokio::test]
+    /// Codex rejects [`InferRequest`]s that set `response_format` — the Responses API
+    /// has no equivalent field and would silently ignore it.
+    async fn codex_rejects_response_format() {
+        let p = CodexProvider::with_account_id("tok", "acct");
+        let request = InferRequest::new(vec![])
+            .with_response_format(ResponseFormat::JsonSchema {
+                name: "schema".into(),
+                schema: serde_json::json!({}),
+                strict: false,
+            });
+        let err = p.infer(request).await.unwrap_err();
+        assert!(
+            matches!(err, ProviderError::InvalidRequest { .. }),
+            "expected InvalidRequest, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    /// Codex rejects [`InferRequest`]s that set `tool_choice` — the field is not forwarded.
+    async fn codex_rejects_tool_choice() {
+        let p = CodexProvider::with_account_id("tok", "acct");
+        let request = InferRequest::new(vec![])
+            .with_tool_choice(ToolChoice::Auto);
+        let err = p.infer(request).await.unwrap_err();
+        assert!(
+            matches!(err, ProviderError::InvalidRequest { .. }),
+            "expected InvalidRequest, got: {err:?}"
+        );
     }
 }

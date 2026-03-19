@@ -4,6 +4,8 @@
 //! `infer()` crosses the network boundary. The model is a discontinuity —
 //! what comes out is generated, not transformed.
 
+use std::collections::HashMap;
+
 use crate::context::Context;
 use crate::error::EngineError;
 use skg_turn::infer::{InferRequest, InferResponse};
@@ -23,8 +25,11 @@ pub struct CompileConfig {
     pub temperature: Option<f64>,
     /// Tool schemas available to the model.
     pub tools: Vec<ToolSchema>,
-    /// Provider-specific config passthrough.
-    pub extra: serde_json::Value,
+    /// Provider-specific configuration, keyed by provider name.
+    ///
+    /// Forwarded verbatim to [`InferRequest::with_provider_option`] during compile.
+    /// Defaults to an empty map.
+    pub provider_options: HashMap<String, serde_json::Value>,
 }
 
 /// A snapshot of context compiled for inference.
@@ -103,8 +108,8 @@ impl Context {
         if !config.tools.is_empty() {
             request = request.with_tools(config.tools.clone());
         }
-        if config.extra != serde_json::Value::Null {
-            request = request.with_extra(config.extra.clone());
+        for (provider, opts) in &config.provider_options {
+            request = request.with_provider_option(provider, opts.clone());
         }
 
         CompiledContext { request }

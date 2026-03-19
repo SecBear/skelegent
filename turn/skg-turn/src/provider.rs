@@ -76,7 +76,7 @@ impl ProviderError {
 ///
 /// Each provider (Anthropic, OpenAI, Ollama) implements this trait.
 /// Provider-native features (truncation, caching, thinking blocks)
-/// are handled by the provider impl using `InferRequest.extra`.
+/// are handled by the provider impl using `InferRequest.provider_options`.
 ///
 /// This trait uses RPITIT and is NOT object-safe. That's intentional —
 /// `Turn<P: Provider>` is generic, and the object-safe boundary

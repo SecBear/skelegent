@@ -300,19 +300,21 @@ impl OpenAIProvider {
             })
             .collect();
 
-        // Extract provider-specific fields from extra.
-        let service_tier = request
-            .extra
+        // Extract OpenAI-specific fields from provider_options["openai"].
+        let openai_opts = request
+            .provider_options
+            .get("openai")
+            .cloned()
+            .unwrap_or_default();
+        let service_tier = openai_opts
             .get("service_tier")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let reasoning_effort = request
-            .extra
+        let reasoning_effort = openai_opts
             .get("reasoning_effort")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let parallel_tool_calls = request
-            .extra
+        let parallel_tool_calls = openai_opts
             .get("parallel_tool_calls")
             .and_then(|v| v.as_bool());
 

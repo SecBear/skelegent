@@ -185,6 +185,7 @@ pub fn from_openapi(
                 input_schema,
                 method: method_from_str(method_str),
                 path_template: path.clone(),
+                path_params: extract_path_params(path).into_iter().collect(),
                 base_url: config.base_url.clone(),
                 auth: Arc::clone(&auth),
                 client: client.clone(),
@@ -207,6 +208,8 @@ struct OpenApiTool {
     method: reqwest::Method,
     /// Path template, e.g. `/users/{id}`.
     path_template: String,
+    /// Path-parameter names extracted from `path_template` at construction time.
+    path_params: Vec<String>,
     base_url: String,
     auth: Arc<dyn ApiAuth>,
     client: reqwest::Client,
@@ -233,17 +236,27 @@ impl ToolDyn for OpenApiTool {
         // Clone everything we need so the future owns its data and is 'static.
         let method = self.method.clone();
         let path_template = self.path_template.clone();
+        let path_params = self.path_params.clone();
         let base_url = self.base_url.clone();
         let auth = Arc::clone(&self.auth);
         let client = self.client.clone();
 
         Box::pin(async move {
-            // Substitute path parameters.
+            // Validate all path parameters are present before building the URL.
+            for param in &path_params {
+                if input.get(param).is_none() {
+                    return Err(ToolError::InvalidInput(format!(
+                        "Missing required path parameter: {param}"
+                    )));
+                }
+            }
+
+            // Substitute path parameters (URL-encoded to prevent path injection).
             let mut path = path_template.clone();
-            let path_param_names: HashSet<String> = extract_path_params(&path_template);
-            for name in &path_param_names {
+            for name in &path_params {
                 if let Some(val) = input.get(name) {
-                    path = path.replace(&format!("{{{}}}", name), &value_to_str(val));
+                    let encoded = urlencoding::encode(&value_to_str(val)).into_owned();
+                    path = path.replace(&format!("{{{}}}", name), &encoded);
                 }
             }
 
@@ -265,7 +278,7 @@ impl ToolDyn for OpenApiTool {
                     } else {
                         let body: serde_json::Map<String, Value> = obj
                             .iter()
-                            .filter(|(k, _)| !path_param_names.contains(*k))
+                            .filter(|(k, _)| !path_params.contains(k))
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect();
                         if !body.is_empty() {
@@ -275,7 +288,7 @@ impl ToolDyn for OpenApiTool {
                 } else {
                     // GET / DELETE / HEAD / etc. → query string.
                     for (key, val) in obj {
-                        if !path_param_names.contains(key) {
+                        if !path_params.contains(key) {
                             builder = builder.query(&[(key.as_str(), value_to_str(val))]);
                         }
                     }
@@ -730,5 +743,103 @@ paths:
             Some("Bearer super-secret-token"),
             "Authorization header must be set correctly"
         );
+    }
+
+    /// Minimal spec with a single path-param endpoint used by encoding/validation tests.
+    const ITEM_SPEC: &str = r#"
+openapi: "3.0.0"
+info:
+  title: Items
+  version: "1.0.0"
+paths:
+  /items/{id}:
+    get:
+      summary: Get item by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+"#;
+
+    #[tokio::test]
+    async fn path_params_url_encoded() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // Bind a local listener to capture the raw HTTP request.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Spawn a task that accepts one connection, records the request, and
+        // sends a minimal HTTP 200 response so reqwest doesn't error.
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = stream.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]).to_string();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: application/json\r\n\r\n{}"
+                )
+                .await
+                .ok();
+            raw
+        });
+
+        let config = OpenApiConfig {
+            base_url: format!("http://127.0.0.1:{port}"),
+            ..base_config()
+        };
+        let tools = from_openapi(ITEM_SPEC, config, Arc::new(NoAuth)).expect("parse ok");
+        let tool = tools
+            .iter()
+            .find(|t| t.name() == "get_items_id")
+            .expect("get_items_id not found");
+
+        let ctx = layer0::DispatchContext::new(
+            layer0::DispatchId::new("test"),
+            layer0::OperatorId::new("test"),
+        );
+
+        // A space in the value must appear as `%20` in the request path.
+        let _ = tool.call(serde_json::json!({"id": "hello world"}), &ctx).await;
+
+        let raw_request = server.await.expect("server task panicked");
+        assert!(
+            raw_request.contains("hello%20world"),
+            "space in path param must be percent-encoded; got request:\n{raw_request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_path_param_returns_error() {
+        let tools = from_openapi(ITEM_SPEC, base_config(), Arc::new(NoAuth)).expect("parse ok");
+        let tool = tools
+            .iter()
+            .find(|t| t.name() == "get_items_id")
+            .expect("get_items_id not found");
+
+        let ctx = layer0::DispatchContext::new(
+            layer0::DispatchId::new("test"),
+            layer0::OperatorId::new("test"),
+        );
+
+        // Call with no arguments — required path param `id` is absent.
+        let result = tool.call(serde_json::json!({}), &ctx).await;
+
+        match result {
+            Err(ToolError::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("id"),
+                    "error must name the missing param; got: {msg}"
+                );
+            }
+            other => panic!("expected ToolError::InvalidInput, got: {other:?}"),
+        }
     }
 }

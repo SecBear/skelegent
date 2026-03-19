@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::duration::DurationMs;
-use layer0::effect::{Effect, EffectKind};
+use layer0::effect::{Effect, EffectKind, HandoffContext};
 use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use skg_tool::ToolRegistry;
@@ -138,7 +138,11 @@ pub async fn stream_react_loop<P: Provider>(
                             .to_string();
                         ctx.push_effect(Effect::new(0, EffectKind::Handoff {
                             operator: OperatorId::from(target.as_str()),
-                            metadata: Some(serde_json::json!({ "reason": reason })),
+                            context: HandoffContext {
+                                task: Content::text(reason),
+                                history: None,
+                                metadata: None,
+                            },
                         }));
                         return Ok(make_context_output(
                             Content::text(""),

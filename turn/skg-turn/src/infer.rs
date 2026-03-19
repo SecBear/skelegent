@@ -7,6 +7,8 @@
 //! [`Message`]: layer0::context::Message
 //! [`Provider`]: crate::provider::Provider
 
+use std::collections::HashMap;
+
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use rust_decimal::Decimal;
@@ -38,11 +40,14 @@ pub struct InferRequest {
     /// System prompt (injected by the provider as appropriate for its API).
     pub system: Option<String>,
 
-    /// Provider-specific config passthrough (e.g., thinking blocks, caching).
-    pub extra: serde_json::Value,
-
-    /// Extended thinking configuration.
-    pub thinking: Option<crate::types::ThinkingConfig>,
+    /// Provider-specific configuration, keyed by provider name.
+    ///
+    /// Each entry is a JSON object whose fields are interpreted by the named
+    /// provider. Using a per-provider key prevents collisions when the same
+    /// request is inspected by multiple providers or middleware layers.
+    ///
+    /// Example: `request.with_provider_option("anthropic", json!({ "thinking": … }))`
+    pub provider_options: HashMap<String, serde_json::Value>,
 
     /// Tool choice constraint.
     pub tool_choice: Option<crate::types::ToolChoice>,
@@ -60,8 +65,7 @@ impl InferRequest {
             max_tokens: None,
             temperature: None,
             system: None,
-            extra: serde_json::Value::Null,
-            thinking: None,
+            provider_options: HashMap::new(),
             tool_choice: None,
             response_format: None,
         }
@@ -97,15 +101,13 @@ impl InferRequest {
         self
     }
 
-    /// Set provider-specific extra config.
-    pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
-        self.extra = extra;
-        self
-    }
-
-    /// Set extended thinking configuration.
-    pub fn with_thinking(mut self, config: crate::types::ThinkingConfig) -> Self {
-        self.thinking = Some(config);
+    /// Set a provider-specific option block.
+    ///
+    /// `provider` is a short identifier (e.g., `"anthropic"`, `"openai"`). The
+    /// entire `value` object is passed to that provider; it replaces any
+    /// previously set value for the same key.
+    pub fn with_provider_option(mut self, provider: &str, value: serde_json::Value) -> Self {
+        self.provider_options.insert(provider.to_string(), value);
         self
     }
 
@@ -389,17 +391,16 @@ mod tests {
     }
 
     #[test]
-    fn thinking_config_serde_round_trip() {
-        use crate::types::ThinkingConfig;
-        for config in [
-            ThinkingConfig::Enabled { budget_tokens: 1024 },
-            ThinkingConfig::Adaptive,
-            ThinkingConfig::Disabled,
-        ] {
-            let json = serde_json::to_value(&config).unwrap();
-            let back: ThinkingConfig = serde_json::from_value(json).unwrap();
-            assert_eq!(config, back);
-        }
+    fn provider_options_round_trip() {
+        // Set anthropic options, verify they're accessible by key.
+        let opts = serde_json::json!({
+            "thinking": { "type": "enabled", "budget_tokens": 1024 },
+            "system_cache_control": { "type": "ephemeral" }
+        });
+        let req = InferRequest::new(vec![])
+            .with_provider_option("anthropic", opts.clone());
+        assert_eq!(req.provider_options.get("anthropic"), Some(&opts));
+        assert!(req.provider_options.get("openai").is_none());
     }
 
     #[test]
@@ -438,12 +439,15 @@ mod tests {
 
     #[test]
     fn infer_request_builder_methods() {
-        use crate::types::{ThinkingConfig, ToolChoice, ResponseFormat};
+        use crate::types::{ToolChoice, ResponseFormat};
         let req = InferRequest::new(vec![])
-            .with_thinking(ThinkingConfig::Enabled { budget_tokens: 2048 })
+            .with_provider_option("anthropic", serde_json::json!({ "thinking": { "type": "enabled", "budget_tokens": 2048 } }))
             .with_tool_choice(ToolChoice::Any)
             .with_response_format(ResponseFormat::Json);
-        assert_eq!(req.thinking, Some(ThinkingConfig::Enabled { budget_tokens: 2048 }));
+        assert_eq!(
+            req.provider_options.get("anthropic").and_then(|o| o.get("thinking")),
+            Some(&serde_json::json!({ "type": "enabled", "budget_tokens": 2048 }))
+        );
         assert_eq!(req.tool_choice, Some(ToolChoice::Any));
         assert_eq!(req.response_format, Some(ResponseFormat::Json));
     }

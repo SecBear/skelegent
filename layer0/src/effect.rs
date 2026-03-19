@@ -1,5 +1,7 @@
 //! Effect system — side-effects declared by operators for external execution.
 
+use crate::content::Content;
+use crate::context::Message;
 use crate::dispatch::Artifact;
 use crate::duration::DurationMs;
 use crate::id::*;
@@ -110,6 +112,26 @@ pub enum MemoryScope {
     Global,
 }
 
+// ── HandoffContext ───────────────────────────────────────────────────────────
+
+/// Structured context passed to the receiving operator on handoff.
+///
+/// `task` is the primary input for the next operator — the message it should
+/// act on. `history` optionally forwards prior conversation turns so the
+/// receiving operator has context. `metadata` carries any unstructured
+/// domain-specific data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandoffContext {
+    /// The task/message to pass to the next operator.
+    pub task: Content,
+    /// Optional conversation history to forward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<Message>>,
+    /// Optional unstructured metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
 // ── EffectKind ────────────────────────────────────────────────────────────────
 
 /// The payload of a declared side-effect.
@@ -117,8 +139,8 @@ pub enum MemoryScope {
 /// Renamed from the previous `Effect` enum. The variants are identical
 /// except:
 /// - [`WriteMemory`](EffectKind::WriteMemory) gains a `memory_scope` field.
-/// - [`Handoff`](EffectKind::Handoff) renames `state` to `metadata` and
-///   changes the type to `Option<serde_json::Value>`.
+/// - [`Handoff`](EffectKind::Handoff) replaces `metadata: Option<Value>` with
+///   a structured [`HandoffContext`] carrying `task`, `history`, and `metadata`.
 /// - [`Custom`](EffectKind::Custom) renames `effect_type`/`data` to
 ///   `name`/`payload`.
 /// - New variants: [`Log`](EffectKind::Log), [`Observation`](EffectKind::Observation),
@@ -189,11 +211,8 @@ pub enum EffectKind {
     Handoff {
         /// The operator to hand off to.
         operator: OperatorId,
-        /// Optional state to pass to the next operator. Not the full
-        /// conversation — whatever the current operator thinks the next
-        /// needs to continue.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        metadata: Option<serde_json::Value>,
+        /// Structured context for the receiving operator.
+        context: HandoffContext,
     },
 
     /// Create a link between two memory entries.
@@ -362,12 +381,8 @@ impl Effect {
     }
 
     /// Convenience: create a [`EffectKind::Handoff`] effect.
-    pub fn handoff(
-        seq: u32,
-        operator: OperatorId,
-        metadata: Option<serde_json::Value>,
-    ) -> Self {
-        Self::new(seq, EffectKind::Handoff { operator, metadata })
+    pub fn handoff(seq: u32, operator: OperatorId, context: HandoffContext) -> Self {
+        Self::new(seq, EffectKind::Handoff { operator, context })
     }
 
     /// Convenience: create a [`EffectKind::Signal`] effect.
@@ -494,7 +509,11 @@ mod tests {
         });
         round_trip(EffectKind::Handoff {
             operator: OperatorId::new("op"),
-            metadata: Some(json!({"reason": "done"})),
+            context: HandoffContext {
+                task: Content::text("done"),
+                history: None,
+                metadata: Some(json!({"reason": "done"})),
+            },
         });
         round_trip(EffectKind::ToolApprovalRequired {
             tool_name: "my_tool".into(),
@@ -548,10 +567,18 @@ mod tests {
         assert!(matches!(e.kind, EffectKind::DeleteMemory { ref key, .. } if key == "key2"));
 
         // handoff
-        let e = Effect::handoff(3, OperatorId::new("target"), None);
+        let e = Effect::handoff(
+            3,
+            OperatorId::new("target"),
+            HandoffContext {
+                task: Content::text("do the next thing"),
+                history: None,
+                metadata: None,
+            },
+        );
         assert!(matches!(
             e.kind,
-            EffectKind::Handoff { ref metadata, .. } if metadata.is_none()
+            EffectKind::Handoff { ref context, .. } if context.metadata.is_none()
         ));
 
         // signal

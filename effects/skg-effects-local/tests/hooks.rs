@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Artifact;
-use layer0::effect::{Effect, EffectKind, MemoryScope, Scope, SignalPayload};
+use layer0::effect::{Effect, EffectKind, HandoffContext, MemoryScope, Scope, SignalPayload};
 use layer0::error::{OrchError, StateError};
 use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
@@ -373,14 +373,15 @@ async fn lifetime_guardrail_blocks_transient_write() {
     );
 }
 
-/// Handoff must preserve structured JSON state in `input.metadata`.
+/// Handoff must forward `context.task` as the input message and `context.metadata`
+/// as `input.metadata` on the resulting `OperatorInput`.
 #[tokio::test]
 async fn handoff_preserves_structured_state_in_metadata() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(NoOpOrch);
     let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>));
 
-    let handoff_state = json!({
+    let handoff_meta = json!({
         "conversation_id": "abc-123",
         "context": { "depth": 3, "tags": ["urgent", "follow-up"] },
         "score": 0.95
@@ -390,7 +391,11 @@ async fn handoff_preserves_structured_state_in_metadata() {
         .handle(
             &Effect::new(0, EffectKind::Handoff {
                 operator: OperatorId::new("next-op"),
-                metadata: Some(handoff_state.clone()),
+                context: HandoffContext {
+                    task: Content::text("pick up from here"),
+                    history: None,
+                    metadata: Some(handoff_meta.clone()),
+                },
             }),
             &test_ctx(),
         )
@@ -401,8 +406,13 @@ async fn handoff_preserves_structured_state_in_metadata() {
         EffectOutcome::Handoff { operator, input } => {
             assert_eq!(operator, OperatorId::new("next-op"));
             assert_eq!(
-                input.metadata, handoff_state,
-                "metadata must carry the original structured JSON, not Null"
+                input.message.as_text().unwrap_or(""),
+                "pick up from here",
+                "task must be the input message"
+            );
+            assert_eq!(
+                input.metadata, handoff_meta,
+                "metadata must carry the original structured JSON"
             );
         }
         other => panic!("expected Handoff outcome, got {:?}", other),

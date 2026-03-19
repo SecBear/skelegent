@@ -196,6 +196,21 @@ impl Provider for RoutingProvider {
         // Safety: idx is bounds-checked in resolve_embed_idx.
         self.providers[idx].embed_boxed(request)
     }
+
+    /// Stream inference by routing the request to the selected backend's native stream.
+    ///
+    /// Applies the same routing logic as [`Self::infer`]: the policy selects an
+    /// index, falling back to `default_idx` when out of bounds.  The selected
+    /// backend's own `infer_stream` is used, so providers with true token-by-token
+    /// streaming are not reduced to a single-`Done` wrapper.
+    fn infer_stream(
+        &self,
+        request: InferRequest,
+    ) -> impl Future<Output = Result<InferStream, ProviderError>> + Send {
+        let idx = self.resolve_idx(&request);
+        // Safety: idx is bounds-checked in resolve_idx.
+        self.providers[idx].infer_stream_boxed(request)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -779,5 +794,80 @@ mod tests {
         // Response carried through the Done event.
         assert_eq!(response.model, "test-model");
         assert_eq!(response.text().unwrap(), "streamed-ok");
+    }
+
+    // -- infer_stream routing -------------------------------------------
+
+    /// Router delegates `infer_stream` to the selected backend, preserving
+    /// its native multi-event stream rather than wrapping in a single Done.
+    #[tokio::test]
+    async fn router_delegates_infer_stream() {
+        use futures_util::StreamExt;
+
+        // A provider that produces TextDelta + Done (genuine incremental streaming).
+        struct NativeStreamingProvider {
+            name: &'static str,
+        }
+
+        impl Provider for NativeStreamingProvider {
+            fn infer(
+                &self,
+                _request: InferRequest,
+            ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
+                async { Err(ProviderError::Other("not used".into())) }
+            }
+
+            fn infer_stream(
+                &self,
+                request: InferRequest,
+            ) -> impl Future<Output = Result<InferStream, ProviderError>> + Send {
+                let model = request.model.clone().unwrap_or_default();
+                let name = self.name;
+                async move {
+                    let events: Vec<Result<StreamEvent, ProviderError>> = vec![
+                        Ok(StreamEvent::TextDelta(format!("{name}:chunk1"))),
+                        Ok(StreamEvent::Done(InferResponse {
+                            content: Content::text(format!("{name}:done")),
+                            tool_calls: vec![],
+                            stop_reason: StopReason::EndTurn,
+                            usage: TokenUsage::default(),
+                            model,
+                            cost: None,
+                            truncated: None,
+                        })),
+                    ];
+                    Ok(InferStream::new(futures_util::stream::iter(events)))
+                }
+            }
+        }
+
+        let providers: Vec<Box<dyn DynProvider>> = vec![
+            box_provider(NativeStreamingProvider { name: "backend-0" }),
+            box_provider(NativeStreamingProvider { name: "backend-1" }),
+        ];
+
+        let policy = ModelMapPolicy::new().route("model-b", 1);
+        let router = RoutingProvider::new(providers, 0, Box::new(policy)).unwrap();
+
+        // Route to backend-1 by model name — must see its native stream, not a
+        // single-Done wrapper from the default infer_stream fallback.
+        let req = InferRequest::new(vec![]).with_model("model-b");
+        let mut stream = router.infer_stream(req).await.unwrap();
+
+        // First event must be TextDelta (proving native streaming, not single-Done).
+        let event1 = stream.next().await.expect("stream must yield TextDelta").unwrap();
+        let StreamEvent::TextDelta(chunk) = event1 else {
+            panic!("expected TextDelta, got {event1:?}");
+        };
+        assert_eq!(chunk, "backend-1:chunk1");
+
+        let event2 = stream.next().await.expect("stream must yield Done").unwrap();
+        let StreamEvent::Done(response) = event2 else {
+            panic!("expected Done, got {event2:?}");
+        };
+        assert_eq!(response.text().unwrap(), "backend-1:done");
+
+        // Stream is exhausted after Done.
+        assert!(stream.next().await.is_none());
     }
 }

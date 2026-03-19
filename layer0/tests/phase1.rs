@@ -821,7 +821,11 @@ fn env_error_display_remaining_variants() {
 fn effect_handoff_round_trip() {
     let e = Effect::new(0, EffectKind::Handoff {
         operator: OperatorId::new("specialist"),
-        metadata: Some(json!({"context": "user needs help with billing"})),
+        context: HandoffContext {
+            task: Content::text("user needs help with billing"),
+            history: None,
+            metadata: None,
+        },
     });
     let json = serde_json::to_string(&e).unwrap();
     let back: Effect = serde_json::from_str(&json).unwrap();

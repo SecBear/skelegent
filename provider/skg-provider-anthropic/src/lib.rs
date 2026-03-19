@@ -141,18 +141,25 @@ impl AnthropicProvider {
             })
             .collect();
 
-        // Build thinking config
-        let thinking = match &request.thinking {
-            Some(ThinkingConfig::Enabled { budget_tokens }) => {
-                // Anthropic requires temperature to be unset when thinking is enabled.
-                Some(serde_json::json!({ "type": "enabled", "budget_tokens": budget_tokens }))
-            }
-            Some(ThinkingConfig::Adaptive) => {
-                // Provider-decided; use Anthropic's auto mode if set via extra, otherwise skip.
-                request.extra.get("thinking").cloned()
-            }
-            Some(ThinkingConfig::Disabled) | None => None,
-        };
+        // Read Anthropic-specific options from provider_options["anthropic"].
+        let anthropic_opts = request
+            .provider_options
+            .get("anthropic")
+            .cloned()
+            .unwrap_or_default();
+
+        // Build thinking config from provider_options["anthropic"]["thinking"].
+        // ThinkingConfig::Disabled (or key absence) → no thinking sent.
+        // Enabled serialises to the Anthropic wire format; Adaptive and raw
+        // JSON objects are forwarded as-is so callers can provide any format.
+        let thinking = anthropic_opts
+            .get("thinking")
+            .and_then(|v| {
+                match serde_json::from_value::<ThinkingConfig>(v.clone()) {
+                    Ok(ThinkingConfig::Disabled) => None,
+                    _ => Some(v.clone()),
+                }
+            });
         // Anthropic requirement: temperature must not be set when thinking is enabled.
         if thinking.is_some() && request.temperature.is_some() {
             tracing::warn!(
@@ -176,7 +183,7 @@ impl AnthropicProvider {
             model,
             max_tokens,
             messages,
-            system: build_anthropic_system(&request.system, &request.extra),
+            system: build_anthropic_system(&request.system, &anthropic_opts),
             tools: final_tools,
             stream: false,
             temperature,
@@ -186,17 +193,17 @@ impl AnthropicProvider {
     }
 }
 
-/// Build the Anthropic `system` field from the request's system prompt and extra config.
+/// Build the Anthropic `system` field from request system prompt and provider options.
 ///
-/// If `extra["system_cache_control"]` is present, the system prompt is wrapped in a
+/// If `opts["system_cache_control"]` is present, the system prompt is wrapped in a
 /// content-block array so Anthropic's caching API can attach the directive. Otherwise
 /// it falls through to a plain string, which avoids any wire-format regression.
 fn build_anthropic_system(
     system: &Option<String>,
-    extra: &serde_json::Value,
+    opts: &serde_json::Value,
 ) -> Option<AnthropicSystemContent> {
     let text = system.as_ref()?.clone();
-    if let Some(cache_control) = extra.get("system_cache_control").cloned() {
+    if let Some(cache_control) = opts.get("system_cache_control").cloned() {
         Some(AnthropicSystemContent::Blocks(vec![AnthropicSystemBlock {
             block_type: "text",
             text,
@@ -415,7 +422,7 @@ impl Provider for AnthropicProvider {
         let client = self.client.clone();
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
-        let extra = request.extra.clone();
+        let anthropic_opts = request.provider_options.get("anthropic").cloned().unwrap_or_default();
 
         let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer", provider = "anthropic", model);
@@ -432,7 +439,7 @@ impl Provider for AnthropicProvider {
                     .header("x-app", "cli");
             } else {
                 builder = builder.header("x-api-key", key);
-                if let Some(beta) = extra.get("anthropic_beta") {
+                if let Some(beta) = anthropic_opts.get("anthropic_beta") {
                     let hdr = extra_to_beta_header(beta);
                     if !hdr.is_empty() {
                         builder = builder.header("anthropic-beta", hdr);
@@ -500,7 +507,7 @@ impl Provider for AnthropicProvider {
         let client = self.client.clone();
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
-        let extra = request.extra.clone();
+        let anthropic_opts = request.provider_options.get("anthropic").cloned().unwrap_or_default();
 
         let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer_stream", provider = "anthropic", model);
@@ -517,7 +524,7 @@ impl Provider for AnthropicProvider {
                     .header("x-app", "cli");
             } else {
                 builder = builder.header("x-api-key", key);
-                if let Some(beta) = extra.get("anthropic_beta") {
+                if let Some(beta) = anthropic_opts.get("anthropic_beta") {
                     let hdr = extra_to_beta_header(beta);
                     if !hdr.is_empty() {
                         builder = builder.header("anthropic-beta", hdr);
@@ -867,11 +874,11 @@ mod tests {
     }
 
     #[test]
-    fn system_cache_control_in_extra_produces_block_array() {
+    fn system_cache_control_in_provider_options_produces_block_array() {
         let provider = AnthropicProvider::new("sk-test");
         let request = skg_turn::infer::InferRequest::new(vec![])
             .with_system("You are helpful")
-            .with_extra(json!({"system_cache_control": {"type": "ephemeral"}}));
+            .with_provider_option("anthropic", json!({"system_cache_control": {"type": "ephemeral"}}));
         let api_req = provider.build_infer_request(&request);
         let json = serde_json::to_value(&api_req).unwrap();
         // system must be an array, not a string

@@ -108,9 +108,7 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         if !system.is_empty() {
             request = request.with_system(system);
         }
-        request = request
-            .with_max_tokens(max_tokens)
-            .with_extra(input.metadata.clone());
+        request = request.with_max_tokens(max_tokens);
 
         // Single model call
         let response = self.provider.infer(request).await.map_err(|e| {

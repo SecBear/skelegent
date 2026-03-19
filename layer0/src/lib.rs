@@ -82,7 +82,7 @@ pub use dispatch::{
 };
 pub use dispatch_context::{AuthIdentity, DispatchContext, Extensions, TraceContext};
 pub use duration::DurationMs;
-pub use effect::{Effect, EffectKind, EffectMeta, MemoryScope, Scope, SignalPayload};
+pub use effect::{Effect, EffectKind, EffectMeta, HandoffContext, MemoryScope, Scope, SignalPayload};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
 pub use id::{DispatchId, OperatorId, SessionId, WorkflowId};

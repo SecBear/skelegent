@@ -26,9 +26,8 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let output = skelegent::agent("claude-sonnet-4-20250514")
-//!         .system("You are a helpful assistant.")
+//!         .system_prompt("You are a helpful assistant.")
 //!         .max_turns(5)
-//!         .build()?
 //!         .run("What is the capital of France?")
 //!         .await?;
 //!
@@ -109,7 +108,7 @@ pub use skg_turn;
 #[cfg(feature = "agent")]
 mod agent;
 #[cfg(feature = "agent")]
-pub use agent::{AgentBuildError, AgentBuilder, BuiltAgent, agent};
+pub use agent::{AgentBuildError, AgentBuilder, agent};
 
 /// Happy-path imports for composing Skelegent systems.
 pub mod prelude {
@@ -148,5 +147,5 @@ pub mod prelude {
     pub use skg_state_fs::FsStore;
 
     #[cfg(feature = "agent")]
-    pub use crate::{AgentBuildError, AgentBuilder, BuiltAgent, agent};
+    pub use crate::{AgentBuildError, AgentBuilder, agent};
 }

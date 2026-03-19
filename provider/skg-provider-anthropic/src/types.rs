@@ -2,6 +2,24 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Anthropic-specific extended thinking / reasoning configuration.
+///
+/// Set this via `provider_options["anthropic"]["thinking"]` when constructing
+/// an [`skg_turn::infer::InferRequest`] to control Anthropic's extended thinking.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThinkingConfig {
+    /// Enable thinking with a token budget.
+    Enabled {
+        /// Maximum tokens the model may use for reasoning.
+        budget_tokens: u32,
+    },
+    /// Let the provider decide (Anthropic "auto" mode).
+    Adaptive,
+    /// Explicitly disable thinking.
+    Disabled,
+}
+
 /// Anthropic API request body.
 #[derive(Debug, Serialize)]
 pub struct AnthropicRequest {

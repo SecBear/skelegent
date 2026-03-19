@@ -4,8 +4,14 @@
 //! use skelegent::prelude::*;
 //!
 //! let output = skelegent::agent("claude-sonnet-4-20250514")
-//!     .system("You are helpful.")
+//!     .system_prompt("You are helpful.")
 //!     .build()?
+//!     .execute(input, &ctx)
+//!     .await?;
+//!
+//! // Or the one-liner:
+//! let output = skelegent::agent("claude-sonnet-4-20250514")
+//!     .system_prompt("You are helpful.")
 //!     .run("Hello!")
 //!     .await?;
 //! ```
@@ -18,6 +24,7 @@ use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
 use skg_context_engine::ToolFilter;
 use skg_tool::{ToolDyn, ToolRegistry};
 use std::sync::Arc;
+
 #[cfg(any(
     feature = "provider-anthropic",
     feature = "provider-openai",
@@ -36,9 +43,9 @@ use skg_turn::provider::Provider;
 ///
 /// ```rust,ignore
 /// let output = skelegent::agent("claude-sonnet-4-20250514")
-///     .system("You are helpful.")
+///     .system_prompt("You are helpful.")
 ///     .build()?
-///     .run("Hello!")
+///     .execute(input, &ctx)
 ///     .await?;
 /// ```
 pub fn agent(model: &str) -> AgentBuilder {
@@ -55,6 +62,10 @@ pub fn agent(model: &str) -> AgentBuilder {
 }
 
 /// Builder for constructing and running an agent.
+///
+/// Returned by [`agent()`]. All configuration methods are chainable. Call
+/// [`build()`](Self::build) to produce a type-erased [`Operator`], or call
+/// [`run()`](Self::run) as a one-shot convenience that skips the build step.
 pub struct AgentBuilder {
     model: String,
     system: Option<String>,
@@ -71,7 +82,7 @@ pub struct AgentBuilder {
 
 impl AgentBuilder {
     /// Set the system prompt.
-    pub fn system(mut self, prompt: impl Into<String>) -> Self {
+    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system = Some(prompt.into());
         self
     }
@@ -143,7 +154,10 @@ impl AgentBuilder {
 
     /// Build the agent, resolving the model string to a provider.
     ///
-    /// Returns a [`BuiltAgent`] that can be run with `.run()`.
+    /// The model string is preserved in [`ReactLoopConfig::model`] so the
+    /// provider uses the exact model version requested. Returns a type-erased
+    /// [`Operator`] that can be executed with `.execute(input, &ctx)` or
+    /// registered with a [`Dispatcher`](layer0::Dispatcher).
     ///
     /// # Errors
     ///
@@ -151,31 +165,22 @@ impl AgentBuilder {
     /// - The model string doesn't match any known provider prefix
     /// - The required API key environment variable is not set
     /// - The provider feature is not enabled
-    pub fn build(self) -> Result<BuiltAgent, AgentBuildError> {
-        resolve_model(
-            &self.model,
-            self.system.unwrap_or_default(),
-            self.tools,
-            self.max_turns.unwrap_or(10),
-            self.max_tokens.unwrap_or(4096),
-            self.temperature,
-            self.max_tool_retries.unwrap_or(2),
-            self.tool_filter,
-        )
+    pub fn build(self) -> Result<Box<dyn Operator>, AgentBuildError> {
+        resolve_model(self)
     }
-}
 
-/// A fully constructed agent ready to run.
-pub struct BuiltAgent {
-    operator: OperatorBox,
-}
-
-impl BuiltAgent {
-    /// Run the agent with a user message.
-    pub async fn run(&self, message: &str) -> Result<OperatorOutput, OperatorError> {
+    /// Run the agent with a user message. Convenience for `build()?.execute()`.
+    ///
+    /// Creates a minimal [`DispatchContext`] internally. For full control over
+    /// dispatch context or to reuse the operator across multiple calls, use
+    /// [`build()`](Self::build) and call `.execute()` directly.
+    pub async fn run(self, message: &str) -> Result<OperatorOutput, OperatorError> {
+        let op = self
+            .build()
+            .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
-        let output = self.operator.execute(input, &ctx).await?;
+        let output = op.execute(input, &ctx).await?;
         if output.has_unhandled_effects() {
             eprintln!(
                 "warning: OperatorOutput contains {} effect(s) that will not be executed. \
@@ -219,80 +224,30 @@ impl std::fmt::Display for AgentBuildError {
 
 impl std::error::Error for AgentBuildError {}
 
-/// Type-erased operator box — wraps `CognitiveOperator<P>` for any provider.
-///
-/// This exists because `Provider` is RPITIT (not object-safe), so we can't
-/// use `Box<dyn Operator>` directly through the provider enum. Instead,
-/// we construct the concrete `CognitiveOperator<P>` during `build()` and
-/// erase it behind `Box<dyn Operator>`.
-type OperatorBox = Box<dyn Operator>;
-
 #[cfg(any(
     feature = "provider-anthropic",
     feature = "provider-openai",
     feature = "provider-ollama"
 ))]
-/// Build a `CognitiveOperator` from resolved provider and config.
-fn build_cognitive_operator<P: Provider + 'static>(
-    provider: P,
-    system_prompt: String,
-    tools: ToolRegistry,
-    max_turns: u32,
-    max_tokens: u32,
-    temperature: Option<f64>,
-    max_tool_retries: u32,
-    tool_filter: Option<ToolFilter>,
-) -> Box<dyn Operator> {
-    use skg_context_engine::{
-        CognitiveOperator, ReactLoopConfig,
-        rule::{Rule, Trigger},
-        rules::{BudgetGuard, BudgetGuardConfig},
+fn resolve_model(builder: AgentBuilder) -> Result<Box<dyn Operator>, AgentBuildError> {
+    use skg_context_engine::{CognitiveBuilder, ReactLoopConfig};
+
+    // Preserve model string so the provider sends the exact version requested.
+    // Previously this was None (model dropped after provider selection — the bug).
+    let config = ReactLoopConfig {
+        system_prompt: builder.system.unwrap_or_default(),
+        model: Some(builder.model.clone()),
+        max_tokens: Some(builder.max_tokens.unwrap_or(4096)),
+        temperature: builder.temperature,
+        max_tool_retries: builder.max_tool_retries.unwrap_or(2),
+        tool_filter: builder.tool_filter,
+        ..Default::default()
     };
+    let max_turns = builder.max_turns.unwrap_or(10);
+    let tools = builder.tools;
+    let model = builder.model.as_str();
 
-    let op = CognitiveOperator::new(
-        "agent",
-        provider,
-        tools,
-        ReactLoopConfig {
-            system_prompt,
-            model: None, // model already selected by provider
-            max_tokens: Some(max_tokens),
-            temperature,
-            max_tool_retries,
-            tool_filter,
-            ..Default::default()
-        },
-    )
-    .with_rules(move || {
-        let guard = BudgetGuard::with_config(BudgetGuardConfig {
-            max_cost: None,
-            max_turns: Some(max_turns),
-            max_duration: None,
-            max_tool_calls: None,
-        });
-        vec![Rule::new("budget_guard", Trigger::BeforeAny, 100, guard)]
-    });
-    Box::new(op)
-}
-
-#[cfg(any(
-    feature = "provider-anthropic",
-    feature = "provider-openai",
-    feature = "provider-ollama"
-))]
-fn resolve_model(
-    model: &str,
-    system_prompt: String,
-    tools: ToolRegistry,
-    max_turns: u32,
-    max_tokens: u32,
-    temperature: Option<f64>,
-    max_tool_retries: u32,
-    tool_filter: Option<ToolFilter>,
-) -> Result<BuiltAgent, AgentBuildError> {
-    let operator: Box<dyn Operator> = if model.starts_with("claude-")
-        || model.starts_with("anthropic:")
-    {
+    let op: Box<dyn Operator> = if model.starts_with("claude-") || model.starts_with("anthropic:") {
         #[cfg(feature = "provider-anthropic")]
         {
             let api_key =
@@ -300,15 +255,13 @@ fn resolve_model(
                     env_var: "ANTHROPIC_API_KEY",
                 })?;
             let provider = skg_provider_anthropic::AnthropicProvider::new(api_key);
-            build_cognitive_operator(
-                provider,
-                system_prompt,
-                tools,
-                max_turns,
-                max_tokens,
-                temperature,
-                max_tool_retries,
-                tool_filter,
+            Box::new(
+                CognitiveBuilder::new()
+                    .config(config)
+                    .tools(tools)
+                    .max_turns(max_turns)
+                    .provider(provider)
+                    .build(),
             )
         }
         #[cfg(not(feature = "provider-anthropic"))]
@@ -329,15 +282,13 @@ fn resolve_model(
                     env_var: "OPENAI_API_KEY",
                 })?;
             let provider = skg_provider_openai::OpenAIProvider::new(api_key);
-            build_cognitive_operator(
-                provider,
-                system_prompt,
-                tools,
-                max_turns,
-                max_tokens,
-                temperature,
-                max_tool_retries,
-                tool_filter,
+            Box::new(
+                CognitiveBuilder::new()
+                    .config(config)
+                    .tools(tools)
+                    .max_turns(max_turns)
+                    .provider(provider)
+                    .build(),
             )
         }
         #[cfg(not(feature = "provider-openai"))]
@@ -350,15 +301,13 @@ fn resolve_model(
         #[cfg(feature = "provider-ollama")]
         {
             let provider = skg_provider_ollama::OllamaProvider::new();
-            build_cognitive_operator(
-                provider,
-                system_prompt,
-                tools,
-                max_turns,
-                max_tokens,
-                temperature,
-                max_tool_retries,
-                tool_filter,
+            Box::new(
+                CognitiveBuilder::new()
+                    .config(config)
+                    .tools(tools)
+                    .max_turns(max_turns)
+                    .provider(provider)
+                    .build(),
             )
         }
         #[cfg(not(feature = "provider-ollama"))]
@@ -371,7 +320,7 @@ fn resolve_model(
         return Err(AgentBuildError::UnknownModel(model.to_string()));
     };
 
-    Ok(BuiltAgent { operator })
+    Ok(op)
 }
 
 #[cfg(not(any(
@@ -379,16 +328,9 @@ fn resolve_model(
     feature = "provider-openai",
     feature = "provider-ollama"
 )))]
-fn resolve_model(
-    model: &str,
-    _system_prompt: String,
-    _tools: ToolRegistry,
-    _max_turns: u32,
-    _max_tokens: u32,
-    _temperature: Option<f64>,
-    _max_tool_retries: u32,
-    _tool_filter: Option<ToolFilter>,
-) -> Result<BuiltAgent, AgentBuildError> {
+fn resolve_model(builder: AgentBuilder) -> Result<Box<dyn Operator>, AgentBuildError> {
+    let model = builder.model.as_str();
+
     if model.starts_with("claude-") || model.starts_with("anthropic:") {
         return Err(AgentBuildError::FeatureNotEnabled {
             feature: "provider-anthropic",
@@ -417,8 +359,9 @@ fn resolve_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer0::operator::ExitReason;
     use skg_context_engine::{
-        CognitiveOperator, ReactLoopConfig,
+        CognitiveBuilder, CognitiveOperator, ReactLoopConfig,
         rules::{BudgetGuard, BudgetGuardConfig},
     };
     use skg_turn::test_utils::{FunctionProvider, make_text_response};
@@ -438,7 +381,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn built_agent_budget_exit_halts() {
+    async fn cognitive_operator_budget_exit_halts() {
         let (provider, call_count) = counting_provider("unused");
 
         let op = CognitiveOperator::new(
@@ -476,9 +419,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn built_agent_run_returns_complete() {
+    async fn cognitive_operator_execute_returns_complete() {
         let (provider, call_count) = counting_provider("done");
-        let op: Box<dyn Operator> = Box::new(CognitiveOperator::new(
+        let op = CognitiveOperator::new(
             "test",
             provider,
             ToolRegistry::new(),
@@ -486,11 +429,12 @@ mod tests {
                 system_prompt: "You are helpful.".into(),
                 ..Default::default()
             },
-        ));
-        let agent = BuiltAgent { operator: op };
+        );
 
-        let output = agent.run("Hello!").await.unwrap();
-        assert_eq!(output.exit_reason, layer0::operator::ExitReason::Complete);
+        let input = OperatorInput::new(Content::text("Hello!"), TriggerType::User);
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+        let output = op.execute(input, &ctx).await.unwrap();
+        assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
 
@@ -509,7 +453,7 @@ mod tests {
             Ok(make_text_response("done"))
         });
 
-        let op: Box<dyn Operator> = Box::new(CognitiveOperator::new(
+        let op = CognitiveOperator::new(
             "test",
             provider,
             ToolRegistry::new(),
@@ -518,9 +462,11 @@ mod tests {
                 temperature: Some(0.7),
                 ..Default::default()
             },
-        ));
-        let agent = BuiltAgent { operator: op };
-        let _ = agent.run("Hello").await.unwrap();
+        );
+
+        let input = OperatorInput::new(Content::text("Hello"), TriggerType::User);
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+        let _ = op.execute(input, &ctx).await.unwrap();
 
         let guard = captured.lock().unwrap();
         let req = guard.as_ref().expect("provider was not called");
@@ -531,6 +477,7 @@ mod tests {
     /// [`ToolRegistry`]) is included in the [`InferRequest`] schema list sent to the model.
     #[tokio::test]
     async fn agent_builder_single_tool() {
+        use layer0::DispatchContext as DC;
         use skg_tool::ToolError;
         use std::pin::Pin;
 
@@ -549,7 +496,7 @@ mod tests {
             fn call(
                 &self,
                 _input: serde_json::Value,
-                _ctx: &DispatchContext,
+                _ctx: &DC,
             ) -> Pin<
                 Box<
                     dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>
@@ -573,7 +520,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(PingTool));
 
-        let op: Box<dyn Operator> = Box::new(CognitiveOperator::new(
+        let op = CognitiveOperator::new(
             "test",
             provider,
             registry,
@@ -581,9 +528,11 @@ mod tests {
                 system_prompt: "system".into(),
                 ..Default::default()
             },
-        ));
-        let agent = BuiltAgent { operator: op };
-        let _ = agent.run("Hello").await.unwrap();
+        );
+
+        let input = OperatorInput::new(Content::text("Hello"), TriggerType::User);
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+        let _ = op.execute(input, &ctx).await.unwrap();
 
         let guard = captured.lock().unwrap();
         let req = guard.as_ref().expect("provider was not called");
@@ -592,5 +541,61 @@ mod tests {
             "tool 'ping' must appear in InferRequest.tools; got: {:?}",
             req.tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
         );
+    }
+
+    /// Verify that the model string set in [`ReactLoopConfig::model`] is forwarded to
+    /// [`InferRequest::model`]. This is the path that `AgentBuilder::build()` uses —
+    /// the model string must survive from `agent("model")` through to the provider call.
+    #[tokio::test]
+    async fn agent_preserves_model() {
+        use std::sync::Mutex;
+        use skg_turn::infer::InferRequest;
+
+        let captured: Arc<Mutex<Option<InferRequest>>> = Arc::new(Mutex::new(None));
+        let captured_inner = captured.clone();
+        let provider = FunctionProvider::new(move |req| {
+            *captured_inner.lock().unwrap() = Some(req);
+            Ok(make_text_response("done"))
+        });
+
+        let op = CognitiveOperator::new(
+            "test",
+            provider,
+            ToolRegistry::new(),
+            ReactLoopConfig {
+                system_prompt: "sys".into(),
+                model: Some("claude-sonnet-4-20250514".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let input = OperatorInput::new(Content::text("hi"), TriggerType::User);
+        let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
+        let _ = op.execute(input, &ctx).await.unwrap();
+
+        let guard = captured.lock().unwrap();
+        let req = guard.as_ref().expect("provider was not called");
+        assert_eq!(
+            req.model.as_deref(),
+            Some("claude-sonnet-4-20250514"),
+            "model must be forwarded to InferRequest; was None (model-dropping bug)",
+        );
+    }
+
+    /// Verify that [`CognitiveBuilder::run()`] works as an end-to-end convenience shortcut:
+    /// build + execute in one call.
+    #[tokio::test]
+    async fn agent_run_convenience() {
+        let (provider, call_count) = counting_provider("Hello from run!");
+
+        let output = CognitiveBuilder::new()
+            .system_prompt("You are helpful.")
+            .provider(provider)
+            .run("Hi!")
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
 }

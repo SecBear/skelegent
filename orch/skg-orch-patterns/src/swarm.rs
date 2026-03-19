@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::EffectKind;
+use layer0::effect::{EffectKind, HandoffContext};
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -115,15 +115,16 @@ impl Operator for SwarmOperator {
                 .await
                 .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
 
-            // Extract the handoff target from this round's effects before
-            // moving them into the accumulator.
-            let handoff_target: Option<OperatorId> = output.effects.iter().rev().find_map(|e| {
-                if let EffectKind::Handoff { ref operator, .. } = e.kind {
-                    Some(operator.clone())
-                } else {
-                    None
-                }
-            });
+            // Extract the handoff target AND context from this round's effects
+            // before moving them into the accumulator.
+            let handoff: Option<(OperatorId, HandoffContext)> =
+                output.effects.iter().rev().find_map(|e| {
+                    if let EffectKind::Handoff { ref operator, ref context } = e.kind {
+                        Some((operator.clone(), context.clone()))
+                    } else {
+                        None
+                    }
+                });
 
             // Absorb this round's effects into the running total.
             all_effects.append(&mut output.effects);
@@ -144,7 +145,7 @@ impl Operator for SwarmOperator {
                         return Ok(out);
                     }
 
-                    let target = handoff_target.ok_or_else(|| {
+                    let (target, context) = handoff.ok_or_else(|| {
                         OperatorError::non_retryable(format!(
                             "operator '{}' exited HandedOff but emitted no EffectKind::Handoff",
                             current_id.as_str()
@@ -167,8 +168,13 @@ impl Operator for SwarmOperator {
                     }
 
                     handoffs += 1;
-                    current_input =
-                        OperatorInput::new(output.message.clone(), TriggerType::Task);
+                    // Use context.task as the next input — it is the explicit
+                    // task the handing-off operator wants the next one to act on.
+                    let mut next_input = OperatorInput::new(context.task, TriggerType::Task);
+                    if let Some(hist) = context.history {
+                        next_input.context = Some(hist);
+                    }
+                    current_input = next_input;
                     current_id = target;
                 }
                 // Unexpected exit — surface immediately with accumulated effects.
@@ -256,7 +262,7 @@ mod tests {
 
     use async_trait::async_trait;
     use layer0::content::Content;
-    use layer0::effect::{Effect, EffectKind};
+    use layer0::effect::{Effect, EffectKind, HandoffContext};
     use layer0::error::OperatorError;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -292,7 +298,7 @@ mod tests {
         }
     }
 
-    /// Operator that emits `Effect::Handoff` and exits with `HandedOff`.
+    /// Operator that emits `Effect::Handoff` with a structured `HandoffContext`.
     struct HandoffOp {
         target: OperatorId,
         reply: String,
@@ -311,7 +317,11 @@ mod tests {
             );
             out.effects.push(Effect::new(0, EffectKind::Handoff {
                 operator: self.target.clone(),
-                metadata: None,
+                context: HandoffContext {
+                    task: Content::text(self.reply.clone()),
+                    history: None,
+                    metadata: None,
+                },
             }));
             Ok(out)
         }
@@ -401,6 +411,84 @@ mod tests {
         assert!(
             msg.contains("op-c"),
             "error must name the rejected target: {msg}"
+        );
+    }
+
+    /// Verifies that the swarm forwards `context.task` — not `output.message` —
+    /// as the input to the next operator in the chain.
+    #[tokio::test]
+    async fn swarm_uses_handoff_context_task() {
+        /// Emits a Handoff whose `context.task` differs from `output.message`.
+        struct DistinctTaskOp;
+
+        #[async_trait]
+        impl Operator for DistinctTaskOp {
+            async fn execute(
+                &self,
+                _input: OperatorInput,
+                _ctx: &DispatchContext,
+            ) -> Result<OperatorOutput, OperatorError> {
+                let mut out = OperatorOutput::new(
+                    Content::text("output-message-ignored"),
+                    ExitReason::HandedOff,
+                );
+                out.effects.push(Effect::new(0, EffectKind::Handoff {
+                    operator: OperatorId::new("receiver"),
+                    context: HandoffContext {
+                        task: Content::text("context-task-for-receiver"),
+                        history: None,
+                        metadata: None,
+                    },
+                }));
+                Ok(out)
+            }
+        }
+
+        /// Records the input message it received.
+        struct RecordingOp {
+            received: std::sync::Arc<std::sync::Mutex<String>>,
+        }
+
+        #[async_trait]
+        impl Operator for RecordingOp {
+            async fn execute(
+                &self,
+                input: OperatorInput,
+                _ctx: &DispatchContext,
+            ) -> Result<OperatorOutput, OperatorError> {
+                *self.received.lock().unwrap() =
+                    input.message.as_text().unwrap_or("").to_string();
+                Ok(OperatorOutput::new(Content::text("done"), ExitReason::Complete))
+            }
+        }
+
+        let received = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let mut orch = LocalOrch::new();
+        orch.register(OperatorId::new("sender"), Arc::new(DistinctTaskOp));
+        orch.register(
+            OperatorId::new("receiver"),
+            Arc::new(RecordingOp { received: received.clone() }),
+        );
+        let orch = Arc::new(orch);
+
+        let swarm = SwarmOperator::builder(
+            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
+        )
+        .entry(OperatorId::new("sender"))
+        .transition(OperatorId::new("sender"), OperatorId::new("receiver"))
+        .max_handoffs(5)
+        .build();
+
+        let output = swarm
+            .execute(simple_input("start"), &test_ctx("swarm-task"))
+            .await
+            .expect("swarm must complete");
+
+        assert_eq!(output.exit_reason, ER::Complete);
+        assert_eq!(
+            *received.lock().unwrap(),
+            "context-task-for-receiver",
+            "receiver must get context.task, not output.message"
         );
     }
 }

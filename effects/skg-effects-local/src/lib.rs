@@ -8,7 +8,6 @@
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::content::Content;
 use layer0::effect::{Effect, EffectKind, Scope};
 use layer0::error::{OrchError, StateError};
 use layer0::middleware::{StoreStack, StoreWriteNext};
@@ -161,11 +160,17 @@ where
                 operator: operator.clone(),
                 input: (*input.clone()).clone(),
             }),
-            EffectKind::Handoff { operator, metadata } => {
-                let state = metadata.as_ref().cloned().unwrap_or(serde_json::Value::Null);
-                let mut input =
-                    OperatorInput::new(Content::text(state.to_string()), TriggerType::Task);
-                input.metadata = state;
+            EffectKind::Handoff { operator, context } => {
+                // Build the operator input from the structured HandoffContext.
+                // context.task is the primary input; context.history seeds the
+                // pre-assembled context; context.metadata becomes OperatorInput.metadata.
+                let mut input = OperatorInput::new(context.task.clone(), TriggerType::Task);
+                if let Some(hist) = &context.history {
+                    input.context = Some(hist.clone());
+                }
+                if let Some(meta) = &context.metadata {
+                    input.metadata = meta.clone();
+                }
                 Ok(EffectOutcome::Handoff {
                     operator: operator.clone(),
                     input,

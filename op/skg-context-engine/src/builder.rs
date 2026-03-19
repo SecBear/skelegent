@@ -181,6 +181,34 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
             (None, None) => op,
         }
     }
+
+    /// Run the agent with a user message. Convenience for `build().execute(input, ctx)`.
+    ///
+    /// Creates a minimal [`layer0::DispatchContext`] internally. For full control over
+    /// dispatch context or to reuse the operator across multiple calls, call
+    /// [`build()`](Self::build) and invoke `.execute()` directly.
+    pub async fn run(
+        self,
+        message: &str,
+    ) -> Result<layer0::operator::OperatorOutput, layer0::error::OperatorError> {
+        use layer0::content::Content;
+        use layer0::id::{DispatchId, OperatorId};
+        use layer0::operator::{Operator, OperatorInput, TriggerType};
+        use layer0::DispatchContext;
+
+        let op = self.build();
+        let input = OperatorInput::new(Content::text(message), TriggerType::User);
+        let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
+        let output = op.execute(input, &ctx).await?;
+        if output.has_unhandled_effects() {
+            eprintln!(
+                "warning: OperatorOutput contains {} effect(s) that will not be executed. \
+                 Use an EffectHandler or OrchestratedRunner to process effects.",
+                output.effects.len(),
+            );
+        }
+        Ok(output)
+    }
 }
 
 // ── Shared setters (both states) ──────────────────────────────────────────────
@@ -346,4 +374,20 @@ mod tests {
         assert_eq!(output.exit_reason, ExitReason::Complete);
     }
 
+    /// [`CognitiveBuilder::run()`] is a one-shot convenience: build + execute with a
+    /// synthesized dispatch context.
+    #[tokio::test]
+    async fn builder_run_convenience() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Hello from run!")]);
+
+        let output = CognitiveBuilder::new()
+            .system_prompt("You are helpful.")
+            .provider(provider)
+            .run("Hi!")
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(output.message.as_text().unwrap(), "Hello from run!");
+    }
 }
