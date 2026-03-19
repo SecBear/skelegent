@@ -48,10 +48,11 @@ impl ExecuteTool {
 
 #[async_trait]
 impl ContextOp for ExecuteTool {
-    /// Returns the tool result as a JSON string.
-    type Output = String;
+    /// Returns the raw JSON value produced by the tool.
+    /// Callers (e.g. `react_loop`) are responsible for formatting this into a string.
+    type Output = serde_json::Value;
 
-    async fn execute(&self, ctx: &mut Context) -> Result<String, EngineError> {
+    async fn execute(&self, ctx: &mut Context) -> Result<serde_json::Value, EngineError> {
         let tool = self
             .registry
             .get(&self.call.name)
@@ -61,7 +62,7 @@ impl ContextOp for ExecuteTool {
 
         ctx.metrics.tool_calls_total += 1;
         match tool.call(self.call.input.clone(), &self.dispatch_ctx).await {
-            Ok(result_json) => Ok(format_tool_result(&result_json)),
+            Ok(result_json) => Ok(result_json),
             Err(e) => {
                 ctx.metrics.tool_calls_failed += 1;
                 Err(e.into())

@@ -125,10 +125,15 @@ impl AnthropicProvider {
         let tools: Vec<AnthropicTool> = request
             .tools
             .iter()
-            .map(|t| AnthropicTool {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                input_schema: t.input_schema.clone(),
+            .map(|t| {
+                // TODO: plumb ToolSchema.extra — Anthropic supports `cache_control`
+                // per-tool; merge t.extra into AnthropicTool (requires adding the field
+                // or serializing via flatten) once the wire-format contract is settled.
+                AnthropicTool {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    input_schema: t.input_schema.clone(),
+                }
             })
             .collect();
 

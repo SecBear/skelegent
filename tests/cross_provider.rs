@@ -63,6 +63,8 @@ async fn anthropic_react_simple_prompt() {
         max_tokens: Some(256),
         temperature: None,
         tool_filter: None,
+            tool_result_formatter: None,
+            tool_error_formatter: None,
     };
 
     let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -186,6 +188,8 @@ async fn openai_react_simple_prompt() {
         max_tokens: Some(256),
         temperature: None,
         tool_filter: None,
+            tool_result_formatter: None,
+            tool_error_formatter: None,
     };
 
     let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -295,6 +299,8 @@ async fn ollama_react_simple_prompt() {
         max_tokens: Some(256),
         temperature: None,
         tool_filter: None,
+            tool_result_formatter: None,
+            tool_error_formatter: None,
     };
 
     let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)

@@ -12,7 +12,7 @@ use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
-use crate::ops::tool::ExecuteTool;
+use crate::ops::tool::{ExecuteTool, format_tool_result};
 use crate::output::{OutputError, OutputMode, OutputSchema};
 use layer0::DispatchContext;
 use layer0::approval::{ApprovalResponse, ToolCallAction};
@@ -35,6 +35,14 @@ use std::sync::Arc;
 /// the tool in this turn's available set, `false` to hide it from the model.
 pub type ToolFilter = Arc<dyn Fn(&dyn ToolDyn, &Context) -> bool + Send + Sync>;
 
+/// Formatter for tool results: receives `(tool_name, raw_output_value)` and returns the string
+/// to inject into LLM context.
+pub type ToolResultFormatter = Arc<dyn Fn(&str, &serde_json::Value) -> String + Send + Sync>;
+
+/// Formatter for tool errors: receives `(tool_name, error_message)` and returns the string
+/// to inject into LLM context.
+pub type ToolErrorFormatter = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
+
 /// Configuration for [`react_loop()`].
 pub struct ReactLoopConfig {
     /// System prompt.
@@ -52,6 +60,18 @@ pub struct ReactLoopConfig {
     /// for dispatch (in case the model calls a tool that was available in a
     /// previous turn and the response is still in-flight).
     pub tool_filter: Option<ToolFilter>,
+    /// Optional custom formatter for tool results.
+    ///
+    /// Receives the tool name and the tool's raw output value.
+    /// Returns the string to inject into the LLM context.
+    /// Defaults to the built-in [`format_tool_result`] behavior when `None`.
+    pub tool_result_formatter: Option<ToolResultFormatter>,
+    /// Optional custom formatter for tool errors.
+    ///
+    /// Receives the tool name and the error message string.
+    /// Returns the string to inject into the LLM context.
+    /// Defaults to the built-in [`format_tool_error`] behavior when `None`.
+    pub tool_error_formatter: Option<ToolErrorFormatter>,
 }
 
 impl Clone for ReactLoopConfig {
@@ -62,6 +82,8 @@ impl Clone for ReactLoopConfig {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             tool_filter: self.tool_filter.clone(),
+            tool_result_formatter: self.tool_result_formatter.clone(),
+            tool_error_formatter: self.tool_error_formatter.clone(),
         }
     }
 }
@@ -74,6 +96,8 @@ impl Default for ReactLoopConfig {
             max_tokens: Some(4096),
             temperature: None,
             tool_filter: None,
+            tool_result_formatter: None,
+            tool_error_formatter: None,
         }
     }
 }
@@ -88,6 +112,14 @@ impl fmt::Debug for ReactLoopConfig {
             .field(
                 "tool_filter",
                 &self.tool_filter.as_ref().map(|_| "<filter>"),
+            )
+            .field(
+                "tool_result_formatter",
+                &self.tool_result_formatter.as_ref().map(|_| "<formatter>"),
+            )
+            .field(
+                "tool_error_formatter",
+                &self.tool_error_formatter.as_ref().map(|_| "<formatter>"),
             )
             .finish()
     }
@@ -475,13 +507,19 @@ pub async fn react_loop<P: Provider>(
             )
             .await;
             let result_str = match tool_result {
-                Ok(s) => {
+                Ok(value) => {
                     tracing::debug!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, "tool succeeded");
-                    s
+                    match &config.tool_result_formatter {
+                        Some(f) => f(&call.name, &value),
+                        None => format_tool_result(&value),
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, error = %e, "tool failed");
-                    format_tool_error(&e)
+                    match &config.tool_error_formatter {
+                        Some(f) => f(&call.name, &e.to_string()),
+                        None => format_tool_error(&e),
+                    }
                 }
             };
 
@@ -520,6 +558,7 @@ fn tool_schemas_filtered(
             name: tool.name().to_string(),
             description: tool.description().to_string(),
             input_schema: tool.input_schema(),
+            extra: None,
         })
         .collect()
 }
@@ -532,6 +571,7 @@ fn tool_schemas(registry: &ToolRegistry) -> Vec<ToolSchema> {
             name: tool.name().to_string(),
             description: tool.description().to_string(),
             input_schema: tool.input_schema(),
+            extra: None,
         })
         .collect()
 }
@@ -655,6 +695,7 @@ pub async fn react_loop_structured<P: Provider>(
                     tools,
                     dispatch_ctx,
                     &output.tool_name,
+                    config,
                 )
                 .await?;
                 match dispatch {
@@ -679,6 +720,7 @@ pub async fn react_loop_structured<P: Provider>(
                         tools,
                         dispatch_ctx,
                         &output.tool_name,
+                        config,
                     )
                     .await?;
                     match dispatch {
@@ -717,6 +759,7 @@ async fn dispatch_function_tools(
     tools: &ToolRegistry,
     dispatch_ctx: &DispatchContext,
     output_tool_name: &str,
+    config: &ReactLoopConfig,
 ) -> Result<ToolDispatchOutcome, EngineError> {
     // Check for approval-required tools first (excluding output tool)
     let function_calls: Vec<_> = response
@@ -744,11 +787,17 @@ async fn dispatch_function_tools(
             ))
             .await
         {
-            Ok(s) => s,
+            Ok(value) => match &config.tool_result_formatter {
+                Some(f) => f(&call.name, &value),
+                None => format_tool_result(&value),
+            },
             Err(EngineError::Exit { reason, .. }) => {
                 return Ok(ToolDispatchOutcome::Exit(reason));
             }
-            Err(e) => format_tool_error(&e),
+            Err(e) => match &config.tool_error_formatter {
+                Some(f) => f(&call.name, &e.to_string()),
+                None => format_tool_error(&e),
+            },
         };
         let result_msg =
             InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
@@ -813,6 +862,8 @@ mod tests {
             max_tokens: None,
             temperature: None,
             tool_filter: None,
+            tool_result_formatter: None,
+            tool_error_formatter: None,
         }
     }
 
@@ -1570,6 +1621,8 @@ mod tests {
             tool_filter: Some(Arc::new(|tool: &dyn ToolDyn, _ctx: &Context| {
                 tool.name() != "blocked"
             })),
+            tool_result_formatter: None,
+            tool_error_formatter: None,
         };
 
         let ctx = Context::new();
@@ -1629,6 +1682,8 @@ mod tests {
             tool_filter: Some(Arc::new(|tool: &dyn ToolDyn, _ctx: &Context| {
                 tool.name() != "blocked"
             })),
+            tool_result_formatter: None,
+            tool_error_formatter: None,
         };
 
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
@@ -2204,5 +2259,109 @@ mod tests {
         assert_eq!(result.approved[0].call_id, "call_1");
         assert_eq!(result.rejected.len(), 1);
         assert_eq!(result.rejected[0].call_id, "call_2");
+    }
+
+    // === Formatter hook tests ===
+
+    #[tokio::test]
+    async fn custom_tool_result_formatter() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("search", "c1", json!({ "q": "Tokyo" }));
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(MockTool { name: "search" }));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let config = ReactLoopConfig {
+            system_prompt: String::new(),
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            tool_filter: None,
+            tool_result_formatter: Some(Arc::new(|tool_name: &str, _value: &serde_json::Value| {
+                format!("<tool_result tool=\"{tool_name}\">{_value}</tool_result>")
+            })),
+            tool_error_formatter: None,
+        };
+
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert!(
+            ctx.messages()
+                .iter()
+                .any(|m| m.text_content().contains("<tool_result tool=\"search\">")),
+            "custom formatter output must appear in context"
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_tool_error_formatter() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("fail", "c1", json!({}));
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(AlwaysFailingTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let config = ReactLoopConfig {
+            system_prompt: String::new(),
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            tool_filter: None,
+            tool_result_formatter: None,
+            tool_error_formatter: Some(Arc::new(|tool_name: &str, error: &str| {
+                format!("<error tool=\"{tool_name}\">{error}</error>")
+            })),
+        };
+
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &config)
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert!(
+            ctx.messages()
+                .iter()
+                .any(|m| m.text_content().contains("<error tool=\"fail\">")),
+            "custom error formatter output must appear in context"
+        );
+    }
+
+    #[test]
+    fn default_formatter_unchanged() {
+        // Verify format_tool_result still matches its documented behavior.
+        let str_val = serde_json::Value::String("hello world".into());
+        assert_eq!(format_tool_result(&str_val), "hello world");
+
+        let json_val = json!({ "key": "value" });
+        let formatted = format_tool_result(&json_val);
+        assert!(formatted.contains("key") && formatted.contains("value"));
+
+        // Verify ReactLoopConfig::default() leaves both formatters as None.
+        let config = ReactLoopConfig::default();
+        assert!(
+            config.tool_result_formatter.is_none(),
+            "default config must not set tool_result_formatter"
+        );
+        assert!(
+            config.tool_error_formatter.is_none(),
+            "default config must not set tool_error_formatter"
+        );
     }
 }

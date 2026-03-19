@@ -13,7 +13,7 @@ use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
-use crate::ops::tool::ExecuteTool;
+use crate::ops::tool::{ExecuteTool, format_tool_result};
 use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error};
 use layer0::DispatchContext;
 use layer0::content::Content;
@@ -111,11 +111,17 @@ pub async fn stream_react_loop<P: StreamProvider>(
                 ))
                 .await
             {
-                Ok(s) => s,
+                Ok(value) => match &config.tool_result_formatter {
+                    Some(f) => f(&call.name, &value),
+                    None => format_tool_result(&value),
+                },
                 Err(EngineError::Exit { reason, .. }) => {
                     return Ok(make_context_output(Content::text(""), reason, ctx));
                 }
-                Err(e) => format_tool_error(&e),
+                Err(e) => match &config.tool_error_formatter {
+                    Some(f) => f(&call.name, &e.to_string()),
+                    None => format_tool_error(&e),
+                },
             };
 
             let result_msg =
@@ -224,6 +230,8 @@ mod tests {
             max_tokens: None,
             temperature: None,
             tool_filter: None,
+            tool_result_formatter: None,
+            tool_error_formatter: None,
         }
     }
 

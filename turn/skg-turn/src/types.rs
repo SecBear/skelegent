@@ -15,6 +15,40 @@ pub struct ToolSchema {
     pub description: String,
     /// JSON Schema for the tool's input.
     pub input_schema: serde_json::Value,
+    /// Optional provider-specific per-tool metadata.
+    ///
+    /// Providers that support per-tool configuration (e.g., Anthropic `cache_control`,
+    /// OpenAI `strict`) can read this field during schema conversion.
+    /// Providers that don't need it ignore it.
+    ///
+    /// Defaults to `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
+}
+
+impl ToolSchema {
+    /// Create a new [`ToolSchema`] with the given name, description, and input schema.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: serde_json::Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            input_schema,
+            extra: None,
+        }
+    }
+
+    /// Attach provider-specific per-tool metadata.
+    ///
+    /// The value is passed through to the provider during schema conversion.
+    /// Providers that don't support per-tool metadata ignore this field.
+    pub fn with_extra(mut self, extra: serde_json::Value) -> Self {
+        self.extra = Some(extra);
+        self
+    }
 }
 
 /// Why the provider stopped generating.
@@ -87,5 +121,32 @@ mod tests {
         let json = serde_json::to_value(&usage).unwrap();
         let back: TokenUsage = serde_json::from_value(json).unwrap();
         assert_eq!(usage, back);
+    }
+
+    #[test]
+    fn tool_schema_extra_default_none() {
+        let schema = ToolSchema::new("my_tool", "does a thing", serde_json::json!({}));
+        assert!(schema.extra.is_none());
+    }
+
+    #[test]
+    fn tool_schema_with_extra() {
+        let extra = serde_json::json!({ "cache_control": { "type": "ephemeral" } });
+        let schema = ToolSchema::new("my_tool", "does a thing", serde_json::json!({}))
+            .with_extra(extra.clone());
+        assert_eq!(schema.extra.as_ref().unwrap(), &extra);
+    }
+
+    #[test]
+    fn tool_schema_extra_serde_round_trip() {
+        let extra = serde_json::json!({ "strict": true });
+        let schema = ToolSchema::new("my_tool", "does a thing", serde_json::json!({}))
+            .with_extra(extra);
+        let json = serde_json::to_value(&schema).unwrap();
+        let back: ToolSchema = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back.extra.unwrap(),
+            serde_json::json!({ "strict": true })
+        );
     }
 }

@@ -60,11 +60,15 @@ pub fn messages_to_input(messages: &[Message]) -> Vec<serde_json::Value> {
 pub fn tools_to_codex(tools: &[ToolSchema]) -> Vec<CodexTool> {
     tools
         .iter()
-        .map(|t| CodexTool {
-            tool_type: "function".into(),
-            name: t.name.clone(),
-            description: t.description.clone(),
-            parameters: t.input_schema.clone(),
+        .map(|t| {
+            // ToolSchema.extra is available but Codex has no per-tool metadata API;
+            // ignore it.
+            CodexTool {
+                tool_type: "function".into(),
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parameters: t.input_schema.clone(),
+            }
         })
         .collect()
 }

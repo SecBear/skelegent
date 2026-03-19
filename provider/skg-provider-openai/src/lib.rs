@@ -285,13 +285,18 @@ impl OpenAIProvider {
         let tools: Vec<OpenAITool> = request
             .tools
             .iter()
-            .map(|t| OpenAITool {
-                tool_type: "function".into(),
-                function: OpenAIFunction {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: t.input_schema.clone(),
-                },
+            .map(|t| {
+                // TODO: plumb ToolSchema.extra — OpenAI supports `strict: true`
+                // per function; read from t.extra and set OpenAIFunction.strict
+                // once the wire-format contract is settled.
+                OpenAITool {
+                    tool_type: "function".into(),
+                    function: OpenAIFunction {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        parameters: t.input_schema.clone(),
+                    },
+                }
             })
             .collect();
 

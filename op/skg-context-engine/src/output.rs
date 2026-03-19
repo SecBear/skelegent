@@ -196,6 +196,7 @@ impl OutputSchema {
                 },
                 "required": ["result"]
             }),
+            extra: None,
         }
     }
 

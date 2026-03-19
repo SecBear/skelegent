@@ -182,13 +182,17 @@ impl OllamaProvider {
         let tools: Vec<OllamaTool> = request
             .tools
             .iter()
-            .map(|t| OllamaTool {
-                tool_type: "function".into(),
-                function: OllamaFunction {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    parameters: t.input_schema.clone(),
-                },
+            .map(|t| {
+                // ToolSchema.extra is available but Ollama has no per-tool metadata API;
+                // ignore it.
+                OllamaTool {
+                    tool_type: "function".into(),
+                    function: OllamaFunction {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        parameters: t.input_schema.clone(),
+                    },
+                }
             })
             .collect();
 

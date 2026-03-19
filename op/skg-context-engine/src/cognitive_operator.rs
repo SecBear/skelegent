@@ -134,12 +134,10 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         // Seed context with pre-assembled messages from caller, if any.
         // Injected before the new user message so the model sees inherited
         // history first.
-        if let Some(messages) = input.context {
-            if !messages.is_empty() {
-                ctx.inject_messages(messages)
-                    .await
-                    .map_err(OperatorError::context_assembly)?;
-            }
+        if let Some(messages) = input.context.filter(|m| !m.is_empty()) {
+            ctx.inject_messages(messages)
+                .await
+                .map_err(OperatorError::context_assembly)?;
         }
 
         // Inject user message

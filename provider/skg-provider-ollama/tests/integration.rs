@@ -54,6 +54,7 @@ async fn tool_use_completion() {
             },
             "required": ["location"]
         }),
+        extra: None,
     }])
     .with_max_tokens(256)
     .with_temperature(0.0);
