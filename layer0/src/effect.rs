@@ -308,6 +308,27 @@ pub enum EffectKind {
     },
 }
 
+impl EffectKind {
+    /// Whether this effect kind should be durably logged.
+    ///
+    /// Durable effects represent observable state changes or control-flow
+    /// decisions that must survive a restart for correct replay.
+    /// Ephemeral effects (Log, Progress, Metric, Observation, Artifact) are
+    /// informational and do not need to be preserved.
+    pub fn is_durable(&self) -> bool {
+        matches!(
+            self,
+            EffectKind::WriteMemory { .. }
+                | EffectKind::DeleteMemory { .. }
+                | EffectKind::Signal { .. }
+                | EffectKind::Delegate { .. }
+                | EffectKind::Handoff { .. }
+                | EffectKind::ToolApprovalRequired { .. }
+                | EffectKind::Custom { .. }
+        )
+    }
+}
+
 // ── Effect ────────────────────────────────────────────────────────────────────
 
 /// A side-effect declared by an operator. NOT executed by the operator —

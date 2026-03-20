@@ -174,6 +174,25 @@ impl DispatchContext {
     pub fn extensions_mut(&mut self) -> &mut Extensions {
         &mut self.extensions
     }
+    /// Fail fast: verify that an extension of type `T` is present.
+    ///
+    /// Call at startup to catch missing configuration early rather than
+    /// discovering the absence at the first tool invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` with the fully-qualified type name when `T` is absent.
+    pub fn ensure<T: Send + Sync + 'static>(&self) -> Result<(), String> {
+        if self.extensions().get::<T>().is_some() {
+            Ok(())
+        } else {
+            Err(format!(
+                "missing required extension: {}",
+                std::any::type_name::<T>()
+            ))
+        }
+    }
+
 }
 
 impl fmt::Debug for DispatchContext {

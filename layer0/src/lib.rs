@@ -16,7 +16,7 @@
 //!
 //! | Surface | Types | What it does |
 //! |---------|-------|-------------|
-//! | ⑤ Middleware | [`DispatchMiddleware`], [`StoreMiddleware`], [`ExecMiddleware`] | Interception + policy |
+//! | ⑤ Middleware | [`DispatchMiddleware`], [`StoreMiddleware`], [`ExecMiddleware`], [`EffectMiddleware`] | Interception + policy |
 //! | ⑥ Message compaction metadata | [`CompactionPolicy`] | Advisory retention hints attached to messages |
 //!
 //! ## Design Principle
@@ -51,11 +51,14 @@
 
 pub mod approval;
 pub mod content;
+pub mod extract;
 pub mod context;
 pub mod dispatch;
 pub mod dispatch_context;
 pub mod duration;
 pub mod effect;
+pub mod effect_log;
+pub mod effect_middleware;
 pub mod environment;
 pub mod error;
 pub mod id;
@@ -83,6 +86,8 @@ pub use dispatch::{
 pub use dispatch_context::{AuthIdentity, DispatchContext, Extensions, TraceContext};
 pub use duration::DurationMs;
 pub use effect::{Effect, EffectKind, EffectMeta, HandoffContext, MemoryScope, Scope, SignalPayload};
+pub use effect_log::{EffectLog, EffectLogError, InMemoryEffectLog};
+pub use effect_middleware::{EffectAction, EffectMiddleware, EffectStack, LoggingEffectMiddleware};
 pub use environment::{Environment, EnvironmentSpec};
 pub use error::{EnvError, OperatorError, OrchError, StateError};
 pub use id::{DispatchId, OperatorId, SessionId, WorkflowId};
@@ -101,3 +106,5 @@ pub use state::{
     StateStore, StoreOptions,
 };
 pub use reducer::{AppendList, MergeObject, Overwrite, ReducerRegistry, StateReducer, Sum};
+
+pub use extract::{Ext, FromContext, Rejection};
