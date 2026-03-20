@@ -6,6 +6,7 @@
 //! (local function, MCP server, HTTP endpoint) implements [`ToolDyn`].
 
 pub mod adapter;
+pub mod memory;
 pub mod schema;
 
 #[cfg(feature = "macros")]
@@ -161,6 +162,14 @@ pub trait ToolDyn: Send + Sync {
     fn concurrency_hint(&self) -> ToolConcurrencyHint {
         ToolConcurrencyHint::Exclusive
     }
+
+    /// Optional JSON Schema describing this tool's output.
+    ///
+    /// Used by MCP servers to advertise output schema. Returns `None`
+    /// by default — most tools don't need to declare output format.
+    fn output_schema(&self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// A tool wrapper that exposes a different name while delegating behavior to an inner tool.
@@ -214,6 +223,10 @@ impl ToolDyn for AliasedTool {
 
     fn concurrency_hint(&self) -> ToolConcurrencyHint {
         self.inner.concurrency_hint()
+    }
+
+    fn output_schema(&self) -> Option<serde_json::Value> {
+        self.inner.output_schema()
     }
 }
 
@@ -498,4 +511,60 @@ mod tests {
         let got = seen.lock().unwrap().clone();
         assert_eq!(got, vec!["one", "two", "three"]);
     }
+    /// Default `output_schema()` returns `None` for any tool that doesn't override it.
+    #[test]
+    fn output_schema_default_none() {
+        assert!(EchoTool.output_schema().is_none());
+    }
+
+    /// A tool that overrides `output_schema()` returns its schema.
+    #[test]
+    fn output_schema_custom() {
+        struct SchemaTool;
+        impl ToolDyn for SchemaTool {
+            fn name(&self) -> &str { "schema_tool" }
+            fn description(&self) -> &str { "has output schema" }
+            fn input_schema(&self) -> serde_json::Value { json!({"type": "object"}) }
+            fn call(
+                &self,
+                _input: serde_json::Value,
+                _ctx: &DispatchContext,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
+                Box::pin(async { Ok(json!(null)) })
+            }
+            fn output_schema(&self) -> Option<serde_json::Value> {
+                Some(json!({"type": "object", "properties": {"result": {"type": "string"}}}))
+            }
+        }
+
+        let schema = SchemaTool.output_schema().unwrap();
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["result"].is_object());
+    }
+
+    /// `AliasedTool` delegates `output_schema()` to the inner tool.
+    #[test]
+    fn aliased_tool_delegates_output_schema() {
+        struct InnerWithSchema;
+        impl ToolDyn for InnerWithSchema {
+            fn name(&self) -> &str { "inner" }
+            fn description(&self) -> &str { "" }
+            fn input_schema(&self) -> serde_json::Value { json!({"type": "object"}) }
+            fn call(
+                &self,
+                _input: serde_json::Value,
+                _ctx: &DispatchContext,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
+                Box::pin(async { Ok(json!(null)) })
+            }
+            fn output_schema(&self) -> Option<serde_json::Value> {
+                Some(json!({"type": "string"}))
+            }
+        }
+
+        let aliased = AliasedTool::new("alias", Arc::new(InnerWithSchema));
+        let schema = aliased.output_schema().unwrap();
+        assert_eq!(schema["type"], "string");
+    }
+
 }

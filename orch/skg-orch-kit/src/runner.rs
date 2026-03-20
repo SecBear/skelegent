@@ -1,4 +1,5 @@
 use layer0::DispatchContext;
+use layer0::EffectStack;
 use layer0::dispatch::Dispatcher;
 use layer0::effect::EffectKind;
 use layer0::error::OrchError;
@@ -94,6 +95,13 @@ pub struct OrchestratedRunner {
     dispatcher: Arc<dyn Dispatcher>,
     effects: Arc<dyn EffectHandler>,
     max_followups: usize,
+    /// Optional middleware stack applied to every effect before execution.
+    ///
+    /// Layers run in insertion order. If any layer returns
+    /// [`layer0::EffectAction::Skip`], the effect is not executed and the
+    /// handler never sees it. This is the composition point for
+    /// [`layer0::LoggingEffectMiddleware`] and custom policies.
+    effect_middleware: Option<EffectStack>,
 }
 
 impl OrchestratedRunner {
@@ -103,12 +111,30 @@ impl OrchestratedRunner {
             dispatcher,
             effects,
             max_followups: 128,
+            effect_middleware: None,
         }
     }
 
     /// Set a safety bound on the number of follow-up dispatches.
     pub fn with_max_followups(mut self, max_followups: usize) -> Self {
         self.max_followups = max_followups;
+        self
+    }
+
+    /// Attach an effect middleware stack.
+    ///
+    /// Every effect is passed through the stack before reaching the
+    /// [`EffectHandler`]. Compose logging, validation, and audit layers here:
+    ///
+    /// ```rust,ignore
+    /// let log = Arc::new(InMemoryEffectLog::new());
+    /// let stack = EffectStack::new()
+    ///     .push(LoggingEffectMiddleware::new(log.clone()));
+    /// let runner = OrchestratedRunner::new(dispatcher, handler)
+    ///     .with_effect_middleware(stack);
+    /// ```
+    pub fn with_effect_middleware(mut self, stack: EffectStack) -> Self {
+        self.effect_middleware = Some(stack);
         self
     }
 
@@ -136,10 +162,21 @@ impl OrchestratedRunner {
 
             // Interpret effects into state updates + followups.
             let mut followups: Vec<(OperatorId, OperatorInput)> = vec![];
-            for effect in &output.effects {
+            for raw_effect in &output.effects {
+                // Pass through middleware stack if configured.
+                // A Skip return suppresses this effect entirely — the handler
+                // never sees it and no trace event is recorded.
+                let effect = match &self.effect_middleware {
+                    Some(stack) => match stack.process(raw_effect.clone(), &ctx).await {
+                        Some(e) => e,
+                        None => continue,
+                    },
+                    None => raw_effect.clone(),
+                };
+
                 match self
                     .effects
-                    .handle(effect, &ctx)
+                    .handle(&effect, &ctx)
                     .await
                     .map_err(|e| KitError::Effect(e.to_string()))?
                 {

@@ -411,6 +411,13 @@ impl ToolDyn for McpToolWrapper {
             .unwrap_or_else(|_| serde_json::json!({"type": "object"}))
     }
 
+    fn output_schema(&self) -> Option<serde_json::Value> {
+        self.tool
+            .output_schema
+            .as_deref()
+            .and_then(|m| serde_json::to_value(m).ok())
+    }
+
     fn call(
         &self,
         input: serde_json::Value,
@@ -520,6 +527,43 @@ mod tests {
             schema,
             json!({"type": "object", "properties": {"input": {"type": "string"}}})
         );
+    }
+
+    /// Verify `output_schema()` returns `None` when the MCP tool has no output schema.
+    ///
+    /// Tests the same field-access expression used in `McpToolWrapper::output_schema()`.
+    #[test]
+    fn mcp_tool_output_schema_none() {
+        let tool = make_test_tool("no_schema", "no output schema");
+        // Same expression as McpToolWrapper::output_schema()
+        let result = tool.output_schema.as_deref().and_then(|m| serde_json::to_value(m).ok());
+        assert!(result.is_none());
+    }
+
+    /// Verify `output_schema()` returns the schema when the MCP tool declares one.
+    ///
+    /// Tests the same field-access expression used in `McpToolWrapper::output_schema()`.
+    #[test]
+    fn mcp_tool_output_schema_present() {
+        let output_schema_val = json!({"type": "object", "properties": {"answer": {"type": "string"}}});
+        let output_schema_obj = output_schema_val.as_object().unwrap().clone();
+        let schema = json!({"type": "object"});
+        let schema_obj = schema.as_object().unwrap().clone();
+        let tool = McpTool {
+            name: std::borrow::Cow::Owned("schema_tool".to_string()),
+            title: None,
+            description: Some(std::borrow::Cow::Owned("has output".to_string())),
+            input_schema: Arc::new(schema_obj),
+            output_schema: Some(Arc::new(output_schema_obj)),
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        };
+        // Same expression as McpToolWrapper::output_schema()
+        let result = tool.output_schema.as_deref().and_then(|m| serde_json::to_value(m).ok()).unwrap();
+        assert_eq!(result["type"], "object");
+        assert!(result["properties"]["answer"].is_object());
     }
 
     /// Verify metadata extraction handles missing description.

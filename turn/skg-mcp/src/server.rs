@@ -255,13 +255,17 @@ impl ServerHandler for McpServerHandler {
             .map(|tool| {
                 let schema = tool.input_schema();
                 let schema_obj = schema.as_object().cloned().unwrap_or_default();
+                let output_schema = tool
+                    .output_schema()
+                    .and_then(|v| v.as_object().cloned())
+                    .map(Arc::new);
 
                 McpTool {
                     name: Cow::Owned(tool.name().to_string()),
                     title: None,
                     description: Some(Cow::Owned(tool.description().to_string())),
                     input_schema: Arc::new(schema_obj),
-                    output_schema: None,
+                    output_schema,
                     annotations: None,
                     execution: None,
                     icons: None,

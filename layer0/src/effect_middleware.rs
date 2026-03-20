@@ -15,7 +15,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub enum EffectAction {
     /// Continue processing this effect (possibly modified).
-    Continue(Effect),
+    Continue(Box<Effect>),
     /// Skip this effect — do not execute or log it.
     ///
     /// Causes [`EffectStack::process`] to return `None` immediately.
@@ -76,7 +76,7 @@ impl EffectStack {
         let mut current = effect;
         for layer in &self.layers {
             match layer.on_effect(current, ctx).await {
-                EffectAction::Continue(e) => current = e,
+                EffectAction::Continue(e) => current = *e,
                 EffectAction::Skip => return None,
             }
         }
@@ -118,7 +118,7 @@ impl<L: EffectLog + 'static> EffectMiddleware for LoggingEffectMiddleware<L> {
             // Ignore logging errors — a log failure must not block execution.
             let _ = self.log.append(&effect).await;
         }
-        EffectAction::Continue(effect)
+        EffectAction::Continue(Box::new(effect))
     }
 }
 
@@ -166,7 +166,7 @@ mod tests {
                 .lock()
                 .await
                 .push(effect.meta.effect_id.clone());
-            EffectAction::Continue(effect)
+            EffectAction::Continue(Box::new(effect))
         }
     }
 

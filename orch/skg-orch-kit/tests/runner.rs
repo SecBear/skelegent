@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
-use layer0::effect::{Effect, EffectKind, MemoryScope, Scope, SignalPayload};
+use layer0::effect::{Effect, EffectKind, HandoffContext, MemoryScope, Scope, SignalPayload};
 use layer0::error::{OperatorError, OrchError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -219,7 +219,11 @@ impl Operator for HandoffOperator {
         let mut output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
         output.effects.push(Effect::new(0, EffectKind::Handoff {
             operator: OperatorId::new("handoff_target"),
-            metadata: Some(json!({"ticket": 123})),
+            context: HandoffContext {
+                task: Content::text(""),
+                history: None,
+                metadata: Some(json!({"ticket": 123})),
+            },
         }));
         Ok(output)
     }
@@ -234,9 +238,9 @@ impl Operator for HandoffTargetOperator {
         input: OperatorInput,
         _ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
-        // LocalEffectHandler serializes the JSON state to a string and puts it in message text.
-        let text = input.message.as_text().unwrap_or_default();
-        assert!(text.contains("\"ticket\":123") || text.contains("\"ticket\": 123"));
+        // LocalEffectHandler routes context.metadata → input.metadata.
+        // The ticket field must be present in the structured metadata.
+        assert_eq!(input.metadata.get("ticket").and_then(|v| v.as_i64()), Some(123));
         Ok(OperatorOutput::new(
             Content::text("accepted"),
             ExitReason::Complete,
@@ -274,7 +278,11 @@ impl Operator for FullPipelineRootOperator {
         }));
         output.effects.push(Effect::new(0, EffectKind::Handoff {
             operator: OperatorId::new("handoff_target"),
-            metadata: Some(json!({"ticket": 123})),
+            context: HandoffContext {
+                task: Content::text(""),
+                history: None,
+                metadata: Some(json!({"ticket": 123})),
+            },
         }));
         output.effects.push(Effect::new(0, EffectKind::Signal {
             target: WorkflowId::new("wf-pipeline"),
@@ -492,4 +500,161 @@ async fn runner_effect_pipeline_end_to_end() {
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].0, WorkflowId::new("wf-pipeline"));
     assert_eq!(signals[0].1.signal_type, "pipeline.signal");
+}
+
+// ── Middleware tests ─────────────────────────────────────────────────────────
+
+use layer0::{EffectAction, EffectMiddleware, EffectStack};
+
+/// Middleware that renames every WriteMemory key by prepending a prefix.
+/// Used to verify that an enriched (modified) effect reaches the handler.
+struct PrefixKeyMiddleware {
+    prefix: String,
+}
+
+#[async_trait]
+impl EffectMiddleware for PrefixKeyMiddleware {
+    async fn on_effect(&self, mut effect: layer0::Effect, _ctx: &DispatchContext) -> EffectAction {
+        if let layer0::EffectKind::WriteMemory { ref mut key, .. } = effect.kind {
+            *key = format!("{}{}", self.prefix, key);
+        }
+        EffectAction::Continue(Box::new(effect))
+    }
+}
+
+/// Middleware that skips all WriteMemory effects.
+struct SkipWriteMemoryMiddleware;
+
+#[async_trait]
+impl EffectMiddleware for SkipWriteMemoryMiddleware {
+    async fn on_effect(&self, effect: layer0::Effect, _ctx: &DispatchContext) -> EffectAction {
+        if matches!(effect.kind, layer0::EffectKind::WriteMemory { .. }) {
+            EffectAction::Skip
+        } else {
+            EffectAction::Continue(Box::new(effect))
+        }
+    }
+}
+
+/// Operator that writes a single key "mw-key" to state.
+struct MwWriterOperator;
+
+#[async_trait]
+impl Operator for MwWriterOperator {
+    async fn execute(
+        &self,
+        _input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, layer0::error::OperatorError> {
+        let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
+        output.effects.push(Effect::new(0, EffectKind::WriteMemory {
+            scope: Scope::Global,
+            key: "mw-key".into(),
+            value: json!({"v": 99}),
+            memory_scope: MemoryScope::Session,
+            tier: None,
+            lifetime: None,
+            content_kind: None,
+            salience: None,
+            ttl: None,
+        }));
+        Ok(output)
+    }
+}
+
+#[tokio::test]
+async fn runner_processes_effects_through_middleware() {
+    // Middleware rewrites "mw-key" → "enriched-mw-key".
+    // The state store must contain the enriched key, not the original.
+    let mut orch = SimpleOrch::new();
+    orch.register("root", Arc::new(MwWriterOperator));
+    let orch = Arc::new(orch);
+
+    let state = Arc::new(TestStore::new());
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::clone(&state) as Arc<dyn StateStore>,
+        Some(orch.clone() as Arc<dyn Signalable>),
+    ));
+    let stack = EffectStack::new().push(PrefixKeyMiddleware { prefix: "enriched-".into() });
+    let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler)
+        .with_effect_middleware(stack);
+
+    let trace = runner
+        .run(
+            OperatorId::new("root"),
+            OperatorInput::new(Content::text("go"), TriggerType::User),
+        )
+        .await
+        .expect("runner should succeed");
+
+    // State must have been written under the enriched key.
+    assert_eq!(state.read_raw("enriched-mw-key").await, Some(json!({"v": 99})));
+    // The original key must not exist.
+    assert_eq!(state.read_raw("mw-key").await, None);
+    // Trace event reflects the enriched key name.
+    assert!(trace.events.iter().any(|e| matches!(
+        e,
+        skg_orch_kit::ExecutionEvent::MemoryWritten { key } if key == "enriched-mw-key"
+    )));
+}
+
+#[tokio::test]
+async fn runner_skips_effects_via_middleware() {
+    // Middleware suppresses WriteMemory; state must never be touched.
+    let mut orch = SimpleOrch::new();
+    orch.register("root", Arc::new(MwWriterOperator));
+    let orch = Arc::new(orch);
+
+    let state = Arc::new(TestStore::new());
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::clone(&state) as Arc<dyn StateStore>,
+        Some(orch.clone() as Arc<dyn Signalable>),
+    ));
+    let stack = EffectStack::new().push(SkipWriteMemoryMiddleware);
+    let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler)
+        .with_effect_middleware(stack);
+
+    let _trace = runner
+        .run(
+            OperatorId::new("root"),
+            OperatorInput::new(Content::text("go"), TriggerType::User),
+        )
+        .await
+        .expect("runner should succeed");
+
+    // The WriteMemory effect was skipped, so state must be empty.
+    assert_eq!(state.read_raw("mw-key").await, None);
+    assert_eq!(state.ops().await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn runner_without_middleware_unchanged() {
+    // No middleware set: effects reach the handler unmodified.
+    let mut orch = SimpleOrch::new();
+    orch.register("root", Arc::new(MwWriterOperator));
+    let orch = Arc::new(orch);
+
+    let state = Arc::new(TestStore::new());
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::clone(&state) as Arc<dyn StateStore>,
+        Some(orch.clone() as Arc<dyn Signalable>),
+    ));
+    // Deliberately no .with_effect_middleware().
+    let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler);
+
+    let trace = runner
+        .run(
+            OperatorId::new("root"),
+            OperatorInput::new(Content::text("go"), TriggerType::User),
+        )
+        .await
+        .expect("runner should succeed");
+
+    // Without middleware, the original key must be written verbatim.
+    assert_eq!(state.read_raw("mw-key").await, Some(json!({"v": 99})));
+    assert_eq!(state.ops().await, vec!["write:mw-key".to_string()]);
+    assert!(trace.events.iter().any(|e| matches!(
+        e,
+        skg_orch_kit::ExecutionEvent::MemoryWritten { key } if key == "mw-key"
+    )));
 }
