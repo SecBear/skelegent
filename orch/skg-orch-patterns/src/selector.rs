@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::content::Content;
+use layer0::Message;
 use layer0::id::OperatorId;
 
 /// Errors from [`SpeakerSelector::select`].
@@ -40,12 +40,12 @@ impl std::error::Error for SelectorError {}
 pub trait SpeakerSelector: Send + Sync {
     /// Choose the next speaker from `candidates`.
     ///
-    /// `history` carries the conversation content seen so far; `ctx` provides
-    /// execution context (auth, trace, extensions).
+    /// `history` carries the conversation messages seen so far (role + content +
+    /// attribution); `ctx` provides execution context (auth, trace, extensions).
     async fn select(
         &self,
         candidates: &[OperatorId],
-        history: &[Content],
+        history: &[Message],
         ctx: &DispatchContext,
     ) -> Result<OperatorId, SelectorError>;
 }
@@ -82,7 +82,7 @@ impl SpeakerSelector for RoundRobinSelector {
     async fn select(
         &self,
         candidates: &[OperatorId],
-        _history: &[Content],
+        _history: &[Message],
         _ctx: &DispatchContext,
     ) -> Result<OperatorId, SelectorError> {
         if candidates.is_empty() {
@@ -135,7 +135,7 @@ impl SpeakerSelector for RandomSelector {
     async fn select(
         &self,
         candidates: &[OperatorId],
-        _history: &[Content],
+        _history: &[Message],
         _ctx: &DispatchContext,
     ) -> Result<OperatorId, SelectorError> {
         if candidates.is_empty() {

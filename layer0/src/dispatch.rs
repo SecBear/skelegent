@@ -932,11 +932,11 @@ mod tests {
     async fn collect_extends_output_effects_not_replaces() {
         use crate::effect::{Effect, EffectKind};
 
-        let channel_effect = Effect::new(0, EffectKind::Custom {
+        let channel_effect = Effect::new(EffectKind::Custom {
             name: "channel-effect".into(),
             payload: serde_json::json!({}),
         });
-        let output_effect = Effect::new(0, EffectKind::Custom {
+        let output_effect = Effect::new(EffectKind::Custom {
             name: "output-effect".into(),
             payload: serde_json::json!({}),
         });
@@ -997,7 +997,7 @@ mod tests {
             artifact: Artifact::new("a1", vec![Content::text("output")]),
         });
         round_trip(DispatchEvent::EffectEmitted {
-            effect: Effect::new(0, EffectKind::Custom {
+            effect: Effect::new(EffectKind::Custom {
                 name: "ping".into(),
                 payload: serde_json::json!({}),
             }),
@@ -1033,7 +1033,7 @@ mod tests {
         );
         assert_eq!(
             DispatchEvent::EffectEmitted {
-                effect: Effect::new(0, EffectKind::Custom {
+                effect: Effect::new(EffectKind::Custom {
                     name: "x".into(),
                     payload: serde_json::json!({}),
                 }),

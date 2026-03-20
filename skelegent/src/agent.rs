@@ -18,6 +18,7 @@
 
 use layer0::DispatchContext;
 use layer0::content::Content;
+use layer0::effect::EffectKind;
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
@@ -181,15 +182,37 @@ impl AgentBuilder {
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
         let output = op.execute(input, &ctx).await?;
-        if output.has_unhandled_effects() {
-            eprintln!(
-                "warning: OperatorOutput contains {} effect(s) that will not be executed. \
-                 Use an EffectHandler or OrchestratedRunner to process effects.",
-                output.effects.len(),
-            );
-        }
+        reject_operational_effects(&output.effects)?;
+        // Observational effects (Log, Signal, etc.) are safe to drop.
         Ok(output)
     }
+}
+
+/// Inspect effects and return `Err` for any that mutate external state.
+///
+/// Operational effects (`WriteMemory`, `DeleteMemory`, `Delegate`, `Handoff`)
+/// cannot be silently dropped — doing so produces plausible-looking but wrong
+/// output. The caller must use [`OrchestratedRunner`] to handle them.
+/// Observational effects (`Log`, `Signal`, `Observation`, etc.) are advisory
+/// and safe to drop.
+fn reject_operational_effects(effects: &[layer0::Effect]) -> Result<(), OperatorError> {
+    let operational = effects.iter().any(|e| {
+        matches!(
+            &e.kind,
+            EffectKind::WriteMemory { .. }
+                | EffectKind::DeleteMemory { .. }
+                | EffectKind::Delegate { .. }
+                | EffectKind::Handoff { .. }
+        )
+    });
+    if operational {
+        return Err(OperatorError::non_retryable(
+            "AgentBuilder::run() cannot execute operational effects \
+             (WriteMemory, DeleteMemory, Delegate, Handoff). \
+             Use OrchestratedRunner instead.",
+        ));
+    }
+    Ok(())
 }
 
 /// Error building an agent from a model string.
@@ -597,5 +620,60 @@ mod tests {
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
+    }
+    // ── Effect classification tests ────────────────────────────────────────────────
+    //
+    // These tests exercise reject_operational_effects(), which is the exact
+    // function that AgentBuilder::run() delegates to after execute().
+
+    #[test]
+    fn run_rejects_operational_effects() {
+        use layer0::Effect;
+        use layer0::effect::{EffectKind, MemoryScope, Scope};
+        use serde_json::json;
+
+        // WriteMemory is an operational effect — run() must return Err.
+        let effects = vec![Effect::new(
+            EffectKind::WriteMemory {
+                scope: Scope::Global,
+                key: "state-key".into(),
+                value: json!({"x": 1}),
+                memory_scope: MemoryScope::Session,
+                tier: None,
+                lifetime: None,
+                content_kind: None,
+                salience: None,
+                ttl: None,
+            },
+        )];
+        let result = super::reject_operational_effects(&effects);
+        assert!(
+            result.is_err(),
+            "WriteMemory is an operational effect; run() must reject it"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("OrchestratedRunner"),
+            "error must direct caller to OrchestratedRunner, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn run_allows_observational_effects() {
+        use layer0::Effect;
+        use layer0::effect::EffectKind;
+
+        // Log is observational — run() must not error on observational-only effects.
+        let effects = vec![Effect::new(
+            EffectKind::Log {
+                level: "info".into(),
+                message: "agent completed successfully".into(),
+            },
+        )];
+        let result = super::reject_operational_effects(&effects);
+        assert!(
+            result.is_ok(),
+            "Log is observational; run() must not reject it"
+        );
     }
 }

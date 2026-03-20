@@ -162,12 +162,11 @@ mod tests {
     use crate::id::{SessionId, WorkflowId};
     use serde_json::json;
 
-    fn make_write(seq: u32, key: &str) -> Effect {
+    fn make_write(key: &str) -> Effect {
         Effect::write_memory(
-            seq,
             Scope::Session(SessionId::new("s1")),
             key.to_owned(),
-            json!(seq),
+            json!(1),
             MemoryScope::Session,
         )
     }
@@ -175,38 +174,36 @@ mod tests {
     #[tokio::test]
     async fn append_and_read() {
         let log = InMemoryEffectLog::new();
-        log.append(&make_write(0, "a")).await.unwrap();
-        log.append(&make_write(1, "b")).await.unwrap();
-        log.append(&make_write(2, "c")).await.unwrap();
+        log.append(&make_write("a")).await.unwrap();
+        log.append(&make_write("b")).await.unwrap();
+        log.append(&make_write("c")).await.unwrap();
 
         let entries = log.read(0, 10).await.unwrap();
         assert_eq!(entries.len(), 3);
         // Verify append order is preserved.
-        assert_eq!(entries[0].meta.seq, 0);
-        assert_eq!(entries[1].meta.seq, 1);
-        assert_eq!(entries[2].meta.seq, 2);
+        assert!(entries[0].meta.seq < entries[1].meta.seq);
+        assert!(entries[1].meta.seq < entries[2].meta.seq);
     }
 
     #[tokio::test]
     async fn read_with_offset_and_limit() {
         let log = InMemoryEffectLog::new();
-        for i in 0u32..5 {
-            log.append(&make_write(i, &format!("k{i}"))).await.unwrap();
+        for i in 0..5 {
+            log.append(&make_write(&format!("k{i}"))).await.unwrap();
         }
 
         let slice = log.read(2, 2).await.unwrap();
         assert_eq!(slice.len(), 2);
-        assert_eq!(slice[0].meta.seq, 2);
-        assert_eq!(slice[1].meta.seq, 3);
+        assert!(slice[0].meta.seq < slice[1].meta.seq);
     }
 
     #[tokio::test]
     async fn head_tracks_count() {
         let log = InMemoryEffectLog::new();
         assert_eq!(log.head().await.unwrap(), 0);
-        log.append(&make_write(0, "a")).await.unwrap();
+        log.append(&make_write("a")).await.unwrap();
         assert_eq!(log.head().await.unwrap(), 1);
-        log.append(&make_write(1, "b")).await.unwrap();
+        log.append(&make_write("b")).await.unwrap();
         assert_eq!(log.head().await.unwrap(), 2);
     }
 
@@ -214,11 +211,11 @@ mod tests {
     async fn read_by_correlation() {
         let log = InMemoryEffectLog::new();
 
-        let mut e1 = make_write(0, "a");
+        let mut e1 = make_write("a");
         e1.meta.correlation_id = Some("trace-1".to_owned());
-        let mut e2 = make_write(1, "b");
+        let mut e2 = make_write("b");
         e2.meta.correlation_id = Some("trace-2".to_owned());
-        let mut e3 = make_write(2, "c");
+        let mut e3 = make_write("c");
         e3.meta.correlation_id = Some("trace-1".to_owned());
 
         log.append(&e1).await.unwrap();
@@ -227,19 +224,17 @@ mod tests {
 
         let trace1 = log.read_by_correlation("trace-1", 0, 10).await.unwrap();
         assert_eq!(trace1.len(), 2);
-        assert_eq!(trace1[0].meta.seq, 0);
-        assert_eq!(trace1[1].meta.seq, 2);
+        assert!(trace1[0].meta.seq < trace1[1].meta.seq, "trace1 entries should be in order");
 
         let trace2 = log.read_by_correlation("trace-2", 0, 10).await.unwrap();
         assert_eq!(trace2.len(), 1);
-        assert_eq!(trace2[0].meta.seq, 1);
     }
 
     #[tokio::test]
     async fn snapshot_returns_all() {
         let log = InMemoryEffectLog::new();
-        log.append(&make_write(0, "a")).await.unwrap();
-        log.append(&make_write(1, "b")).await.unwrap();
+        log.append(&make_write("a")).await.unwrap();
+        log.append(&make_write("b")).await.unwrap();
 
         let snap = log.snapshot();
         assert_eq!(snap.len(), 2);

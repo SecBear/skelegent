@@ -292,7 +292,7 @@ fn exit_reason_safety_stop_round_trip() {
 
 #[test]
 fn effect_write_memory_round_trip() {
-    let e = Effect::new(0, EffectKind::WriteMemory {
+    let e = Effect::new(EffectKind::WriteMemory {
         scope: Scope::Session(SessionId::new("s1")),
         key: "notes".into(),
         value: json!({"text": "remember this"}),
@@ -311,7 +311,7 @@ fn effect_write_memory_round_trip() {
 
 #[test]
 fn effect_signal_round_trip() {
-    let e = Effect::new(0, EffectKind::Signal {
+    let e = Effect::new(EffectKind::Signal {
         target: WorkflowId::new("wf-1"),
         payload: SignalPayload::new("user_feedback", json!({"rating": 5})),
     });
@@ -323,7 +323,7 @@ fn effect_signal_round_trip() {
 
 #[test]
 fn effect_delegate_round_trip() {
-    let e = Effect::new(0, EffectKind::Delegate {
+    let e = Effect::new(EffectKind::Delegate {
         operator: OperatorId::new("helper"),
         input: Box::new(sample_operator_input()),
     });
@@ -335,7 +335,7 @@ fn effect_delegate_round_trip() {
 
 #[test]
 fn effect_custom_round_trip() {
-    let e = Effect::new(0, EffectKind::Custom {
+    let e = Effect::new(EffectKind::Custom {
         name: "send_email".into(),
         payload: json!({"to": "user@example.com", "subject": "done"}),
     });
@@ -819,7 +819,7 @@ fn env_error_display_remaining_variants() {
 
 #[test]
 fn effect_handoff_round_trip() {
-    let e = Effect::new(0, EffectKind::Handoff {
+    let e = Effect::new(EffectKind::Handoff {
         operator: OperatorId::new("specialist"),
         context: HandoffContext {
             task: Content::text("user needs help with billing"),
@@ -835,7 +835,7 @@ fn effect_handoff_round_trip() {
 
 #[test]
 fn effect_delete_memory_round_trip() {
-    let e = Effect::new(0, EffectKind::DeleteMemory {
+    let e = Effect::new(EffectKind::DeleteMemory {
         scope: Scope::Global,
         key: "temp_notes".into(),
     });
@@ -870,7 +870,7 @@ fn store_options_default() {
 #[test]
 fn write_memory_with_tier_round_trip() {
     use layer0::MemoryTier;
-    let e = Effect::new(0, EffectKind::WriteMemory {
+    let e = Effect::new(EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k".into(),
         value: json!(1),
@@ -889,7 +889,7 @@ fn write_memory_with_tier_round_trip() {
 
 #[test]
 fn write_memory_tier_omitted_when_none() {
-    let e = Effect::new(0, EffectKind::WriteMemory {
+    let e = Effect::new(EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k".into(),
         value: json!(1),
@@ -959,7 +959,7 @@ fn test_store_options_serde() {
 #[test]
 fn test_write_memory_effect_with_new_fields_serde() {
     use layer0::{ContentKind, DurationMs, Lifetime};
-    let e = Effect::new(0, EffectKind::WriteMemory {
+    let e = Effect::new(EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k".into(),
         value: serde_json::json!(42),
@@ -1319,7 +1319,7 @@ fn memory_link_with_metadata_round_trip() {
 #[test]
 fn effect_link_memory_round_trip() {
     use layer0::MemoryLink;
-    let e = Effect::new(0, EffectKind::LinkMemory {
+    let e = Effect::new(EffectKind::LinkMemory {
         scope: Scope::Global,
         link: MemoryLink::new("notes/meeting", "decisions/arch", "references"),
     });
@@ -1334,7 +1334,7 @@ fn effect_link_memory_round_trip() {
 
 #[test]
 fn effect_unlink_memory_round_trip() {
-    let e = Effect::new(0, EffectKind::UnlinkMemory {
+    let e = Effect::new(EffectKind::UnlinkMemory {
         scope: Scope::Session(SessionId::new("s1")),
         from_key: "notes/meeting".into(),
         to_key: "decisions/arch".into(),
@@ -1372,7 +1372,7 @@ async fn collect_all_preserves_intermediate_events() {
             .unwrap();
         sender
             .send(DispatchEvent::EffectEmitted {
-                effect: Effect::new(0, EffectKind::Progress {
+                effect: Effect::new(EffectKind::Progress {
                     content: Content::text("progress-effect"),
                 }),
             })

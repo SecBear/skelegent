@@ -46,7 +46,7 @@ async fn handler_halt_hook_skips_write() {
 
     let handler = LocalEffectHandler::new(state.clone(), None).with_store_middleware(stack);
 
-    let effect = Effect::new(0, EffectKind::WriteMemory {
+    let effect = Effect::new(EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k".into(),
         value: json!("v"),
@@ -79,7 +79,7 @@ async fn handler_no_hooks_writes_normally() {
     let state = Arc::new(InMemoryStore::new());
     let handler = LocalEffectHandler::new(state.clone(), None);
 
-    let effect = Effect::new(0, EffectKind::WriteMemory {
+    let effect = Effect::new(EffectKind::WriteMemory {
         scope: Scope::Global,
         key: "k2".into(),
         value: json!(99),

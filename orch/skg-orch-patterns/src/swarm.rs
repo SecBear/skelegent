@@ -315,7 +315,7 @@ mod tests {
                 Content::text(self.reply.clone()),
                 ExitReason::HandedOff,
             );
-            out.effects.push(Effect::new(0, EffectKind::Handoff {
+            out.effects.push(Effect::new(EffectKind::Handoff {
                 operator: self.target.clone(),
                 context: HandoffContext {
                     task: Content::text(self.reply.clone()),
@@ -432,7 +432,7 @@ mod tests {
                     Content::text("output-message-ignored"),
                     ExitReason::HandedOff,
                 );
-                out.effects.push(Effect::new(0, EffectKind::Handoff {
+                out.effects.push(Effect::new(EffectKind::Handoff {
                     operator: OperatorId::new("receiver"),
                     context: HandoffContext {
                         task: Content::text("context-task-for-receiver"),

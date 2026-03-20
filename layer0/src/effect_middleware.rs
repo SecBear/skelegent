@@ -139,18 +139,17 @@ mod tests {
         DispatchContext::new(DispatchId::new("d1"), OperatorId::new("op1"))
     }
 
-    fn make_write(seq: u32) -> Effect {
+    fn make_write() -> Effect {
         Effect::write_memory(
-            seq,
             Scope::Session(SessionId::new("s1")),
-            format!("key-{seq}"),
-            json!(seq),
+            "key-test".to_owned(),
+            json!(1),
             MemoryScope::Session,
         )
     }
 
-    fn make_log_effect(seq: u32) -> Effect {
-        Effect::log(seq, "info", "test")
+    fn make_log_effect() -> Effect {
+        Effect::log("info", "test")
     }
 
 
@@ -195,7 +194,7 @@ mod tests {
             .push(ContinueMiddleware { seen: seen2.clone() });
 
         let ctx = make_ctx();
-        let effect = make_write(0);
+        let effect = make_write();
         let eid = effect.meta.effect_id.clone();
 
         let result = stack.process(effect, &ctx).await;
@@ -219,7 +218,7 @@ mod tests {
             });
 
         let ctx = make_ctx();
-        let result = stack.process(make_write(0), &ctx).await;
+        let result = stack.process(make_write(), &ctx).await;
 
         // Stack must return None when a layer skips.
         assert!(result.is_none());
@@ -237,12 +236,12 @@ mod tests {
         let ctx = make_ctx();
 
         // Durable: WriteMemory.
-        let durable = make_write(0);
+        let durable = make_write();
         let result = mw.on_effect(durable, &ctx).await;
         assert!(matches!(result, EffectAction::Continue(_)));
 
         // Ephemeral: Log.
-        let ephemeral = make_log_effect(1);
+        let ephemeral = make_log_effect();
         let result = mw.on_effect(ephemeral, &ctx).await;
         assert!(matches!(result, EffectAction::Continue(_)));
 

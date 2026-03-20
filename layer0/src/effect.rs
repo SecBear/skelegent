@@ -20,6 +20,13 @@ fn next_effect_id() -> String {
     format!("eff-{n}")
 }
 
+
+/// Monotonic counter for total ordering of effects within this process.
+static EFFECT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn next_seq() -> u64 {
+    EFFECT_SEQ.fetch_add(1, Ordering::Relaxed)
+}
 // ── serde helpers for SystemTime ─────────────────────────────────────────────
 
 mod serde_system_time {
@@ -60,32 +67,38 @@ pub struct EffectMeta {
     pub correlation_id: Option<String>,
     /// Sequence number within the current dispatch run.
     /// Provides total ordering for replay.
-    pub seq: u32,
+    pub seq: u64,
     /// Wall-clock time when the effect was created.
     /// Stored as nanoseconds since UNIX epoch. Use `seq` for ordering, not this.
     #[serde(with = "serde_system_time")]
     pub timestamp: SystemTime,
 }
 
+impl Default for EffectMeta {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EffectMeta {
     /// Create new metadata with a generated `effect_id` and current timestamp.
-    pub fn new(seq: u32) -> Self {
+    pub fn new() -> Self {
         Self {
             effect_id: next_effect_id(),
             causation_id: None,
             correlation_id: None,
-            seq,
+            seq: next_seq(),
             timestamp: SystemTime::now(),
         }
     }
 
     /// Create with an explicit causation chain.
-    pub fn with_cause(seq: u32, causation_id: String, correlation_id: Option<String>) -> Self {
+    pub fn with_cause(causation_id: String, correlation_id: Option<String>) -> Self {
         Self {
             effect_id: next_effect_id(),
             causation_id: Some(causation_id),
             correlation_id,
-            seq,
+            seq: next_seq(),
             timestamp: SystemTime::now(),
         }
     }
@@ -352,79 +365,71 @@ pub struct Effect {
 
 impl Effect {
     /// Create an effect with auto-generated metadata.
-    pub fn new(seq: u32, kind: EffectKind) -> Self {
+    pub fn new(kind: EffectKind) -> Self {
         Self {
-            meta: EffectMeta::new(seq),
+            meta: EffectMeta::new(),
             kind,
         }
     }
 
     /// Create an effect with explicit causation metadata.
     pub fn with_cause(
-        seq: u32,
         kind: EffectKind,
         causation_id: String,
         correlation_id: Option<String>,
     ) -> Self {
         Self {
-            meta: EffectMeta::with_cause(seq, causation_id, correlation_id),
+            meta: EffectMeta::with_cause(causation_id, correlation_id),
             kind,
         }
     }
 
     /// Convenience: create a [`EffectKind::WriteMemory`] effect with `Session` scope.
     pub fn write_memory(
-        seq: u32,
         scope: Scope,
         key: String,
         value: serde_json::Value,
         memory_scope: MemoryScope,
     ) -> Self {
-        Self::new(
-            seq,
-            EffectKind::WriteMemory {
-                scope,
-                key,
-                value,
-                memory_scope,
-                tier: None,
-                lifetime: None,
-                content_kind: None,
-                salience: None,
-                ttl: None,
-            },
-        )
+        Self::new(EffectKind::WriteMemory {
+            scope,
+            key,
+            value,
+            memory_scope,
+            tier: None,
+            lifetime: None,
+            content_kind: None,
+            salience: None,
+            ttl: None,
+        })
     }
 
     /// Convenience: create a [`EffectKind::DeleteMemory`] effect.
-    pub fn delete_memory(seq: u32, scope: Scope, key: String) -> Self {
-        Self::new(seq, EffectKind::DeleteMemory { scope, key })
+    pub fn delete_memory(scope: Scope, key: String) -> Self {
+        Self::new(EffectKind::DeleteMemory { scope, key })
     }
 
     /// Convenience: create a [`EffectKind::Handoff`] effect.
-    pub fn handoff(seq: u32, operator: OperatorId, context: HandoffContext) -> Self {
-        Self::new(seq, EffectKind::Handoff { operator, context })
+    pub fn handoff(operator: OperatorId, context: HandoffContext) -> Self {
+        Self::new(EffectKind::Handoff { operator, context })
     }
 
     /// Convenience: create a [`EffectKind::Signal`] effect.
-    pub fn signal(seq: u32, target: WorkflowId, payload: SignalPayload) -> Self {
-        Self::new(seq, EffectKind::Signal { target, payload })
+    pub fn signal(target: WorkflowId, payload: SignalPayload) -> Self {
+        Self::new(EffectKind::Signal { target, payload })
     }
 
     /// Convenience: create a [`EffectKind::Custom`] effect.
-    pub fn custom(seq: u32, name: String, payload: serde_json::Value) -> Self {
-        Self::new(seq, EffectKind::Custom { name, payload })
+    pub fn custom(name: String, payload: serde_json::Value) -> Self {
+        Self::new(EffectKind::Custom { name, payload })
     }
 
     /// Convenience: create a [`EffectKind::Log`] effect.
-    pub fn log(seq: u32, level: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::new(
-            seq,
-            EffectKind::Log {
-                level: level.into(),
-                message: message.into(),
-            },
-        )
+    pub fn log(level: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::new(EffectKind::Log {
+            level: level.into(),
+            message: message.into(),
+        })
     }
 }
 
@@ -483,15 +488,14 @@ mod tests {
 
     #[test]
     fn effect_meta_auto_generated() {
-        let meta1 = EffectMeta::new(0);
-        let meta2 = EffectMeta::new(1);
+        let meta1 = EffectMeta::new();
+        let meta2 = EffectMeta::new();
         // IDs must be non-empty and distinct.
         assert!(!meta1.effect_id.is_empty());
         assert_ne!(meta1.effect_id, meta2.effect_id);
         // Timestamps should be set (not the epoch).
         assert!(meta1.timestamp >= UNIX_EPOCH);
-        assert_eq!(meta1.seq, 0);
-        assert_eq!(meta2.seq, 1);
+        assert!(meta1.seq < meta2.seq, "seq must be monotonically increasing");
         // causation and correlation are None by default.
         assert!(meta1.causation_id.is_none());
         assert!(meta1.correlation_id.is_none());
@@ -500,7 +504,7 @@ mod tests {
     #[test]
     fn effect_kind_serde_round_trip() {
         fn round_trip(kind: EffectKind) {
-            let effect = Effect::new(0, kind);
+            let effect = Effect::new(kind);
             let json = serde_json::to_string(&effect).expect("serialize");
             let back: Effect = serde_json::from_str(&json).expect("deserialize");
             // Re-serialize and compare — not comparing structs directly
@@ -574,22 +578,19 @@ mod tests {
     fn effect_convenience_constructors() {
         // write_memory
         let e = Effect::write_memory(
-            1,
             Scope::Global,
             "key".into(),
             json!({"v": 1}),
             MemoryScope::Session,
         );
-        assert_eq!(e.meta.seq, 1);
         assert!(matches!(e.kind, EffectKind::WriteMemory { ref key, .. } if key == "key"));
 
         // delete_memory
-        let e = Effect::delete_memory(2, Scope::Global, "key2".into());
+        let e = Effect::delete_memory(Scope::Global, "key2".into());
         assert!(matches!(e.kind, EffectKind::DeleteMemory { ref key, .. } if key == "key2"));
 
         // handoff
         let e = Effect::handoff(
-            3,
             OperatorId::new("target"),
             HandoffContext {
                 task: Content::text("do the next thing"),
@@ -603,18 +604,27 @@ mod tests {
         ));
 
         // signal
-        let e = Effect::signal(4, WorkflowId::new("wf"), SignalPayload::new("t", json!({})));
+        let e = Effect::signal(WorkflowId::new("wf"), SignalPayload::new("t", json!({})));
         assert!(matches!(e.kind, EffectKind::Signal { .. }));
 
         // custom
-        let e = Effect::custom(5, "my.event".into(), json!({}));
+        let e = Effect::custom("my.event".into(), json!({}));
         assert!(matches!(e.kind, EffectKind::Custom { ref name, .. } if name == "my.event"));
 
         // log
-        let e = Effect::log(6, "warn", "disk full");
+        let e = Effect::log("warn", "disk full");
         assert!(matches!(
             e.kind,
             EffectKind::Log { ref message, .. } if message == "disk full"
         ));
+    }
+
+    #[test]
+    fn seq_auto_increments() {
+        let e1 = Effect::new(EffectKind::Log { level: "info".into(), message: "a".into() });
+        let e2 = Effect::new(EffectKind::Log { level: "info".into(), message: "b".into() });
+        let e3 = Effect::new(EffectKind::Log { level: "info".into(), message: "c".into() });
+        assert!(e1.meta.seq < e2.meta.seq, "seq must increase");
+        assert!(e2.meta.seq < e3.meta.seq, "seq must increase");
     }
 }

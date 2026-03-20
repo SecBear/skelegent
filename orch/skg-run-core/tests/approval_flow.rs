@@ -204,18 +204,18 @@ fn deserialize_rt(response: &ApprovalResponse) -> ApprovalResponse {
 fn approval_request_from_effects() {
     // Simulate what an operator would push into OperatorOutput::effects
     let effects = vec![
-        Effect::new(0, EffectKind::ToolApprovalRequired {
+        Effect::new(EffectKind::ToolApprovalRequired {
             tool_name: "delete_file".to_owned(),
             call_id: "call_001".to_owned(),
             input: json!({ "path": "/etc/passwd" }),
         }),
-        Effect::new(0, EffectKind::ToolApprovalRequired {
+        Effect::new(EffectKind::ToolApprovalRequired {
             tool_name: "send_email".to_owned(),
             call_id: "call_002".to_owned(),
             input: json!({ "to": "external@example.com" }),
         }),
         // Non-approval effect — must not appear in pending
-        Effect::new(0, EffectKind::Progress {
+        Effect::new(EffectKind::Progress {
             content: Content::text("Thinking..."),
         }),
     ];

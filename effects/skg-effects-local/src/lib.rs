@@ -12,6 +12,7 @@ use layer0::effect::{Effect, EffectKind, Scope};
 use layer0::error::{OrchError, StateError};
 use layer0::middleware::{StoreStack, StoreWriteNext};
 use layer0::operator::{OperatorInput, TriggerType};
+use layer0::reducer::ReducerRegistry;
 use layer0::state::{StateStore, StoreOptions};
 use skg_effects_core::Signalable;
 use skg_effects_core::{EffectHandler, EffectOutcome, Error, UnknownEffectPolicy};
@@ -36,6 +37,10 @@ pub struct LocalEffectHandler<S: StateStore + ?Sized> {
     pub signaler: Option<Arc<dyn Signalable>>,
     /// Unknown effect handling policy.
     pub unknown_policy: UnknownEffectPolicy,
+    /// Optional reducer registry. When set, `WriteMemory` reads the current
+    /// value, applies the registered reducer for that key, and writes the
+    /// merged result. When absent, writes overwrite unconditionally (default).
+    pub reducer_registry: Option<Arc<ReducerRegistry>>,
     middleware: Option<StoreStack>,
 }
 
@@ -46,6 +51,7 @@ impl<S: StateStore + ?Sized> LocalEffectHandler<S> {
             state,
             signaler,
             unknown_policy: UnknownEffectPolicy::IgnoreAndWarn,
+            reducer_registry: None,
             middleware: None,
         }
     }
@@ -53,6 +59,15 @@ impl<S: StateStore + ?Sized> LocalEffectHandler<S> {
     /// Override the unknown/custom effect handling policy.
     pub fn with_unknown_policy(mut self, policy: UnknownEffectPolicy) -> Self {
         self.unknown_policy = policy;
+        self
+    }
+
+    /// Attach a reducer registry. When set, each `WriteMemory` effect reads
+    /// the current value, applies the registered reducer for the key, and
+    /// writes the merged result. Keys without an explicit entry use the
+    /// registry's default reducer (initially [`layer0::reducer::Overwrite`]).
+    pub fn with_reducer_registry(mut self, registry: Arc<ReducerRegistry>) -> Self {
+        self.reducer_registry = Some(registry);
         self
     }
 
@@ -121,6 +136,20 @@ where
                     salience: *salience,
                     ttl: *ttl,
                 };
+                // If a reducer registry is configured, read the current value
+                // and merge with the incoming value before writing. This keeps
+                // the middleware path and the direct path consistent.
+                let write_value = match &self.reducer_registry {
+                    Some(registry) => {
+                        let current = self
+                            .state
+                            .read(scope, key)
+                            .await?
+                            .unwrap_or(serde_json::Value::Null);
+                        registry.reduce(key, &current, value)
+                    }
+                    None => value.clone(),
+                };
                 if let Some(stack) = &self.middleware {
                     let committed = Arc::new(AtomicBool::new(false));
                     let terminal = WriteTo {
@@ -128,7 +157,7 @@ where
                         committed: committed.clone(),
                     };
                     stack
-                        .write_with(scope, key, value.clone(), Some(&opts), &terminal)
+                        .write_with(scope, key, write_value, Some(&opts), &terminal)
                         .await?;
                     if committed.load(Ordering::Acquire) {
                         Ok(EffectOutcome::Applied)
@@ -137,7 +166,7 @@ where
                     }
                 } else {
                     self.state
-                        .write_hinted(scope, key, value.clone(), &opts)
+                        .write_hinted(scope, key, write_value, &opts)
                         .await?;
                     Ok(EffectOutcome::Applied)
                 }

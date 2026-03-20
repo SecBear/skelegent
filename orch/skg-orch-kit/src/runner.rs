@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use layer0::DispatchContext;
 use layer0::EffectStack;
 use layer0::dispatch::Dispatcher;
@@ -145,10 +147,10 @@ impl OrchestratedRunner {
         input: OperatorInput,
     ) -> Result<ExecutionTrace, KitError> {
         let mut trace = ExecutionTrace::new();
-        let mut queue: Vec<(OperatorId, OperatorInput)> = vec![(operator, input)];
+        let mut queue: VecDeque<(OperatorId, OperatorInput)> = VecDeque::from([(operator, input)]);
         let mut followups_executed = 0usize;
 
-        while let Some((op_id, op_input)) = queue.pop() {
+        while let Some((op_id, op_input)) = queue.pop_front() {
             trace.events.push(ExecutionEvent::Dispatched {
                 operator: op_id.clone(),
             });
@@ -218,7 +220,7 @@ impl OrchestratedRunner {
 
             trace.outputs.push(output);
 
-            // Depth-first: push followups onto the queue.
+            // FIFO: append followups so first-emitted fires next within each batch.
             if !followups.is_empty() {
                 followups_executed = followups_executed.saturating_add(followups.len());
                 if followups_executed > self.max_followups {

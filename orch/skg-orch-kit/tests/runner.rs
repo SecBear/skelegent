@@ -150,7 +150,7 @@ impl Operator for WriterOperator {
         _ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
-        output.effects.push(Effect::new(0, EffectKind::WriteMemory {
+        output.effects.push(Effect::new(EffectKind::WriteMemory {
             scope: Scope::Global,
             key: "k1".into(),
             value: json!({"v": 1}),
@@ -161,7 +161,7 @@ impl Operator for WriterOperator {
             salience: None,
             ttl: None,
         }));
-        output.effects.push(Effect::new(0, EffectKind::Signal {
+        output.effects.push(Effect::new(EffectKind::Signal {
             target: WorkflowId::new("wf1"),
             payload: SignalPayload::new("sig.type", json!({"ok": true})),
         }));
@@ -179,7 +179,7 @@ impl Operator for DelegateOperator {
         _ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("delegating"), ExitReason::Complete);
-        output.effects.push(Effect::new(0, EffectKind::Delegate {
+        output.effects.push(Effect::new(EffectKind::Delegate {
             operator: OperatorId::new("child"),
             input: Box::new(OperatorInput::new(
                 Content::text("child task"),
@@ -217,7 +217,7 @@ impl Operator for HandoffOperator {
         _ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
-        output.effects.push(Effect::new(0, EffectKind::Handoff {
+        output.effects.push(Effect::new(EffectKind::Handoff {
             operator: OperatorId::new("handoff_target"),
             context: HandoffContext {
                 task: Content::text(""),
@@ -258,7 +258,7 @@ impl Operator for FullPipelineRootOperator {
         _ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
         let mut output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
-        output.effects.push(Effect::new(0, EffectKind::WriteMemory {
+        output.effects.push(Effect::new(EffectKind::WriteMemory {
             scope: Scope::Global,
             key: "k-pipeline".into(),
             value: json!({"v": 42}),
@@ -269,14 +269,14 @@ impl Operator for FullPipelineRootOperator {
             salience: None,
             ttl: None,
         }));
-        output.effects.push(Effect::new(0, EffectKind::Delegate {
+        output.effects.push(Effect::new(EffectKind::Delegate {
             operator: OperatorId::new("child"),
             input: Box::new(OperatorInput::new(
                 Content::text("child task"),
                 TriggerType::Task,
             )),
         }));
-        output.effects.push(Effect::new(0, EffectKind::Handoff {
+        output.effects.push(Effect::new(EffectKind::Handoff {
             operator: OperatorId::new("handoff_target"),
             context: HandoffContext {
                 task: Content::text(""),
@@ -284,11 +284,11 @@ impl Operator for FullPipelineRootOperator {
                 metadata: Some(json!({"ticket": 123})),
             },
         }));
-        output.effects.push(Effect::new(0, EffectKind::Signal {
+        output.effects.push(Effect::new(EffectKind::Signal {
             target: WorkflowId::new("wf-pipeline"),
             payload: SignalPayload::new("pipeline.signal", json!({"ok": true})),
         }));
-        output.effects.push(Effect::new(0, EffectKind::DeleteMemory {
+        output.effects.push(Effect::new(EffectKind::DeleteMemory {
             scope: Scope::Global,
             key: "k-pipeline".into(),
         }));
@@ -424,7 +424,7 @@ async fn runner_has_safety_bound_for_infinite_followups() {
             _ctx: &DispatchContext,
         ) -> Result<OperatorOutput, OperatorError> {
             let mut output = OperatorOutput::new(Content::text("loop"), ExitReason::Complete);
-            output.effects.push(Effect::new(0, EffectKind::Delegate {
+            output.effects.push(Effect::new(EffectKind::Delegate {
                 operator: OperatorId::new("root"),
                 input: Box::new(OperatorInput::new(Content::text("loop"), TriggerType::Task)),
             }));
@@ -547,7 +547,7 @@ impl Operator for MwWriterOperator {
         _ctx: &DispatchContext,
     ) -> Result<OperatorOutput, layer0::error::OperatorError> {
         let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
-        output.effects.push(Effect::new(0, EffectKind::WriteMemory {
+        output.effects.push(Effect::new(EffectKind::WriteMemory {
             scope: Scope::Global,
             key: "mw-key".into(),
             value: json!({"v": 99}),
@@ -657,4 +657,85 @@ async fn runner_without_middleware_unchanged() {
         e,
         skg_orch_kit::ExecutionEvent::MemoryWritten { key } if key == "mw-key"
     )));
+}
+
+// ── FIFO ordering test ──────────────────────────────────────────────────────
+
+/// Root emits three Delegate effects in emission order (first, second, third).
+/// With FIFO scheduling the outputs must arrive in that same order.
+struct FifoRootOperator;
+
+#[async_trait]
+impl Operator for FifoRootOperator {
+    async fn execute(
+        &self,
+        _input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
+        let mut output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
+        for name in ["first", "second", "third"] {
+            output.effects.push(Effect::new(EffectKind::Delegate {
+                operator: OperatorId::new(name),
+                input: Box::new(OperatorInput::new(Content::text(name), TriggerType::Task)),
+            }));
+        }
+        Ok(output)
+    }
+}
+
+struct EchoOperator {
+    name: &'static str,
+}
+
+#[async_trait]
+impl Operator for EchoOperator {
+    async fn execute(
+        &self,
+        _input: OperatorInput,
+        _ctx: &DispatchContext,
+    ) -> Result<OperatorOutput, OperatorError> {
+        Ok(OperatorOutput::new(
+            Content::text(self.name),
+            ExitReason::Complete,
+        ))
+    }
+}
+
+#[tokio::test]
+async fn runner_fifo_ordering() {
+    // Root emits Delegate[first, second, third]; FIFO scheduling must run them
+    // in emission order. outputs = [root, first, second, third].
+    let mut orch = SimpleOrch::new();
+    orch.register("root", Arc::new(FifoRootOperator));
+    orch.register("first", Arc::new(EchoOperator { name: "first" }));
+    orch.register("second", Arc::new(EchoOperator { name: "second" }));
+    orch.register("third", Arc::new(EchoOperator { name: "third" }));
+
+    let orch = Arc::new(orch);
+    let handler = Arc::new(LocalEffectHandler::new(
+        Arc::new(TestStore::new()) as Arc<dyn layer0::state::StateStore>,
+        Some(orch.clone() as Arc<dyn Signalable>),
+    ));
+    let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler);
+
+    let trace = runner
+        .run(
+            OperatorId::new("root"),
+            OperatorInput::new(Content::text("go"), TriggerType::User),
+        )
+        .await
+        .expect("runner should succeed");
+
+    // Four outputs: root, first, second, third — in FIFO emission order.
+    assert_eq!(trace.outputs.len(), 4);
+    let messages: Vec<&str> = trace
+        .outputs
+        .iter()
+        .map(|o| o.message.as_text().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        messages,
+        ["root", "first", "second", "third"],
+        "followups must execute in FIFO (emission) order"
+    );
 }

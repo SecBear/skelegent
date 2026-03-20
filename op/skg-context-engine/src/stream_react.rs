@@ -28,9 +28,11 @@ use skg_turn::stream::StreamEvent;
 /// output through `on_event`. Tool dispatch, approval checking, budget guards,
 /// and all rules work identically.
 ///
-/// The `on_event` callback receives [`StreamEvent`]s only after the streamed
-/// response has passed the stream boundary and been committed into context via
-/// [`AppendResponse`]. Tool dispatch then proceeds normally (non-streaming).
+/// The `on_event` callback receives non-[`StreamEvent::Done`] events
+/// (TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, Usage) immediately
+/// as they arrive from the provider stream. `Done` is deferred: it fires only
+/// after the response has been committed to context via [`AppendResponse`], so
+/// when the consumer receives `Done`, the turn is fully readable from context.
 ///
 /// ```ignore
 /// let output = stream_react_loop(
@@ -60,20 +62,26 @@ pub async fn stream_react_loop<P: Provider>(
         let compile_config = config.compile_config(tools, ctx);
         let infer_request = build_infer_request(ctx, &compile_config);
 
-        // Phase 2: Stream inference — poll the stream, buffer events, emit only after commit.
+        // Phase 2: Stream inference — emit deltas immediately, defer Done until committed.
         let mut infer_stream = provider
             .infer_stream(infer_request)
             .await
             .map_err(EngineError::Provider)?;
 
-        let mut buffered: Vec<StreamEvent> = Vec::new();
         let mut done_response: Option<skg_turn::InferResponse> = None;
         while let Some(event) = infer_stream.next().await {
             let event = event.map_err(EngineError::Provider)?;
-            if let StreamEvent::Done(ref resp) = event {
-                done_response = Some(resp.clone());
+            match event {
+                StreamEvent::Done(resp) => {
+                    // Stash; emit Done only after context commit succeeds.
+                    done_response = Some(resp);
+                }
+                other => {
+                    // TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, Usage:
+                    // no commit dependency — emit immediately.
+                    on_event(other);
+                }
             }
-            buffered.push(event);
         }
         let response = done_response.ok_or_else(|| {
             EngineError::Provider(skg_turn::ProviderError::InvalidResponse(
@@ -92,11 +100,9 @@ pub async fn stream_react_loop<P: Provider>(
         }
         ctx.metrics.turns_completed += 1;
 
-        // Emit buffered events now that the turn is committed
-        let events = buffered;
-        for event in events {
-            on_event(event);
-        }
+        // Done is a commit signal: context is written, After rules fired.
+        // Emit it only now so the consumer's invariant holds.
+        on_event(StreamEvent::Done(response.clone()));
 
         // Phase 4: Check if model is done
         if !response.has_tool_calls() {
@@ -136,7 +142,7 @@ pub async fn stream_react_loop<P: Provider>(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        ctx.push_effect(Effect::new(0, EffectKind::Handoff {
+                        ctx.push_effect(Effect::new(EffectKind::Handoff {
                             operator: OperatorId::from(target.as_str()),
                             context: HandoffContext {
                                 task: Content::text(reason),
@@ -409,7 +415,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_react_loop_does_not_emit_events_before_append_commit() {
+    async fn stream_react_loop_does_not_emit_done_before_append_commit() {
         let provider = TestProvider::new();
         provider.respond_with_text("hello before append exit");
 
@@ -440,9 +446,10 @@ mod tests {
         .expect("append exit should return structured operator output");
 
         assert_eq!(output.exit_reason, ExitReason::Timeout);
+        let captured = events.lock().unwrap();
         assert!(
-            events.lock().unwrap().is_empty(),
-            "stream events must not be emitted before the streamed turn is committed to context"
+            !captured.iter().any(|e| matches!(e, StreamEvent::Done(_))),
+            "Done must not be emitted before the streamed turn is committed to context"
         );
     }
 
@@ -461,7 +468,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_react_loop_does_not_emit_events_before_after_boundary_exit() {
+    async fn stream_react_loop_does_not_emit_done_before_after_boundary_exit() {
         let provider = TestProvider::new();
         provider.respond_with_text("hello before exit");
 
@@ -491,9 +498,10 @@ mod tests {
         .expect("stream exit should return structured operator output");
 
         assert_eq!(output.exit_reason, ExitReason::Timeout);
+        let captured = events.lock().unwrap();
         assert!(
-            events.lock().unwrap().is_empty(),
-            "stream events must not be emitted before the after-boundary exit is accepted"
+            !captured.iter().any(|e| matches!(e, StreamEvent::Done(_))),
+            "Done must not be emitted before the after-boundary exit is accepted"
         );
     }
 
@@ -722,5 +730,74 @@ mod tests {
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.metadata.turns_used, 2);
+    }
+
+    #[tokio::test]
+    async fn stream_emits_text_delta_before_done() {
+        // Provider that emits TextDelta then Done, verifying real-time ordering.
+        struct DeltaStreamProvider;
+
+        impl skg_turn::provider::Provider for DeltaStreamProvider {
+            async fn infer(
+                &self,
+                _request: skg_turn::InferRequest,
+            ) -> Result<skg_turn::InferResponse, skg_turn::provider::ProviderError> {
+                Ok(skg_turn::test_utils::make_text_response("hello"))
+            }
+
+            async fn infer_stream(
+                &self,
+                _request: skg_turn::InferRequest,
+            ) -> Result<skg_turn::stream::InferStream, skg_turn::provider::ProviderError> {
+                let response = skg_turn::test_utils::make_text_response("hello");
+                let events: Vec<Result<StreamEvent, skg_turn::provider::ProviderError>> = vec![
+                    Ok(StreamEvent::TextDelta("hello".into())),
+                    Ok(StreamEvent::Done(response)),
+                ];
+                Ok(skg_turn::stream::InferStream::new(futures_util::stream::iter(events)))
+            }
+        }
+
+        let provider = DeltaStreamProvider;
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
+            .await
+            .unwrap();
+
+        let tools = ToolRegistry::new();
+        let dispatch_ctx =
+            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+        let events_clone = Arc::clone(&events);
+
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &simple_config(),
+            move |event| {
+                let label = match &event {
+                    StreamEvent::TextDelta(t) => format!("text:{t}"),
+                    StreamEvent::Done(_) => "done".into(),
+                    _ => "other".into(),
+                };
+                events_clone.lock().unwrap().push(label);
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        let captured = events.lock().unwrap();
+        let text_pos = captured
+            .iter()
+            .position(|e| e == "text:hello")
+            .expect("TextDelta must be emitted");
+        let done_pos = captured
+            .iter()
+            .position(|e| e == "done")
+            .expect("Done must be emitted");
+        assert!(text_pos < done_pos, "TextDelta must arrive before Done");
     }
 }

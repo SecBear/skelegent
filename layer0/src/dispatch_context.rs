@@ -23,6 +23,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // DISPATCH CONTEXT
@@ -268,31 +269,45 @@ impl TraceContext {
     /// Create a child span context.
     ///
     /// Inherits `trace_id`, `trace_flags`, and `trace_state` from the parent.
-    /// Generates a new `span_id` derived from the parent (simple counter-based;
-    /// production systems should use the OTel middleware for proper span IDs).
+    /// Generates a unique `span_id` on every call by mixing a monotonic counter
+    /// with the parent span bytes. No two calls return the same ID, even for
+    /// fan-out from the same parent.
+    ///
+    /// Production systems may use `skg-hook-otel` which generates OTel-compliant
+    /// random IDs via the OTel SDK.
     pub fn child_span(&self) -> Self {
-        // Deterministic child: append "-c" to parent span_id and truncate.
-        // Real span ID generation happens in the OTel middleware; this is
-        // a placeholder that maintains the invariant "child != parent."
-        let child_span = if self.span_id.is_empty() {
+        // Per-process span counter. Starts at 1 so a counter-only ID is never
+        // all-zeros (the OTel invalid sentinel).
+        static SPAN_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+        let child_span_id = if self.span_id.is_empty() {
             String::new()
         } else {
-            let mut s = self.span_id.clone();
-            // Rotate last char to produce a different but deterministic ID.
-            // This is NOT cryptographically random — it's a protocol placeholder.
-            if let Some(last) = s.pop() {
-                let next = match last {
-                    '0'..='e' => (last as u8 + 1) as char,
-                    _ => '0',
-                };
-                s.push(next);
-            }
-            s
+            // Mix counter with a lightweight hash of the parent span bytes.
+            // splitmix64 provides good bit dispersion without any external dep.
+            // No two calls return the same ID, even for fan-out from the same parent.
+            let counter = SPAN_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let parent_hash: u64 = self
+                .span_id
+                .bytes()
+                .enumerate()
+                .fold(0u64, |acc, (i, b)| {
+                    acc.wrapping_add((b as u64).wrapping_mul(i.wrapping_add(1) as u64))
+                });
+            let seed = counter.wrapping_add(parent_hash);
+            // splitmix64 bit mixer — no external crate needed.
+            let mixed = {
+                let mut x = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                x ^ (x >> 31)
+            };
+            format!("{mixed:016x}")
         };
 
         Self {
             trace_id: self.trace_id.clone(),
-            span_id: child_span,
+            span_id: child_span_id,
             trace_flags: self.trace_flags,
             trace_state: self.trace_state.clone(),
         }

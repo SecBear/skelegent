@@ -908,7 +908,7 @@ mod tests {
     async fn push_effect_stores_and_drains() {
         use layer0::effect::{Effect, EffectKind};
         let mut ctx = Context::new();
-        let effect = Effect::new(0, EffectKind::DeleteMemory {
+        let effect = Effect::new(EffectKind::DeleteMemory {
             scope: layer0::effect::Scope::Global,
             key: "test_key".into(),
         });
@@ -923,11 +923,11 @@ mod tests {
     async fn extend_effects_stores_multiple() {
         use layer0::effect::{Effect, EffectKind};
         let mut ctx = Context::new();
-        let e1 = Effect::new(0, EffectKind::DeleteMemory {
+        let e1 = Effect::new(EffectKind::DeleteMemory {
             scope: layer0::effect::Scope::Global,
             key: "a".into(),
         });
-        let e2 = Effect::new(0, EffectKind::DeleteMemory {
+        let e2 = Effect::new(EffectKind::DeleteMemory {
             scope: layer0::effect::Scope::Global,
             key: "b".into(),
         });

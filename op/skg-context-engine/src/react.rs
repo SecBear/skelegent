@@ -23,7 +23,7 @@ use layer0::effect::{Effect, EffectKind, HandoffContext};
 use layer0::id::OperatorId;
 use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
 use serde_json::Value;
-use skg_tool::{ToolDyn, ToolError, ToolRegistry};
+use skg_tool::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
@@ -235,7 +235,7 @@ pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<E
                 .get(&call.name)
                 .is_some_and(|t| t.approval_policy().requires_approval(&call.input))
         })
-        .map(|call| Effect::new(0, EffectKind::ToolApprovalRequired {
+        .map(|call| Effect::new(EffectKind::ToolApprovalRequired {
             tool_name: call.name.clone(),
             call_id: call.id.clone(),
             input: call.input.clone(),
@@ -548,72 +548,111 @@ pub async fn react_loop<P: Provider>(
         }
 
         // Phase 5: Dispatch tool calls
-        for call in &tool_calls {
-            let tool_span = tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
-            let start = std::time::Instant::now();
-            let tool_result = tracing::Instrument::instrument(
-                ctx.run(ExecuteTool::new(
-                    call.clone(),
-                    tools.clone(),
-                    dispatch_ctx.clone(),
-                )),
-                tool_span,
-            )
-            .await;
-            let (result_str, is_error) = match tool_result {
-                Ok(value) => {
-                    tracing::debug!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, "tool succeeded");
-                    // Detect HandoffTool sentinel BEFORE formatting — check the raw
-                    // Value so the check is independent of any custom formatter.
-                    if is_handoff_sentinel(&value) {
-                        let target = value
-                            .get("target")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let reason = value
-                            .get("reason")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        ctx.push_effect(Effect::new(0, EffectKind::Handoff {
-                            operator: OperatorId::from(target.as_str()),
-                            context: HandoffContext {
-                                task: Content::text(reason),
-                                history: None,
-                                metadata: None,
-                            },
-                        }));
-                        return Ok(make_context_output(
-                            Content::text(""),
-                            ExitReason::HandedOff,
-                            ctx,
-                        ));
+        //
+        // Concurrency policy: if ALL calls this turn have the Shared hint, run them
+        // concurrently with `join_all`. A single Exclusive call (the safe default)
+        // degrades the entire turn to sequential. Unknown tools default to Exclusive.
+        // Note: the parallel path bypasses `ctx.run()` rule-firing per tool call.
+        // Built-in budget guards target `InferBoundary` (not `ExecuteTool`), so they
+        // still fire correctly.
+        let all_shared = tool_calls.len() > 1
+            && tool_calls.iter().all(|call| {
+                tools
+                    .get(&call.name)
+                    .map(|t| t.concurrency_hint() == ToolConcurrencyHint::Shared)
+                    .unwrap_or(false)
+            });
+        if all_shared {
+            // Parallel path: run all tool.call() futures concurrently.
+            // Results are returned in original call order (join_all preserves order),
+            // then processed sequentially into ctx for metrics and message injection.
+            let futures: Vec<_> = tool_calls
+                .iter()
+                .map(|call| {
+                    let tool = tools.get(&call.name).cloned();
+                    let call_name = call.name.clone();
+                    let input = call.input.clone();
+                    let d_ctx = dispatch_ctx.clone();
+                    let span = tracing::info_span!("tool_call", tool = %call_name, call_id = %call.id);
+                    tracing::Instrument::instrument(
+                        async move {
+                            let start = std::time::Instant::now();
+                            let result = match tool {
+                                None => Err(EngineError::Halted {
+                                    reason: format!("unknown tool: {call_name}"),
+                                }),
+                                Some(t) => t.call(input, &d_ctx).await.map_err(Into::into),
+                            };
+                            (start.elapsed(), result)
+                        },
+                        span,
+                    )
+                })
+                .collect();
+            let raw_results = futures_util::future::join_all(futures).await;
+            for (call, (duration, tool_result)) in tool_calls.iter().zip(raw_results) {
+                ctx.metrics.tool_calls_total += 1;
+                let (result_str, is_error) = match tool_result {
+                    Ok(value) => {
+                        tracing::debug!(tool = %call.name, duration_ms = duration.as_millis() as u64, "tool succeeded");
+                        if is_handoff_sentinel(&value) {
+                            let target = value
+                                .get("target")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let reason = value
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            ctx.push_effect(Effect::new(EffectKind::Handoff {
+                                operator: OperatorId::from(target.as_str()),
+                                context: HandoffContext {
+                                    task: Content::text(reason),
+                                    history: None,
+                                    metadata: None,
+                                },
+                            }));
+                            return Ok(make_context_output(
+                                Content::text(""),
+                                ExitReason::HandedOff,
+                                ctx,
+                            ));
+                        }
+                        let s = match &config.tool_result_formatter {
+                            Some(f) => f(&call.name, &value),
+                            None => format_tool_result(&value),
+                        };
+                        (s, false)
                     }
-                    let s = match &config.tool_result_formatter {
-                        Some(f) => f(&call.name, &value),
-                        None => format_tool_result(&value),
-                    };
-                    (s, false)
-                }
-                Err(e) => {
-                    tracing::warn!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, error = %e, "tool failed");
-                    // InvalidInput: feed schema + error back so the model can correct the call.
-                    if let EngineError::Tool(ToolError::InvalidInput(ref msg)) = e {
-                        let count = tool_retry_counts.entry(call.id.clone()).or_insert(0);
-                        if *count < config.max_tool_retries {
-                            *count += 1;
-                            let schema_str = tools
-                                .get(&call.name)
-                                .map(|t| t.input_schema().to_string())
-                                .unwrap_or_else(|| "unknown".to_string());
-                            (
-                                format!(
-                                    "Tool '{}' rejected the input: {}\nExpected schema: {}\nPlease fix the input and try again.",
-                                    call.name, msg, schema_str
-                                ),
-                                true,
-                            )
+                    Err(e) => {
+                        ctx.metrics.tool_calls_failed += 1;
+                        tracing::warn!(tool = %call.name, duration_ms = duration.as_millis() as u64, error = %e, "tool failed");
+                        if let EngineError::Tool(ToolError::InvalidInput(ref msg)) = e {
+                            let count = tool_retry_counts.entry(call.id.clone()).or_insert(0);
+                            if *count < config.max_tool_retries {
+                                *count += 1;
+                                let schema_str = tools
+                                    .get(&call.name)
+                                    .map(|t| t.input_schema().to_string())
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                (
+                                    format!(
+                                        "Tool '{}' rejected the input: {}\nExpected schema: {}\nPlease fix the input and try again.",
+                                        call.name, msg, schema_str
+                                    ),
+                                    true,
+                                )
+                            } else {
+                                (
+                                    match &config.tool_error_formatter {
+                                        Some(f) => f(&call.name, &e.to_string()),
+                                        None => format_tool_error(&e),
+                                    },
+                                    false,
+                                )
+                            }
                         } else {
                             (
                                 match &config.tool_error_formatter {
@@ -623,23 +662,108 @@ pub async fn react_loop<P: Provider>(
                                 false,
                             )
                         }
-                    } else {
-                        (
-                            match &config.tool_error_formatter {
-                                Some(f) => f(&call.name, &e.to_string()),
-                                None => format_tool_error(&e),
-                            },
-                            false,
-                        )
                     }
+                };
+                // Append tool result to context
+                let result_msg =
+                    InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
+                if let Err(err) = ctx.inject_message(result_msg).await {
+                    return structured_exit_output(err, ctx);
                 }
-            };
-
-            // Append tool result to context
-            let result_msg =
-                InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
-            if let Err(err) = ctx.inject_message(result_msg).await {
-                return structured_exit_output(err, ctx);
+            }
+        } else {
+            for call in &tool_calls {
+                let tool_span = tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
+                let start = std::time::Instant::now();
+                let tool_result = tracing::Instrument::instrument(
+                    ctx.run(ExecuteTool::new(
+                        call.clone(),
+                        tools.clone(),
+                        dispatch_ctx.clone(),
+                    )),
+                    tool_span,
+                )
+                .await;
+                let (result_str, is_error) = match tool_result {
+                    Ok(value) => {
+                        tracing::debug!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, "tool succeeded");
+                        // Detect HandoffTool sentinel BEFORE formatting — check the raw
+                        // Value so the check is independent of any custom formatter.
+                        if is_handoff_sentinel(&value) {
+                            let target = value
+                                .get("target")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let reason = value
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            ctx.push_effect(Effect::new(EffectKind::Handoff {
+                                operator: OperatorId::from(target.as_str()),
+                                context: HandoffContext {
+                                    task: Content::text(reason),
+                                    history: None,
+                                    metadata: None,
+                                },
+                            }));
+                            return Ok(make_context_output(
+                                Content::text(""),
+                                ExitReason::HandedOff,
+                                ctx,
+                            ));
+                        }
+                        let s = match &config.tool_result_formatter {
+                            Some(f) => f(&call.name, &value),
+                            None => format_tool_result(&value),
+                        };
+                        (s, false)
+                    }
+                    Err(e) => {
+                        tracing::warn!(tool = %call.name, duration_ms = start.elapsed().as_millis() as u64, error = %e, "tool failed");
+                        // InvalidInput: feed schema + error back so the model can correct the call.
+                        if let EngineError::Tool(ToolError::InvalidInput(ref msg)) = e {
+                            let count = tool_retry_counts.entry(call.id.clone()).or_insert(0);
+                            if *count < config.max_tool_retries {
+                                *count += 1;
+                                let schema_str = tools
+                                    .get(&call.name)
+                                    .map(|t| t.input_schema().to_string())
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                (
+                                    format!(
+                                        "Tool '{}' rejected the input: {}\nExpected schema: {}\nPlease fix the input and try again.",
+                                        call.name, msg, schema_str
+                                    ),
+                                    true,
+                                )
+                            } else {
+                                (
+                                    match &config.tool_error_formatter {
+                                        Some(f) => f(&call.name, &e.to_string()),
+                                        None => format_tool_error(&e),
+                                    },
+                                    false,
+                                )
+                            }
+                        } else {
+                            (
+                                match &config.tool_error_formatter {
+                                    Some(f) => f(&call.name, &e.to_string()),
+                                    None => format_tool_error(&e),
+                                },
+                                false,
+                            )
+                        }
+                    }
+                };
+                // Append tool result to context
+                let result_msg =
+                    InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
+                if let Err(err) = ctx.inject_message(result_msg).await {
+                    return structured_exit_output(err, ctx);
+                }
             }
         }
     }
@@ -973,7 +1097,7 @@ mod tests {
     use layer0::id::OperatorId;
     use layer0::{DispatchContext, DispatchId};
     use serde_json::json;
-    use skg_tool::{ToolDyn, ToolError};
+    use skg_tool::{ToolConcurrencyHint, ToolDyn, ToolError};
     use skg_turn::provider::ProviderError;
     use skg_turn::test_utils::{TestProvider, error_provider_transient};
     use std::pin::Pin;
@@ -2165,7 +2289,7 @@ mod tests {
             }),
         )]);
         // Pre-seed an effect that must survive the exit path.
-        ctx.push_effect(Effect::new(0, EffectKind::Progress {
+        ctx.push_effect(Effect::new(EffectKind::Progress {
             content: Content::text("sentinel-effect"),
         }));
         // Trip the budget guard: turns_completed already at limit.
@@ -2202,17 +2326,17 @@ mod tests {
     fn resolve_approve_all() {
         use layer0::approval::ApprovalResponse;
         let effects = vec![
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "x": 1 }),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "x": 2 }),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({ "x": 3 }),
@@ -2229,17 +2353,17 @@ mod tests {
     fn resolve_reject_all() {
         use layer0::approval::ApprovalResponse;
         let effects = vec![
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({}),
@@ -2260,17 +2384,17 @@ mod tests {
     fn resolve_partial() {
         use layer0::approval::ApprovalResponse;
         let effects = vec![
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({}),
@@ -2293,12 +2417,12 @@ mod tests {
     fn resolve_modify() {
         use layer0::approval::ApprovalResponse;
         let effects = vec![
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "path": "/etc/passwd" }),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "path": "/tmp/safe" }),
@@ -2339,17 +2463,17 @@ mod tests {
     fn resolve_batch() {
         use layer0::approval::{ApprovalResponse, ToolCallAction, ToolCallDecision};
         let effects = vec![
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "x": 1 }),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "x": 2 }),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({ "x": 3 }),
@@ -2397,12 +2521,12 @@ mod tests {
         use layer0::approval::ApprovalResponse;
         // Response includes a call_id not present in pending — silently ignored.
         let effects = vec![
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
             }),
-            Effect::new(0, EffectKind::ToolApprovalRequired {
+            Effect::new(EffectKind::ToolApprovalRequired {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
@@ -2840,6 +2964,130 @@ mod tests {
         assert!(
             output.effects.iter().all(|e| !matches!(e.kind, EffectKind::Handoff { .. })),
             "no Handoff effect must be emitted for a normal tool result"
+        );
+    }
+
+    // ── Concurrency tests ─────────────────────────────────────────────────────
+
+    /// A tool that sleeps for a fixed duration before returning. Used to probe
+    /// whether tool calls run concurrently or sequentially.
+    struct SlowTool {
+        name: &'static str,
+        delay_ms: u64,
+        hint: ToolConcurrencyHint,
+    }
+
+    impl ToolDyn for SlowTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "slow tool"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({ "type": "object" })
+        }
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &DispatchContext,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
+        {
+            let delay_ms = self.delay_ms;
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                Ok(json!("done"))
+            })
+        }
+        fn concurrency_hint(&self) -> ToolConcurrencyHint {
+            self.hint
+        }
+    }
+
+    /// Two Shared tools with a 50 ms delay each must finish in less than the
+    /// time they would take running sequentially (< 90 ms vs ~100 ms).
+    #[tokio::test]
+    async fn shared_tools_run_concurrently() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_calls(vec![
+            ("slow_a", "c1", json!({})),
+            ("slow_b", "c2", json!({})),
+        ]);
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(SlowTool {
+            name: "slow_a",
+            delay_ms: 50,
+            hint: ToolConcurrencyHint::Shared,
+        }));
+        tools.register(Arc::new(SlowTool {
+            name: "slow_b",
+            delay_ms: 50,
+            hint: ToolConcurrencyHint::Shared,
+        }));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+
+        let start = Instant::now();
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        // Sequential execution would take ≥ 100 ms. Parallel completes in ~50 ms.
+        // Allow generous headroom for slow CI: must be well under 2× single-tool time.
+        assert!(
+            elapsed < Duration::from_millis(90),
+            "expected parallel execution (< 90 ms) but took {elapsed:?}"
+        );
+    }
+
+    /// When ANY tool in a turn is Exclusive, all calls fall back to sequential.
+    /// Verify that the loop still produces the correct output and both tool
+    /// results are injected — correctness of the fallback path.
+    #[tokio::test]
+    async fn exclusive_tool_runs_sequentially() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_calls(vec![
+            ("exclusive_tool", "c1", json!({})),
+            ("shared_tool", "c2", json!({})),
+        ]);
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        // Exclusive is the default; this tool would prevent parallel dispatch.
+        tools.register(Arc::new(SlowTool {
+            name: "exclusive_tool",
+            delay_ms: 10,
+            hint: ToolConcurrencyHint::Exclusive,
+        }));
+        tools.register(Arc::new(SlowTool {
+            name: "shared_tool",
+            delay_ms: 10,
+            hint: ToolConcurrencyHint::Shared,
+        }));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")))
+            .await
+            .unwrap();
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+
+        let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        // Both tool results must appear in context so the second inference sees them.
+        assert_eq!(
+            ctx.metrics.tool_calls_total, 2,
+            "both tools must run when fallback is sequential"
         );
     }
 }

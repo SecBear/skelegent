@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::content::Content;
+use layer0::context::{Message, Role};
 use layer0::dispatch::Dispatcher;
 use layer0::effect::{EffectKind, HandoffContext};
 use layer0::error::OperatorError;
@@ -34,10 +34,17 @@ fn next_dispatch_id() -> DispatchId {
 
 /// An operator that routes work to sub-agents using a [`SpeakerSelector`].
 ///
-/// The supervisor picks the first speaker, dispatches the input, and after
-/// each `HandedOff` exit uses the selector again to pick the next speaker.
-/// Routing policy (round-robin, random, LLM-ranked, …) lives entirely in the
-/// selector — the supervisor itself has no routing opinion.
+/// The supervisor picks the first speaker via the selector, then dispatches
+/// the input. After each `HandedOff` exit it determines the next speaker
+/// using the following hybrid rule:
+///
+/// 1. If the last [`EffectKind::Handoff`] effect names an `operator` that is
+///    present in `agents`, that operator is dispatched directly —
+///    bypassing the selector.
+/// 2. Otherwise the selector is consulted to choose the next speaker.
+///
+/// Routing policy (round-robin, random, LLM-ranked, …) lives in the
+/// selector; explicit targets in `Handoff` effects take precedence.
 ///
 /// # Termination
 /// * Returns immediately when any agent exits [`ExitReason::Complete`].
@@ -85,17 +92,25 @@ impl Operator for SupervisorOperator {
         let mut current_input = input;
         // Accumulated effects from every round.
         let mut all_effects: Vec<layer0::Effect> = Vec::new();
-        // Conversation history passed to the selector so it can make
-        // context-aware routing decisions.
-        let mut history: Vec<Content> = Vec::new();
+        // Conversation history passed to the selector for context-aware routing.
+        // Messages carry role + content so selectors can implement attribution-based
+        // routing (e.g., "don't repeat last speaker", "route after user turn").
+        let mut history: Vec<Message> = Vec::new();
+        // Explicit handoff target from the previous round, if any.
+        // Set in the HandedOff arm; consumed (and reset) at the top of each loop.
+        let mut explicit_next: Option<OperatorId> = None;
 
         for _ in 0..self.max_rounds {
-            let agent_id = self
-                .selector
-                .select(&self.agents, &history, ctx)
-                .await
-                .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
-
+            // Hybrid routing: honour an explicit registered target from the last
+            // Handoff effect; fall back to the selector otherwise.
+            let agent_id = match explicit_next.take().filter(|t| self.agents.contains(t)) {
+                Some(target) => target,
+                None => self
+                    .selector
+                    .select(&self.agents, &history, ctx)
+                    .await
+                    .map_err(|e| OperatorError::non_retryable(e.to_string()))?,
+            };
             let child_ctx = ctx.child(next_dispatch_id(), agent_id);
 
             let mut output = self
@@ -107,15 +122,18 @@ impl Operator for SupervisorOperator {
                 .await
                 .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
 
-            // Extract the handoff context from this round's effects BEFORE
-            // draining them, so we can use context.task as the next input.
-            let handoff_ctx: Option<HandoffContext> = output.effects.iter().rev().find_map(|e| {
-                if let EffectKind::Handoff { ref context, .. } = e.kind {
-                    Some(context.clone())
-                } else {
-                    None
-                }
-            });
+            // Extract the target operator and structured context from the last Handoff
+            // effect BEFORE draining them, so we can use context.task as next input.
+            let handoff: Option<(OperatorId, HandoffContext)> =
+                output.effects.iter().rev().find_map(|e| {
+                    if let EffectKind::Handoff { ref operator, ref context } = e.kind {
+                        Some((operator.clone(), context.clone()))
+                    } else {
+                        None
+                    }
+                });
+            let handoff_operator = handoff.as_ref().map(|(op, _)| op.clone());
+            let handoff_ctx = handoff.map(|(_, hctx)| hctx);
 
             // Absorb effects before examining the exit reason.
             all_effects.append(&mut output.effects);
@@ -133,13 +151,17 @@ impl Operator for SupervisorOperator {
                         .as_ref()
                         .map(|c| c.task.clone())
                         .unwrap_or_else(|| output.message.clone());
-                    history.push(next_task.clone());
+                    // Record as a User-role message so selectors see role + content.
+                    history.push(Message::new(Role::User, next_task.clone()));
                     let mut next_input = OperatorInput::new(next_task, TriggerType::Task);
                     // Forward conversation history if the handing-off operator supplied it.
                     if let Some(hist) = handoff_ctx.and_then(|c| c.history) {
                         next_input.context = Some(hist);
                     }
                     current_input = next_input;
+                    // Carry the explicit target into the next iteration.
+                    // It is consumed (and reset) at the top of the loop.
+                    explicit_next = handoff_operator;
                 }
                 // Unexpected exit (budget, timeout, error, …) — surface immediately.
                 _ => {
@@ -208,7 +230,7 @@ mod tests {
     ///
     /// `task` is the explicit next-step message the handing-off operator supplies.
     /// Carries a `target` ID so the swarm tests can inspect transition logic,
-    /// but the supervisor ignores the handoff target — it uses the selector.
+    /// but the supervisor honours the target when it names a registered agent.
     struct HandoffOp {
         target: OperatorId,
         reply: String,
@@ -232,7 +254,7 @@ mod tests {
             } else {
                 self.task.clone()
             };
-            out.effects.push(Effect::new(0, EffectKind::Handoff {
+            out.effects.push(Effect::new(EffectKind::Handoff {
                 operator: self.target.clone(),
                 context: HandoffContext {
                     task: Content::text(next_task),
@@ -345,7 +367,7 @@ mod tests {
                     Content::text("output-message-not-the-task"),
                     ExitReason::HandedOff,
                 );
-                out.effects.push(Effect::new(0, EffectKind::Handoff {
+                out.effects.push(Effect::new(EffectKind::Handoff {
                     operator: OperatorId::new("receiver"),
                     context: HandoffContext {
                         task: Content::text("explicit-task-for-receiver"),
@@ -407,4 +429,110 @@ mod tests {
             "receiver must get context.task, not output.message"
         );
     }
+    /// When a `Handoff` effect names a registered agent, the supervisor routes
+    /// to that agent directly — bypassing the selector.
+    ///
+    /// Setup: `FixedSelector` always returns `agent-a`. `agent-a` emits a
+    /// `Handoff` targeting `agent-b`. If the selector were consulted again it
+    /// would keep returning `agent-a` and the run would exhaust `max_rounds`.
+    /// Correct behaviour: `agent-b` is dispatched on round 2 and completes.
+    #[tokio::test]
+    async fn supervisor_honors_explicit_handoff_target() {
+        struct FixedSelector(OperatorId);
+        #[async_trait]
+        impl SpeakerSelector for FixedSelector {
+            async fn select(
+                &self,
+                _candidates: &[OperatorId],
+                _history: &[Message],
+                _ctx: &DispatchContext,
+            ) -> Result<OperatorId, crate::selector::SelectorError> {
+                Ok(self.0.clone())
+            }
+        }
+
+        let mut orch = LocalOrch::new();
+        // agent-a hands off to agent-b explicitly.
+        orch.register(
+            OperatorId::new("agent-a"),
+            Arc::new(HandoffOp {
+                target: OperatorId::new("agent-b"),
+                reply: "from-a".into(),
+                task: "".into(),
+            }),
+        );
+        orch.register(
+            OperatorId::new("agent-b"),
+            Arc::new(CompleteOp { reply: "from-b".into() }),
+        );
+        let orch = Arc::new(orch);
+
+        // Selector always returns agent-a — if it were consulted after the
+        // handoff the run would never complete within max_rounds.
+        let supervisor = SupervisorOperator::new(
+            vec![OperatorId::new("agent-a"), OperatorId::new("agent-b")],
+            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
+            Arc::new(FixedSelector(OperatorId::new("agent-a"))),
+            3,
+        );
+
+        let output = supervisor
+            .execute(simple_input("start"), &test_ctx("sup-explicit"))
+            .await
+            .expect("supervisor should complete");
+
+        assert_eq!(output.exit_reason, ER::Complete, "must complete, not exhaust rounds");
+        assert_eq!(
+            output.message.as_text().unwrap_or(""),
+            "from-b",
+            "output must come from agent-b (explicit handoff target)"
+        );
+    }
+
+    /// When a `Handoff` effect names an operator that is NOT in the registered
+    /// agent pool, the supervisor falls back to the selector.
+    ///
+    /// Setup: `agent-a` emits a `Handoff` targeting `ghost-agent` (unregistered).
+    /// Round-robin selector gives `agent-a` first, then `agent-b`. Because
+    /// `ghost-agent` is not in agents, the selector is consulted for round 2
+    /// and picks `agent-b`, which completes.
+    #[tokio::test]
+    async fn supervisor_uses_selector_when_no_target() {
+        let mut orch = LocalOrch::new();
+        // agent-a hands off to an unregistered target.
+        orch.register(
+            OperatorId::new("agent-a"),
+            Arc::new(HandoffOp {
+                target: OperatorId::new("ghost-agent"), // not in agents list
+                reply: "from-a".into(),
+                task: "".into(),
+            }),
+        );
+        orch.register(
+            OperatorId::new("agent-b"),
+            Arc::new(CompleteOp { reply: "from-b".into() }),
+        );
+        let orch = Arc::new(orch);
+
+        // Round-robin: first call → agent-a, second call → agent-b.
+        let supervisor = SupervisorOperator::new(
+            vec![OperatorId::new("agent-a"), OperatorId::new("agent-b")],
+            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
+            Arc::new(RoundRobinSelector::new()),
+            3,
+        );
+
+        let output = supervisor
+            .execute(simple_input("start"), &test_ctx("sup-selector-fallback"))
+            .await
+            .expect("supervisor should complete");
+
+        assert_eq!(output.exit_reason, ER::Complete);
+        assert_eq!(
+            output.message.as_text().unwrap_or(""),
+            "from-b",
+            "selector fallback must route to agent-b"
+        );
+    }
+
 }
