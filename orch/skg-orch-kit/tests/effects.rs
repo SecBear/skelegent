@@ -109,7 +109,11 @@ async fn delegate_handoff_and_signal_return_correct_outcomes() {
     // Handoff returns EffectOutcome::Handoff
     let effect = Effect::new(EffectKind::Handoff {
         operator: OperatorId::new("handoff_target"),
-        metadata: Some(json!({"ticket": 123})),
+        context: layer0::effect::HandoffContext {
+            task: layer0::Content::text("handoff task"),
+            history: None,
+            metadata: Some(json!({"ticket": 123})),
+        },
     });
     let outcome = handler.handle(&effect, &ctx).await.expect("handoff ok");
     assert!(

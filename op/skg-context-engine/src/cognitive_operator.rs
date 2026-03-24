@@ -68,19 +68,29 @@ impl<P: Provider> CognitiveOperator<P> {
     ///
     /// `operator_id` identifies this operator in dispatch traces and tool
     /// call metadata.
+    ///
+    /// Tools are automatically wrapped in a `ToolRegistryOrchestrator` so
+    /// sub-dispatch goes through the `Dispatcher` protocol by default.
+    /// Use [`.with_dispatcher()`] to override with a custom dispatcher.
     pub fn new(
         operator_id: impl Into<OperatorId>,
         provider: P,
         tools: ToolRegistry,
         config: ReactLoopConfig,
     ) -> Self {
+        // Auto-wrap tools in a ToolRegistryOrchestrator so the dispatcher-
+        // backed execution path is the default. Callers that need a custom
+        // dispatcher can override with .with_dispatcher().
+        let default_dispatcher: Arc<dyn Dispatcher> = Arc::new(
+            skg_tool::adapter::ToolRegistryOrchestrator::new(tools.clone()),
+        );
         Self {
             provider,
             tools,
             operator_id: operator_id.into(),
             config,
             rule_factory: None,
-            dispatcher: None,
+            dispatcher: Some(default_dispatcher),
         }
     }
 
