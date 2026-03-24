@@ -126,7 +126,11 @@ impl Operator for SupervisorOperator {
             // effect BEFORE draining them, so we can use context.task as next input.
             let handoff: Option<(OperatorId, HandoffContext)> =
                 output.effects.iter().rev().find_map(|e| {
-                    if let EffectKind::Handoff { ref operator, ref context } = e.kind {
+                    if let EffectKind::Handoff {
+                        ref operator,
+                        ref context,
+                    } = e.kind
+                    {
                         Some((operator.clone(), context.clone()))
                     } else {
                         None
@@ -245,10 +249,8 @@ mod tests {
             _input: OperatorInput,
             _ctx: &DispatchContext,
         ) -> Result<OperatorOutput, OperatorError> {
-            let mut out = OperatorOutput::new(
-                Content::text(self.reply.clone()),
-                ExitReason::HandedOff,
-            );
+            let mut out =
+                OperatorOutput::new(Content::text(self.reply.clone()), ExitReason::HandedOff);
             let next_task = if self.task.is_empty() {
                 self.reply.clone()
             } else {
@@ -391,8 +393,7 @@ mod tests {
                 input: OperatorInput,
                 _ctx: &DispatchContext,
             ) -> Result<OperatorOutput, OperatorError> {
-                *self.received.lock().unwrap() =
-                    input.message.as_text().unwrap_or("").to_string();
+                *self.received.lock().unwrap() = input.message.as_text().unwrap_or("").to_string();
                 Ok(OperatorOutput::new(
                     Content::text("done"),
                     ExitReason::Complete,
@@ -405,7 +406,9 @@ mod tests {
         orch.register(OperatorId::new("sender"), Arc::new(ExplicitTaskHandoffOp));
         orch.register(
             OperatorId::new("receiver"),
-            Arc::new(RecordingOp { received: received.clone() }),
+            Arc::new(RecordingOp {
+                received: received.clone(),
+            }),
         );
         let orch = Arc::new(orch);
 
@@ -463,7 +466,9 @@ mod tests {
         );
         orch.register(
             OperatorId::new("agent-b"),
-            Arc::new(CompleteOp { reply: "from-b".into() }),
+            Arc::new(CompleteOp {
+                reply: "from-b".into(),
+            }),
         );
         let orch = Arc::new(orch);
 
@@ -481,7 +486,11 @@ mod tests {
             .await
             .expect("supervisor should complete");
 
-        assert_eq!(output.exit_reason, ER::Complete, "must complete, not exhaust rounds");
+        assert_eq!(
+            output.exit_reason,
+            ER::Complete,
+            "must complete, not exhaust rounds"
+        );
         assert_eq!(
             output.message.as_text().unwrap_or(""),
             "from-b",
@@ -510,7 +519,9 @@ mod tests {
         );
         orch.register(
             OperatorId::new("agent-b"),
-            Arc::new(CompleteOp { reply: "from-b".into() }),
+            Arc::new(CompleteOp {
+                reply: "from-b".into(),
+            }),
         );
         let orch = Arc::new(orch);
 
@@ -534,5 +545,4 @@ mod tests {
             "selector fallback must route to agent-b"
         );
     }
-
 }

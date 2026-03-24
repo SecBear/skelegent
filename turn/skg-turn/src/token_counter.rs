@@ -103,8 +103,8 @@ pub mod limits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer0::context::{Message, Role};
     use layer0::content::Content;
+    use layer0::context::{Message, Role};
 
     fn text_message(text: &str) -> Message {
         Message::new(Role::User, Content::Text(text.to_string()))
@@ -155,6 +155,9 @@ mod tests {
         let msgs = vec![text_message("hello world test message content")];
         let default_count = default_counter.count_messages(&msgs);
         let custom_count = counter.count_messages(&msgs);
-        assert!(custom_count <= default_count, "larger ratio should produce fewer or equal tokens");
+        assert!(
+            custom_count <= default_count,
+            "larger ratio should produce fewer or equal tokens"
+        );
     }
 }

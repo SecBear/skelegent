@@ -134,7 +134,6 @@ impl Operator for ParallelOperator {
     }
 }
 
-
 /// Splitter function: given one input, produces N inputs to fan out to the same operator.
 ///
 /// An empty return is valid — the reducer receives an empty `Vec` and the

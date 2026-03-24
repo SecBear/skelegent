@@ -18,6 +18,7 @@ use layer0::DispatchContext;
 use layer0::approval::{ApprovalResponse, ToolCallAction};
 use layer0::content::Content;
 use layer0::context::{Message, Role};
+use layer0::dispatch::Dispatcher;
 use layer0::duration::DurationMs;
 use layer0::effect::{Effect, EffectKind, HandoffContext};
 use layer0::id::OperatorId;
@@ -27,9 +28,9 @@ use skg_tool::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use std::collections::HashMap;
 
 /// Predicate for dynamic tool availability.
 ///
@@ -218,7 +219,6 @@ pub fn is_handoff_sentinel(value: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
-
 /// Check which tool calls require approval and return the corresponding effects.
 ///
 /// Returns a vec of `Effect::ToolApprovalRequired` for each tool call where
@@ -235,11 +235,13 @@ pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<E
                 .get(&call.name)
                 .is_some_and(|t| t.approval_policy().requires_approval(&call.input))
         })
-        .map(|call| Effect::new(EffectKind::ToolApprovalRequired {
-            tool_name: call.name.clone(),
-            call_id: call.id.clone(),
-            input: call.input.clone(),
-        }))
+        .map(|call| {
+            Effect::new(EffectKind::ToolApprovalRequired {
+                tool_name: call.name.clone(),
+                call_id: call.id.clone(),
+                input: call.input.clone(),
+            })
+        })
         .collect()
 }
 
@@ -573,7 +575,8 @@ pub async fn react_loop<P: Provider>(
                     let call_name = call.name.clone();
                     let input = call.input.clone();
                     let d_ctx = dispatch_ctx.clone();
-                    let span = tracing::info_span!("tool_call", tool = %call_name, call_id = %call.id);
+                    let span =
+                        tracing::info_span!("tool_call", tool = %call_name, call_id = %call.id);
                     tracing::Instrument::instrument(
                         async move {
                             let start = std::time::Instant::now();
@@ -673,14 +676,19 @@ pub async fn react_loop<P: Provider>(
             }
         } else {
             for call in &tool_calls {
-                let tool_span = tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
+                let tool_span =
+                    tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
                 let start = std::time::Instant::now();
                 let tool_result = tracing::Instrument::instrument(
-                    ctx.run(ExecuteTool::new(
-                        call.clone(),
-                        tools.clone(),
-                        dispatch_ctx.clone(),
-                    )),
+                    ctx.run(
+                        ExecuteTool::new(call.clone(), tools.clone(), dispatch_ctx.clone())
+                            .maybe_with_dispatcher(
+                                dispatch_ctx
+                                    .extensions()
+                                    .get::<Arc<dyn Dispatcher>>()
+                                    .cloned(),
+                            ),
+                    ),
                     tool_span,
                 )
                 .await;
@@ -1020,11 +1028,15 @@ async fn dispatch_function_tools(
             continue;
         }
         let (result_str, is_error) = match ctx
-            .run(ExecuteTool::new(
-                call.clone(),
-                tools.clone(),
-                dispatch_ctx.clone(),
-            ))
+            .run(
+                ExecuteTool::new(call.clone(), tools.clone(), dispatch_ctx.clone())
+                    .maybe_with_dispatcher(
+                        dispatch_ctx
+                            .extensions()
+                            .get::<Arc<dyn Dispatcher>>()
+                            .cloned(),
+                    ),
+            )
             .await
         {
             Ok(value) => {
@@ -2679,15 +2691,9 @@ mod tests {
             _input: serde_json::Value,
             _ctx: &DispatchContext,
         ) -> Pin<
-            Box<
-                dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>
-                    + Send
-                    + '_,
-            >,
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {
-            Box::pin(async {
-                Err(ToolError::InvalidInput("missing required field 'q'".into()))
-            })
+            Box::pin(async { Err(ToolError::InvalidInput("missing required field 'q'".into())) })
         }
     }
 
@@ -2708,8 +2714,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let config = ReactLoopConfig {
             max_tool_retries: 2,
             ..ReactLoopConfig::default()
@@ -2747,8 +2752,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let config = ReactLoopConfig {
             max_tool_retries: 0,
             ..ReactLoopConfig::default()
@@ -2791,8 +2795,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         // max_tool_retries = 1: first InvalidInput retries, second falls through.
         let config = ReactLoopConfig {
             max_tool_retries: 1,
@@ -2806,7 +2809,9 @@ mod tests {
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let messages = ctx.messages();
         assert!(
-            messages.iter().any(|m| m.text_content().contains("Expected schema")),
+            messages
+                .iter()
+                .any(|m| m.text_content().contains("Expected schema")),
             "first InvalidInput must inject retry message with schema"
         );
         assert!(
@@ -2831,8 +2836,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let config = ReactLoopConfig {
             max_tool_retries: 2,
             ..ReactLoopConfig::default()
@@ -2902,8 +2906,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
             .await
             .unwrap();
@@ -2920,7 +2923,11 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.kind, EffectKind::Handoff { .. }))
             .collect();
-        assert_eq!(handoff_effects.len(), 1, "exactly one Handoff effect must be emitted");
+        assert_eq!(
+            handoff_effects.len(),
+            1,
+            "exactly one Handoff effect must be emitted"
+        );
         match &handoff_effects[0].kind {
             EffectKind::Handoff { operator, context } => {
                 assert_eq!(operator.as_str(), "routing-agent");
@@ -2949,8 +2956,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
             .await
             .unwrap();
@@ -2962,7 +2968,10 @@ mod tests {
             "loop must continue after a non-handoff tool result"
         );
         assert!(
-            output.effects.iter().all(|e| !matches!(e.kind, EffectKind::Handoff { .. })),
+            output
+                .effects
+                .iter()
+                .all(|e| !matches!(e.kind, EffectKind::Handoff { .. })),
             "no Handoff effect must be emitted for a normal tool result"
         );
     }
@@ -2991,8 +3000,9 @@ mod tests {
             &self,
             _input: serde_json::Value,
             _ctx: &DispatchContext,
-        ) -> Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
-        {
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
+        > {
             let delay_ms = self.delay_ms;
             Box::pin(async move {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;

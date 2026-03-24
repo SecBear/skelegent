@@ -69,9 +69,9 @@ pub(crate) fn compute_cost(pricing: &ModelPricing, usage: &TokenUsage) -> Decima
 /// Sonnet-class: $3.00 input / $15.00 output per MTok
 fn sonnet() -> ModelPricing {
     ModelPricing {
-        input_per_token: Decimal::new(3, 6),    // 3.00e-6  = $3.00/MTok
-        output_per_token: Decimal::new(15, 6),  // 15.0e-6  = $15.00/MTok
-        cache_read_per_token: Some(Decimal::new(3, 7)),   // 0.30e-6  = $0.30/MTok (10%)
+        input_per_token: Decimal::new(3, 6),   // 3.00e-6  = $3.00/MTok
+        output_per_token: Decimal::new(15, 6), // 15.0e-6  = $15.00/MTok
+        cache_read_per_token: Some(Decimal::new(3, 7)), // 0.30e-6  = $0.30/MTok (10%)
         cache_write_per_token: Some(Decimal::new(375, 8)), // 3.75e-6  = $3.75/MTok (125%)
     }
 }
@@ -79,9 +79,9 @@ fn sonnet() -> ModelPricing {
 /// Haiku-class: $0.25 input / $1.25 output per MTok
 fn haiku() -> ModelPricing {
     ModelPricing {
-        input_per_token: Decimal::new(25, 8),    // 25e-8   = $0.25/MTok
-        output_per_token: Decimal::new(125, 8),  // 125e-8  = $1.25/MTok
-        cache_read_per_token: Some(Decimal::new(25, 9)),    // 25e-9   = $0.025/MTok (10%)
+        input_per_token: Decimal::new(25, 8),   // 25e-8   = $0.25/MTok
+        output_per_token: Decimal::new(125, 8), // 125e-8  = $1.25/MTok
+        cache_read_per_token: Some(Decimal::new(25, 9)), // 25e-9   = $0.025/MTok (10%)
         cache_write_per_token: Some(Decimal::new(3125, 10)), // 3125e-10 = $0.3125/MTok (125%)
     }
 }
@@ -89,9 +89,9 @@ fn haiku() -> ModelPricing {
 /// Opus-class: $15.00 input / $75.00 output per MTok
 fn opus() -> ModelPricing {
     ModelPricing {
-        input_per_token: Decimal::new(15, 6),    // 15e-6   = $15.00/MTok
-        output_per_token: Decimal::new(75, 6),   // 75e-6   = $75.00/MTok
-        cache_read_per_token: Some(Decimal::new(15, 7)),    // 15e-7   = $1.50/MTok  (10%)
+        input_per_token: Decimal::new(15, 6),  // 15e-6   = $15.00/MTok
+        output_per_token: Decimal::new(75, 6), // 75e-6   = $75.00/MTok
+        cache_read_per_token: Some(Decimal::new(15, 7)), // 15e-7   = $1.50/MTok  (10%)
         cache_write_per_token: Some(Decimal::new(1875, 8)), // 1875e-8 = $18.75/MTok (125%)
     }
 }
@@ -158,7 +158,11 @@ mod tests {
     fn unknown_model_defaults_to_sonnet_pricing() {
         // Unknown model → Sonnet-class default
         let cost = cost_simple("claude-unknown-future-model", 1_000_000, 1_000_000);
-        assert_eq!(cost, Decimal::new(1800, 2), "unknown model should use Sonnet pricing");
+        assert_eq!(
+            cost,
+            Decimal::new(1800, 2),
+            "unknown model should use Sonnet pricing"
+        );
     }
 
     #[test]
@@ -192,6 +196,9 @@ mod tests {
             ..usage.clone()
         };
         let p = lookup("claude-sonnet-4");
-        assert_eq!(compute_cost(&p, &usage), compute_cost(&lookup("claude-sonnet-4"), &with_cache));
+        assert_eq!(
+            compute_cost(&p, &usage),
+            compute_cost(&lookup("claude-sonnet-4"), &with_cache)
+        );
     }
 }

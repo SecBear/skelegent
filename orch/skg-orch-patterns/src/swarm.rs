@@ -119,7 +119,11 @@ impl Operator for SwarmOperator {
             // before moving them into the accumulator.
             let handoff: Option<(OperatorId, HandoffContext)> =
                 output.effects.iter().rev().find_map(|e| {
-                    if let EffectKind::Handoff { ref operator, ref context } = e.kind {
+                    if let EffectKind::Handoff {
+                        ref operator,
+                        ref context,
+                    } = e.kind
+                    {
                         Some((operator.clone(), context.clone()))
                     } else {
                         None
@@ -137,10 +141,8 @@ impl Operator for SwarmOperator {
                 ExitReason::HandedOff => {
                     // Handoff cap enforced before any routing work.
                     if handoffs >= self.max_handoffs {
-                        let mut out = OperatorOutput::new(
-                            output.message.clone(),
-                            ExitReason::MaxTurns,
-                        );
+                        let mut out =
+                            OperatorOutput::new(output.message.clone(), ExitReason::MaxTurns);
                         out.effects = all_effects;
                         return Ok(out);
                     }
@@ -244,7 +246,9 @@ impl SwarmBuilder {
     /// Panics if [`entry`](Self::entry) was never called.
     pub fn build(self) -> SwarmOperator {
         SwarmOperator {
-            entry: self.entry.expect("SwarmBuilder: entry operator is required"),
+            entry: self
+                .entry
+                .expect("SwarmBuilder: entry operator is required"),
             transitions: self.transitions,
             dispatcher: self.dispatcher,
             max_handoffs: self.max_handoffs,
@@ -311,10 +315,8 @@ mod tests {
             _input: OperatorInput,
             _ctx: &DispatchContext,
         ) -> Result<OperatorOutput, OperatorError> {
-            let mut out = OperatorOutput::new(
-                Content::text(self.reply.clone()),
-                ExitReason::HandedOff,
-            );
+            let mut out =
+                OperatorOutput::new(Content::text(self.reply.clone()), ExitReason::HandedOff);
             out.effects.push(Effect::new(EffectKind::Handoff {
                 operator: self.target.clone(),
                 context: HandoffContext {
@@ -346,13 +348,12 @@ mod tests {
         );
         let orch = Arc::new(orch);
 
-        let swarm = SwarmOperator::builder(
-            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
-        )
-        .entry(OperatorId::new("op-a"))
-        .transition(OperatorId::new("op-a"), OperatorId::new("op-b"))
-        .max_handoffs(5)
-        .build();
+        let swarm =
+            SwarmOperator::builder(Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>)
+                .entry(OperatorId::new("op-a"))
+                .transition(OperatorId::new("op-a"), OperatorId::new("op-b"))
+                .max_handoffs(5)
+                .build();
 
         let output = swarm
             .execute(simple_input("task"), &test_ctx("swarm"))
@@ -390,13 +391,12 @@ mod tests {
         );
         let orch = Arc::new(orch);
 
-        let swarm = SwarmOperator::builder(
-            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
-        )
-        .entry(OperatorId::new("op-a"))
-        .transition(OperatorId::new("op-a"), OperatorId::new("op-b")) // B, not C
-        .max_handoffs(5)
-        .build();
+        let swarm =
+            SwarmOperator::builder(Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>)
+                .entry(OperatorId::new("op-a"))
+                .transition(OperatorId::new("op-a"), OperatorId::new("op-b")) // B, not C
+                .max_handoffs(5)
+                .build();
 
         let result = swarm
             .execute(simple_input("task"), &test_ctx("swarm-reject"))
@@ -456,9 +456,11 @@ mod tests {
                 input: OperatorInput,
                 _ctx: &DispatchContext,
             ) -> Result<OperatorOutput, OperatorError> {
-                *self.received.lock().unwrap() =
-                    input.message.as_text().unwrap_or("").to_string();
-                Ok(OperatorOutput::new(Content::text("done"), ExitReason::Complete))
+                *self.received.lock().unwrap() = input.message.as_text().unwrap_or("").to_string();
+                Ok(OperatorOutput::new(
+                    Content::text("done"),
+                    ExitReason::Complete,
+                ))
             }
         }
 
@@ -467,17 +469,18 @@ mod tests {
         orch.register(OperatorId::new("sender"), Arc::new(DistinctTaskOp));
         orch.register(
             OperatorId::new("receiver"),
-            Arc::new(RecordingOp { received: received.clone() }),
+            Arc::new(RecordingOp {
+                received: received.clone(),
+            }),
         );
         let orch = Arc::new(orch);
 
-        let swarm = SwarmOperator::builder(
-            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
-        )
-        .entry(OperatorId::new("sender"))
-        .transition(OperatorId::new("sender"), OperatorId::new("receiver"))
-        .max_handoffs(5)
-        .build();
+        let swarm =
+            SwarmOperator::builder(Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>)
+                .entry(OperatorId::new("sender"))
+                .transition(OperatorId::new("sender"), OperatorId::new("receiver"))
+                .max_handoffs(5)
+                .build();
 
         let output = swarm
             .execute(simple_input("start"), &test_ctx("swarm-task"))

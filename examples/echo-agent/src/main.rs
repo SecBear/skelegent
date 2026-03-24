@@ -13,9 +13,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use layer0::content::Content;
 use layer0::operator::{Operator, OperatorInput, TriggerType};
 use layer0::{DispatchContext, DispatchId, OperatorId};
-use layer0::content::Content;
 use skg_context_engine::CognitiveBuilder;
 use skg_tool::{ToolDyn, ToolError, ToolRegistry};
 use skg_turn::test_utils::{TestProvider, make_text_response, make_tool_call_response};
@@ -59,9 +59,7 @@ impl ToolDyn for GreetTool {
         _ctx: &DispatchContext,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
         Box::pin(async move {
-            let name = input["name"]
-                .as_str()
-                .unwrap_or("World");
+            let name = input["name"].as_str().unwrap_or("World");
             Ok(serde_json::json!(format!("Hello, {}!", name)))
         })
     }
@@ -81,8 +79,8 @@ fn build_provider() -> TestProvider {
     TestProvider::with_responses(vec![
         // Turn 1: the model decides to call the `greet` tool.
         make_tool_call_response(
-            "greet",           // tool name
-            "call_001",        // tool call ID (opaque string, echoed back)
+            "greet",    // tool name
+            "call_001", // tool call ID (opaque string, echoed back)
             serde_json::json!({"name": "World"}),
         ),
         // Turn 2: the model produces a final text answer after seeing the result.
@@ -113,10 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // `DispatchContext` carries the dispatch ID and operator ID used in traces
     // and tool metadata. For a standalone example, use any stable string IDs.
-    let input = OperatorInput::new(
-        Content::text("Please greet the world"),
-        TriggerType::User,
-    );
+    let input = OperatorInput::new(Content::text("Please greet the world"), TriggerType::User);
     let ctx = DispatchContext::new(
         DispatchId::new("echo-run-001"),
         OperatorId::new("echo-agent"),
@@ -126,7 +121,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 6: Inspect and print the output.
     println!("Exit reason : {:?}", output.exit_reason);
-    println!("Response    : {}", output.message.as_text().unwrap_or("(no text)"));
+    println!(
+        "Response    : {}",
+        output.message.as_text().unwrap_or("(no text)")
+    );
     println!("Effects     : {}", output.effects.len());
     println!(
         "Tokens      : in={}, out={}",

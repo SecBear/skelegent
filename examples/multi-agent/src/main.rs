@@ -157,13 +157,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // sees the `{"__handoff": true, ...}` sentinel it emits Effect::Handoff and
     // exits with ExitReason::HandedOff; the SwarmOperator then dispatches the
     // next agent named in the effect.
-    let triage_provider = TestProvider::with_responses(vec![
-        make_tool_call_response(
-            "transfer_to_billing-agent",
-            "call-001",
-            serde_json::json!({ "reason": "Customer needs help with a billing charge" }),
-        ),
-    ]);
+    let triage_provider = TestProvider::with_responses(vec![make_tool_call_response(
+        "transfer_to_billing-agent",
+        "call-001",
+        serde_json::json!({ "reason": "Customer needs help with a billing charge" }),
+    )]);
     let mut triage_tools = ToolRegistry::new();
     triage_tools.register(Arc::new(HandoffTool::new(
         OperatorId::new("billing-agent"),
@@ -268,10 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── execution ────────────────────────────────────────────────────────────
 
     let ctx = DispatchContext::new(DispatchId::new("demo"), OperatorId::new("swarm"));
-    let input = OperatorInput::new(
-        Content::text("I need help with my bill"),
-        TriggerType::User,
-    );
+    let input = OperatorInput::new(Content::text("I need help with my bill"), TriggerType::User);
 
     println!("User: I need help with my bill\n");
     println!("--- executing swarm (triage → billing) ---\n");
@@ -280,7 +275,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── results ──────────────────────────────────────────────────────────────
 
-    println!("Final response:  {}", output.message.as_text().unwrap_or("(no text)"));
+    println!(
+        "Final response:  {}",
+        output.message.as_text().unwrap_or("(no text)")
+    );
     println!("Exit reason:     {:?}", output.exit_reason);
     println!();
     println!("Effects ({} total):", output.effects.len());

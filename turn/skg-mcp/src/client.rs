@@ -536,7 +536,10 @@ mod tests {
     fn mcp_tool_output_schema_none() {
         let tool = make_test_tool("no_schema", "no output schema");
         // Same expression as McpToolWrapper::output_schema()
-        let result = tool.output_schema.as_deref().and_then(|m| serde_json::to_value(m).ok());
+        let result = tool
+            .output_schema
+            .as_deref()
+            .and_then(|m| serde_json::to_value(m).ok());
         assert!(result.is_none());
     }
 
@@ -545,7 +548,8 @@ mod tests {
     /// Tests the same field-access expression used in `McpToolWrapper::output_schema()`.
     #[test]
     fn mcp_tool_output_schema_present() {
-        let output_schema_val = json!({"type": "object", "properties": {"answer": {"type": "string"}}});
+        let output_schema_val =
+            json!({"type": "object", "properties": {"answer": {"type": "string"}}});
         let output_schema_obj = output_schema_val.as_object().unwrap().clone();
         let schema = json!({"type": "object"});
         let schema_obj = schema.as_object().unwrap().clone();
@@ -561,7 +565,11 @@ mod tests {
             meta: None,
         };
         // Same expression as McpToolWrapper::output_schema()
-        let result = tool.output_schema.as_deref().and_then(|m| serde_json::to_value(m).ok()).unwrap();
+        let result = tool
+            .output_schema
+            .as_deref()
+            .and_then(|m| serde_json::to_value(m).ok())
+            .unwrap();
         assert_eq!(result["type"], "object");
         assert!(result["properties"]["answer"].is_object());
     }

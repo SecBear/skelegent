@@ -152,7 +152,6 @@ mod tests {
         Effect::log("info", "test")
     }
 
-
     // We need two variants — one that continues, one that skips.
     struct ContinueMiddleware {
         seen: Arc<Mutex<Vec<String>>>,
@@ -161,10 +160,7 @@ mod tests {
     #[async_trait]
     impl EffectMiddleware for ContinueMiddleware {
         async fn on_effect(&self, effect: Effect, _ctx: &DispatchContext) -> EffectAction {
-            self.seen
-                .lock()
-                .await
-                .push(effect.meta.effect_id.clone());
+            self.seen.lock().await.push(effect.meta.effect_id.clone());
             EffectAction::Continue(Box::new(effect))
         }
     }
@@ -176,10 +172,7 @@ mod tests {
     #[async_trait]
     impl EffectMiddleware for SkipMiddleware {
         async fn on_effect(&self, effect: Effect, _ctx: &DispatchContext) -> EffectAction {
-            self.seen
-                .lock()
-                .await
-                .push(effect.meta.effect_id.clone());
+            self.seen.lock().await.push(effect.meta.effect_id.clone());
             EffectAction::Skip
         }
     }
@@ -190,8 +183,12 @@ mod tests {
         let seen2 = Arc::new(Mutex::new(Vec::<String>::new()));
 
         let stack = EffectStack::new()
-            .push(ContinueMiddleware { seen: seen1.clone() })
-            .push(ContinueMiddleware { seen: seen2.clone() });
+            .push(ContinueMiddleware {
+                seen: seen1.clone(),
+            })
+            .push(ContinueMiddleware {
+                seen: seen2.clone(),
+            });
 
         let ctx = make_ctx();
         let effect = make_write();
@@ -253,5 +250,4 @@ mod tests {
             "only the WriteMemory effect should be logged"
         );
     }
-
 }

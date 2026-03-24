@@ -152,30 +152,33 @@ impl AnthropicProvider {
         // ThinkingConfig::Disabled (or key absence) → no thinking sent.
         // Enabled serialises to the Anthropic wire format; Adaptive and raw
         // JSON objects are forwarded as-is so callers can provide any format.
-        let thinking = anthropic_opts
-            .get("thinking")
-            .and_then(|v| {
-                match serde_json::from_value::<ThinkingConfig>(v.clone()) {
-                    Ok(ThinkingConfig::Disabled) => None,
-                    _ => Some(v.clone()),
-                }
-            });
+        let thinking = anthropic_opts.get("thinking").and_then(|v| {
+            match serde_json::from_value::<ThinkingConfig>(v.clone()) {
+                Ok(ThinkingConfig::Disabled) => None,
+                _ => Some(v.clone()),
+            }
+        });
         // Anthropic requirement: temperature must not be set when thinking is enabled.
         if thinking.is_some() && request.temperature.is_some() {
             tracing::warn!(
                 "thinking is enabled but temperature is set; clearing temperature (Anthropic requirement)"
             );
         }
-        let temperature = if thinking.is_some() { None } else { request.temperature };
+        let temperature = if thinking.is_some() {
+            None
+        } else {
+            request.temperature
+        };
 
         // Build tool_choice; ToolChoice::None means suppress tools entirely.
         let (final_tools, tool_choice) = match &request.tool_choice {
             Some(ToolChoice::None) => (vec![], None),
             Some(ToolChoice::Auto) => (tools, Some(serde_json::json!({ "type": "auto" }))),
             Some(ToolChoice::Any) => (tools, Some(serde_json::json!({ "type": "any" }))),
-            Some(ToolChoice::Tool { name }) => {
-                (tools, Some(serde_json::json!({ "type": "tool", "name": name })))
-            }
+            Some(ToolChoice::Tool { name }) => (
+                tools,
+                Some(serde_json::json!({ "type": "tool", "name": name })),
+            ),
             None => (tools, None),
         };
 
@@ -279,7 +282,10 @@ fn content_block_to_anthropic(block: &ContentBlock) -> Option<AnthropicContentBl
             },
             media_type: media_type.clone(),
         }),
-        ContentBlock::Thinking { thinking, signature } => Some(AnthropicContentBlock::Thinking {
+        ContentBlock::Thinking {
+            thinking,
+            signature,
+        } => Some(AnthropicContentBlock::Thinking {
             thinking: thinking.clone(),
             signature: signature.clone(),
         }),
@@ -323,7 +329,10 @@ fn parse_anthropic_infer_response(
                     media_type: media_type.clone(),
                 });
             }
-            AnthropicContentBlock::Thinking { thinking, signature } => {
+            AnthropicContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 text_parts.push(ContentBlock::Thinking {
                     thinking: thinking.clone(),
                     signature: signature.clone(),
@@ -422,7 +431,11 @@ impl Provider for AnthropicProvider {
         let client = self.client.clone();
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
-        let anthropic_opts = request.provider_options.get("anthropic").cloned().unwrap_or_default();
+        let anthropic_opts = request
+            .provider_options
+            .get("anthropic")
+            .cloned()
+            .unwrap_or_default();
 
         let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer", provider = "anthropic", model);
@@ -499,7 +512,8 @@ impl Provider for AnthropicProvider {
     fn infer_stream(
         &self,
         request: InferRequest,
-    ) -> impl std::future::Future<Output = Result<InferStream, skg_turn::provider::ProviderError>> + Send {
+    ) -> impl std::future::Future<Output = Result<InferStream, skg_turn::provider::ProviderError>> + Send
+    {
         skg_turn::assert_real_requests_allowed();
         let source = self.api_key_source.clone();
         let mut api_request = self.build_infer_request(&request);
@@ -507,7 +521,11 @@ impl Provider for AnthropicProvider {
         let client = self.client.clone();
         let api_url = self.api_url.clone();
         let api_version = self.api_version.clone();
-        let anthropic_opts = request.provider_options.get("anthropic").cloned().unwrap_or_default();
+        let anthropic_opts = request
+            .provider_options
+            .get("anthropic")
+            .cloned()
+            .unwrap_or_default();
 
         let model = request.model.as_deref().unwrap_or("unknown");
         let span = tracing::info_span!("provider.infer_stream", provider = "anthropic", model);
@@ -866,8 +884,7 @@ mod tests {
         )
         .with_extra(json!({"cache_control": {"type": "ephemeral"}}));
         let provider = AnthropicProvider::new("sk-test");
-        let request = skg_turn::infer::InferRequest::new(vec![])
-            .with_tools(vec![schema]);
+        let request = skg_turn::infer::InferRequest::new(vec![]).with_tools(vec![schema]);
         let api_req = provider.build_infer_request(&request);
         let json = serde_json::to_value(&api_req.tools[0]).unwrap();
         assert_eq!(json["cache_control"]["type"], "ephemeral");
@@ -878,7 +895,10 @@ mod tests {
         let provider = AnthropicProvider::new("sk-test");
         let request = skg_turn::infer::InferRequest::new(vec![])
             .with_system("You are helpful")
-            .with_provider_option("anthropic", json!({"system_cache_control": {"type": "ephemeral"}}));
+            .with_provider_option(
+                "anthropic",
+                json!({"system_cache_control": {"type": "ephemeral"}}),
+            );
         let api_req = provider.build_infer_request(&request);
         let json = serde_json::to_value(&api_req).unwrap();
         // system must be an array, not a string
@@ -891,8 +911,7 @@ mod tests {
     #[test]
     fn system_without_cache_control_is_plain_string() {
         let provider = AnthropicProvider::new("sk-test");
-        let request = skg_turn::infer::InferRequest::new(vec![])
-            .with_system("You are helpful");
+        let request = skg_turn::infer::InferRequest::new(vec![]).with_system("You are helpful");
         let api_req = provider.build_infer_request(&request);
         let json = serde_json::to_value(&api_req).unwrap();
         assert_eq!(json["system"], "You are helpful");
@@ -951,26 +970,27 @@ mod tests {
         let provider = AnthropicProvider::new("sk-test");
 
         // Auto: tool_choice field set to {"type": "auto"}
-        let req = skg_turn::infer::InferRequest::new(vec![])
-            .with_tool_choice(ToolChoice::Auto);
+        let req = skg_turn::infer::InferRequest::new(vec![]).with_tool_choice(ToolChoice::Auto);
         let ar = provider.build_infer_request(&req);
         assert_eq!(ar.tool_choice, Some(serde_json::json!({"type": "auto"})));
 
         // Any: tool_choice = {"type": "any"}
-        let req = skg_turn::infer::InferRequest::new(vec![])
-            .with_tool_choice(ToolChoice::Any);
+        let req = skg_turn::infer::InferRequest::new(vec![]).with_tool_choice(ToolChoice::Any);
         let ar = provider.build_infer_request(&req);
         assert_eq!(ar.tool_choice, Some(serde_json::json!({"type": "any"})));
 
         // Tool: tool_choice = {"type": "tool", "name": "..."}
-        let req = skg_turn::infer::InferRequest::new(vec![])
-            .with_tool_choice(ToolChoice::Tool { name: "search".into() });
+        let req = skg_turn::infer::InferRequest::new(vec![]).with_tool_choice(ToolChoice::Tool {
+            name: "search".into(),
+        });
         let ar = provider.build_infer_request(&req);
-        assert_eq!(ar.tool_choice, Some(serde_json::json!({"type": "tool", "name": "search"})));
+        assert_eq!(
+            ar.tool_choice,
+            Some(serde_json::json!({"type": "tool", "name": "search"}))
+        );
 
         // None: tools cleared, no tool_choice field
-        let req = skg_turn::infer::InferRequest::new(vec![])
-            .with_tool_choice(ToolChoice::None);
+        let req = skg_turn::infer::InferRequest::new(vec![]).with_tool_choice(ToolChoice::None);
         let ar = provider.build_infer_request(&req);
         assert!(ar.tool_choice.is_none());
         assert!(ar.tools.is_empty());

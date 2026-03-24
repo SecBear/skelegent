@@ -20,7 +20,6 @@ fn next_effect_id() -> String {
     format!("eff-{n}")
 }
 
-
 /// Monotonic counter for total ordering of effects within this process.
 static EFFECT_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -495,7 +494,10 @@ mod tests {
         assert_ne!(meta1.effect_id, meta2.effect_id);
         // Timestamps should be set (not the epoch).
         assert!(meta1.timestamp >= UNIX_EPOCH);
-        assert!(meta1.seq < meta2.seq, "seq must be monotonically increasing");
+        assert!(
+            meta1.seq < meta2.seq,
+            "seq must be monotonically increasing"
+        );
         // causation and correlation are None by default.
         assert!(meta1.causation_id.is_none());
         assert!(meta1.correlation_id.is_none());
@@ -621,9 +623,18 @@ mod tests {
 
     #[test]
     fn seq_auto_increments() {
-        let e1 = Effect::new(EffectKind::Log { level: "info".into(), message: "a".into() });
-        let e2 = Effect::new(EffectKind::Log { level: "info".into(), message: "b".into() });
-        let e3 = Effect::new(EffectKind::Log { level: "info".into(), message: "c".into() });
+        let e1 = Effect::new(EffectKind::Log {
+            level: "info".into(),
+            message: "a".into(),
+        });
+        let e2 = Effect::new(EffectKind::Log {
+            level: "info".into(),
+            message: "b".into(),
+        });
+        let e3 = Effect::new(EffectKind::Log {
+            level: "info".into(),
+            message: "c".into(),
+        });
         assert!(e1.meta.seq < e2.meta.seq, "seq must increase");
         assert!(e2.meta.seq < e3.meta.seq, "seq must increase");
     }

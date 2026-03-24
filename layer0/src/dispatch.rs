@@ -192,7 +192,7 @@ impl DispatchEvent {
     /// Serialization errors produce a JSON error object rather than panicking.
     pub fn to_sse_line(&self) -> String {
         let json = serde_json::to_string(self)
-            .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {e}\"}}" ));
+            .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {e}\"}}"));
         format!("event: {}\ndata: {}\n\n", self.event_type(), json)
     }
 }
@@ -992,7 +992,9 @@ mod tests {
             let _: DispatchEvent = serde_json::from_str(&json).expect("deserialize");
         }
 
-        round_trip(DispatchEvent::Progress { content: Content::text("thinking") });
+        round_trip(DispatchEvent::Progress {
+            content: Content::text("thinking"),
+        });
         round_trip(DispatchEvent::ArtifactProduced {
             artifact: Artifact::new("a1", vec![Content::text("output")]),
         });
@@ -1010,7 +1012,9 @@ mod tests {
             error: OrchError::DispatchFailed("something went wrong".into()),
         });
         round_trip(DispatchEvent::AwaitingApproval(ApprovalRequest::new(
-            "run-1", "wp-1", vec![],
+            "run-1",
+            "wp-1",
+            vec![],
         )));
     }
 
@@ -1023,12 +1027,17 @@ mod tests {
         use crate::operator::{ExitReason, OperatorOutput};
 
         assert_eq!(
-            DispatchEvent::Progress { content: Content::text("x") }.event_type(),
+            DispatchEvent::Progress {
+                content: Content::text("x")
+            }
+            .event_type(),
             "dispatch.progress"
         );
         assert_eq!(
-            DispatchEvent::ArtifactProduced { artifact: Artifact::new("a", vec![]) }
-                .event_type(),
+            DispatchEvent::ArtifactProduced {
+                artifact: Artifact::new("a", vec![])
+            }
+            .event_type(),
             "dispatch.artifact_produced"
         );
         assert_eq!(
@@ -1056,8 +1065,7 @@ mod tests {
             "dispatch.failed"
         );
         assert_eq!(
-            DispatchEvent::AwaitingApproval(ApprovalRequest::new("r", "w", vec![]))
-                .event_type(),
+            DispatchEvent::AwaitingApproval(ApprovalRequest::new("r", "w", vec![])).event_type(),
             "dispatch.awaiting_approval"
         );
     }
@@ -1066,7 +1074,9 @@ mod tests {
     fn sse_format() {
         use crate::content::Content;
 
-        let ev = DispatchEvent::Progress { content: Content::text("step 1") };
+        let ev = DispatchEvent::Progress {
+            content: Content::text("step 1"),
+        };
         let line = ev.to_sse_line();
         assert!(
             line.starts_with("event: dispatch.progress\ndata: "),
@@ -1080,5 +1090,4 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(data).expect("valid JSON");
         assert_eq!(v["type"], "progress");
     }
-
 }

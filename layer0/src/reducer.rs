@@ -65,9 +65,7 @@ impl MergeObject {
             (Value::Object(cur), Value::Object(upd)) => {
                 let mut merged = cur.clone();
                 for (k, v) in upd {
-                    let entry = merged
-                        .entry(k.clone())
-                        .or_insert(Value::Null);
+                    let entry = merged.entry(k.clone()).or_insert(Value::Null);
                     *entry = Self::merge_values(entry, v);
                 }
                 Value::Object(merged)
@@ -148,7 +146,11 @@ impl ReducerRegistry {
     /// Register a reducer for an exact key, replacing any previous entry.
     ///
     /// Returns `self` for builder-style chaining.
-    pub fn register(mut self, key: impl Into<String>, reducer: impl StateReducer + 'static) -> Self {
+    pub fn register(
+        mut self,
+        key: impl Into<String>,
+        reducer: impl StateReducer + 'static,
+    ) -> Self {
         self.reducers.insert(key.into(), Box::new(reducer));
         self
     }
@@ -199,7 +201,10 @@ mod tests {
         let current = json!({"a": 1, "nested": {"x": 10}});
         let update = json!({"b": 2, "nested": {"y": 20}});
         let result = r.reduce(&current, &update);
-        assert_eq!(result, json!({"a": 1, "b": 2, "nested": {"x": 10, "y": 20}}));
+        assert_eq!(
+            result,
+            json!({"a": 1, "b": 2, "nested": {"x": 10, "y": 20}})
+        );
     }
 
     #[test]
@@ -212,8 +217,7 @@ mod tests {
 
     #[test]
     fn registry_routes_by_key() {
-        let registry = ReducerRegistry::new()
-            .register("items", AppendList);
+        let registry = ReducerRegistry::new().register("items", AppendList);
 
         // "items" key uses AppendList
         let result = registry.reduce("items", &json!([1, 2]), &json!([3, 4]));

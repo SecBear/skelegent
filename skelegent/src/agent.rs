@@ -26,13 +26,6 @@ use skg_context_engine::ToolFilter;
 use skg_tool::{ToolDyn, ToolRegistry};
 use std::sync::Arc;
 
-#[cfg(any(
-    feature = "provider-anthropic",
-    feature = "provider-openai",
-    feature = "provider-ollama"
-))]
-use skg_turn::provider::Provider;
-
 /// Create an agent builder with the given model identifier.
 ///
 /// Model identifiers are resolved to providers:
@@ -466,8 +459,8 @@ mod tests {
     /// require a real provider feature), but we verify the config→request path is correct.
     #[tokio::test]
     async fn agent_builder_temperature() {
-        use std::sync::Mutex;
         use skg_turn::infer::InferRequest;
+        use std::sync::Mutex;
 
         let captured: Arc<Mutex<Option<InferRequest>>> = Arc::new(Mutex::new(None));
         let captured_inner = captured.clone();
@@ -493,7 +486,11 @@ mod tests {
 
         let guard = captured.lock().unwrap();
         let req = guard.as_ref().expect("provider was not called");
-        assert_eq!(req.temperature, Some(0.7), "temperature must be forwarded to InferRequest");
+        assert_eq!(
+            req.temperature,
+            Some(0.7),
+            "temperature must be forwarded to InferRequest"
+        );
     }
 
     /// Verify that a tool registered via [`AgentBuilder::tool()`] (or directly on a
@@ -571,8 +568,8 @@ mod tests {
     /// the model string must survive from `agent("model")` through to the provider call.
     #[tokio::test]
     async fn agent_preserves_model() {
-        use std::sync::Mutex;
         use skg_turn::infer::InferRequest;
+        use std::sync::Mutex;
 
         let captured: Arc<Mutex<Option<InferRequest>>> = Arc::new(Mutex::new(None));
         let captured_inner = captured.clone();
@@ -633,19 +630,17 @@ mod tests {
         use serde_json::json;
 
         // WriteMemory is an operational effect — run() must return Err.
-        let effects = vec![Effect::new(
-            EffectKind::WriteMemory {
-                scope: Scope::Global,
-                key: "state-key".into(),
-                value: json!({"x": 1}),
-                memory_scope: MemoryScope::Session,
-                tier: None,
-                lifetime: None,
-                content_kind: None,
-                salience: None,
-                ttl: None,
-            },
-        )];
+        let effects = vec![Effect::new(EffectKind::WriteMemory {
+            scope: Scope::Global,
+            key: "state-key".into(),
+            value: json!({"x": 1}),
+            memory_scope: MemoryScope::Session,
+            tier: None,
+            lifetime: None,
+            content_kind: None,
+            salience: None,
+            ttl: None,
+        })];
         let result = super::reject_operational_effects(&effects);
         assert!(
             result.is_err(),
@@ -664,12 +659,10 @@ mod tests {
         use layer0::effect::EffectKind;
 
         // Log is observational — run() must not error on observational-only effects.
-        let effects = vec![Effect::new(
-            EffectKind::Log {
-                level: "info".into(),
-                message: "agent completed successfully".into(),
-            },
-        )];
+        let effects = vec![Effect::new(EffectKind::Log {
+            level: "info".into(),
+            message: "agent completed successfully".into(),
+        })];
         let result = super::reject_operational_effects(&effects);
         assert!(
             result.is_ok(),

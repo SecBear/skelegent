@@ -605,12 +605,11 @@ mod tests {
     /// has no equivalent field and would silently ignore it.
     async fn codex_rejects_response_format() {
         let p = CodexProvider::with_account_id("tok", "acct");
-        let request = InferRequest::new(vec![])
-            .with_response_format(ResponseFormat::JsonSchema {
-                name: "schema".into(),
-                schema: serde_json::json!({}),
-                strict: false,
-            });
+        let request = InferRequest::new(vec![]).with_response_format(ResponseFormat::JsonSchema {
+            name: "schema".into(),
+            schema: serde_json::json!({}),
+            strict: false,
+        });
         let err = p.infer(request).await.unwrap_err();
         assert!(
             matches!(err, ProviderError::InvalidRequest { .. }),
@@ -622,8 +621,7 @@ mod tests {
     /// Codex rejects [`InferRequest`]s that set `tool_choice` — the field is not forwarded.
     async fn codex_rejects_tool_choice() {
         let p = CodexProvider::with_account_id("tok", "acct");
-        let request = InferRequest::new(vec![])
-            .with_tool_choice(ToolChoice::Auto);
+        let request = InferRequest::new(vec![]).with_tool_choice(ToolChoice::Auto);
         let err = p.infer(request).await.unwrap_err();
         assert!(
             matches!(err, ProviderError::InvalidRequest { .. }),

@@ -51,7 +51,6 @@
 
 pub mod approval;
 pub mod content;
-pub mod extract;
 pub mod context;
 pub mod dispatch;
 pub mod dispatch_context;
@@ -61,12 +60,13 @@ pub mod effect_log;
 pub mod effect_middleware;
 pub mod environment;
 pub mod error;
+pub mod extract;
 pub mod id;
 pub mod lifecycle;
 pub mod middleware;
 pub mod operator;
-pub mod secret;
 pub mod reducer;
+pub mod secret;
 pub mod state;
 
 #[cfg(feature = "test-utils")]
@@ -85,7 +85,9 @@ pub use dispatch::{
 };
 pub use dispatch_context::{AuthIdentity, DispatchContext, Extensions, TraceContext};
 pub use duration::DurationMs;
-pub use effect::{Effect, EffectKind, EffectMeta, HandoffContext, MemoryScope, Scope, SignalPayload};
+pub use effect::{
+    Effect, EffectKind, EffectMeta, HandoffContext, MemoryScope, Scope, SignalPayload,
+};
 pub use effect_log::{EffectLog, EffectLogError, InMemoryEffectLog};
 pub use effect_middleware::{EffectAction, EffectMiddleware, EffectStack, LoggingEffectMiddleware};
 pub use environment::{Environment, EnvironmentSpec};
@@ -100,11 +102,11 @@ pub use operator::{
     ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMeta, OperatorMetadata,
     OperatorOutput, SubDispatchRecord, ToolMetadata,
 };
+pub use reducer::{AppendList, MergeObject, Overwrite, ReducerRegistry, StateReducer, Sum};
 pub use secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 pub use state::{
     ContentKind, Lifetime, MemoryLink, MemoryTier, SearchOptions, SearchResult, StateReader,
     StateStore, StoreOptions,
 };
-pub use reducer::{AppendList, MergeObject, Overwrite, ReducerRegistry, StateReducer, Sum};
 
 pub use extract::{Ext, FromContext, Rejection};

@@ -177,11 +177,7 @@ impl WorkflowBuilder {
     }
 
     /// Append a parallel fan-out step with a custom reducer.
-    pub fn parallel_with_reducer(
-        mut self,
-        operators: Vec<OperatorId>,
-        reducer: ReducerFn,
-    ) -> Self {
+    pub fn parallel_with_reducer(mut self, operators: Vec<OperatorId>, reducer: ReducerFn) -> Self {
         self.steps.push(StepDesc::Parallel { operators, reducer });
         self
     }
@@ -211,27 +207,24 @@ impl WorkflowBuilder {
         let dispatcher = self.dispatcher;
 
         // Convert each StepDesc into Arc<dyn Operator>.
-        let mut ops: Vec<Arc<dyn Operator>> = self
-            .steps
-            .into_iter()
-            .map(|desc| -> Arc<dyn Operator> {
-                match desc {
-                    StepDesc::Single(id) => Arc::new(SingleDispatch {
-                        id,
-                        dispatcher: Arc::clone(&dispatcher),
-                    }),
-                    StepDesc::Parallel { operators, reducer } => Arc::new(
-                        ParallelOperator::new(operators, Arc::clone(&dispatcher), reducer),
-                    ),
-                    StepDesc::Loop { body, max, done } => Arc::new(LoopOperator::new(
-                        body,
-                        Arc::clone(&dispatcher),
-                        max,
-                        done,
-                    )),
-                }
-            })
-            .collect();
+        let mut ops: Vec<Arc<dyn Operator>> =
+            self.steps
+                .into_iter()
+                .map(|desc| -> Arc<dyn Operator> {
+                    match desc {
+                        StepDesc::Single(id) => Arc::new(SingleDispatch {
+                            id,
+                            dispatcher: Arc::clone(&dispatcher),
+                        }),
+                        StepDesc::Parallel { operators, reducer } => Arc::new(
+                            ParallelOperator::new(operators, Arc::clone(&dispatcher), reducer),
+                        ),
+                        StepDesc::Loop { body, max, done } => {
+                            Arc::new(LoopOperator::new(body, Arc::clone(&dispatcher), max, done))
+                        }
+                    }
+                })
+                .collect();
 
         match ops.len() {
             0 => Arc::new(NoOpOperator),
@@ -255,7 +248,9 @@ impl Operator for NoOpOperator {
         input: OperatorInput,
         _ctx: &DispatchContext,
     ) -> Result<OperatorOutput, OperatorError> {
-        Ok(OperatorOutput::new(input.message, layer0::ExitReason::Complete))
+        Ok(OperatorOutput::new(
+            input.message,
+            layer0::ExitReason::Complete,
+        ))
     }
 }
-

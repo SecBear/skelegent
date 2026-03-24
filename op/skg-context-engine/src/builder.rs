@@ -33,6 +33,7 @@
 
 use std::sync::Arc;
 
+use layer0::Dispatcher;
 use skg_tool::{ToolDyn, ToolRegistry};
 use skg_turn::provider::Provider;
 
@@ -76,6 +77,9 @@ pub struct CognitiveBuilder<State> {
     /// Stored separately because `ReactLoopConfig` has no `max_turns` field;
     /// wired into a `BudgetGuard` rule at [`build()`](CognitiveBuilder::build) time.
     max_turns: Option<u32>,
+    /// Optional dispatcher forwarded to [`CognitiveOperator::with_dispatcher`] at
+    /// build time. Construction-time capability, not per-request data.
+    dispatcher: Option<Arc<dyn Dispatcher>>,
 }
 
 // ── NoProvider state ──────────────────────────────────────────────────────────
@@ -93,6 +97,7 @@ impl CognitiveBuilder<NoProvider> {
             config: ReactLoopConfig::default(),
             rule_factory: None,
             max_turns: None,
+            dispatcher: None,
         }
     }
 
@@ -108,6 +113,7 @@ impl CognitiveBuilder<NoProvider> {
             config: self.config,
             rule_factory: self.rule_factory,
             max_turns: self.max_turns,
+            dispatcher: self.dispatcher,
         }
     }
 }
@@ -150,8 +156,9 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
         }
 
         let op = CognitiveOperator::new(operator_id, self.state.0, self.tools, config);
+        let dispatcher = self.dispatcher;
 
-        match (self.max_turns, self.rule_factory) {
+        let op = match (self.max_turns, self.rule_factory) {
             (Some(max_turns), Some(user_factory)) => {
                 // Budget guard fires first (priority 100); user rules follow.
                 op.with_rules(move || {
@@ -161,8 +168,7 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
                         max_duration: None,
                         max_tool_calls: None,
                     });
-                    let mut rules =
-                        vec![Rule::before::<InferBoundary>("budget_guard", 100, guard)];
+                    let mut rules = vec![Rule::before::<InferBoundary>("budget_guard", 100, guard)];
                     rules.extend(user_factory());
                     rules
                 })
@@ -179,6 +185,13 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
             (None, Some(factory)) => op.with_rules(move || factory()),
             // No rules configured — match CognitiveOperator::new() behavior exactly.
             (None, None) => op,
+        };
+
+        // Wire in the dispatcher last, after rules are set, so the full chain
+        // (with_rules → with_dispatcher) is set up correctly.
+        match dispatcher {
+            Some(d) => op.with_dispatcher(d),
+            None => op,
         }
     }
 
@@ -191,10 +204,10 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
         self,
         message: &str,
     ) -> Result<layer0::operator::OperatorOutput, layer0::error::OperatorError> {
+        use layer0::DispatchContext;
         use layer0::content::Content;
         use layer0::id::{DispatchId, OperatorId};
         use layer0::operator::{Operator, OperatorInput, TriggerType};
-        use layer0::DispatchContext;
 
         let op = self.build();
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
@@ -294,6 +307,19 @@ impl<S> CognitiveBuilder<S> {
         self.config = config;
         self
     }
+
+    /// Attach a dispatcher for sub-dispatch from within the react loop.
+    ///
+    /// Forwarded to [`CognitiveOperator::with_dispatcher`] at build time.
+    /// The dispatcher is injected into the `DispatchContext` extensions so
+    /// downstream tools can access it via
+    /// `dispatch_ctx.extensions().get::<Arc<dyn Dispatcher>>()`.
+    ///
+    /// Construction-time capability — not per-request data.
+    pub fn dispatcher(mut self, dispatcher: Arc<dyn Dispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -389,5 +415,78 @@ mod tests {
 
         assert_eq!(output.exit_reason, ExitReason::Complete);
         assert_eq!(output.message.as_text().unwrap(), "Hello from run!");
+    }
+
+    // ── dispatcher builder wiring ────────────────────────────────────────
+
+    /// Minimal dispatcher that panics if dispatch is ever called.
+    ///
+    /// Used to verify that supplying a dispatcher via the builder does not
+    /// break normal text-only execution paths.
+    struct NullDispatcher;
+
+    #[async_trait::async_trait]
+    impl Dispatcher for NullDispatcher {
+        async fn dispatch(
+            &self,
+            _ctx: &DispatchContext,
+            _input: OperatorInput,
+        ) -> Result<layer0::DispatchHandle, layer0::error::OrchError> {
+            panic!("NullDispatcher::dispatch called — not expected");
+        }
+    }
+
+    /// Builder with `.dispatcher()` still produces a working operator.
+    #[tokio::test]
+    async fn builder_dispatcher_executes_normally() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
+
+        let op = CognitiveBuilder::new()
+            .system_prompt("You are helpful.")
+            .dispatcher(Arc::new(NullDispatcher))
+            .provider(provider)
+            .build();
+
+        let output = Operator::execute(&op, simple_input("Hi"), &test_ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(output.message.as_text().unwrap(), "Hello!");
+    }
+
+    /// `.dispatcher()` is usable before `.provider()` (shared setter, both states).
+    #[tokio::test]
+    async fn builder_dispatcher_before_provider() {
+        let provider = TestProvider::with_responses(vec![make_text_response("ok")]);
+
+        let op = CognitiveBuilder::new()
+            .dispatcher(Arc::new(NullDispatcher)) // set before provider
+            .provider(provider)
+            .build();
+
+        let output = Operator::execute(&op, simple_input("test"), &test_ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
+    }
+
+    /// Dispatcher chains correctly with max_turns (rule wiring).
+    #[tokio::test]
+    async fn builder_dispatcher_with_max_turns() {
+        let provider = TestProvider::with_responses(vec![make_text_response("done")]);
+
+        let op = CognitiveBuilder::new()
+            .max_turns(5)
+            .dispatcher(Arc::new(NullDispatcher))
+            .provider(provider)
+            .build();
+
+        let output = Operator::execute(&op, simple_input("hi"), &test_ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_reason, ExitReason::Complete);
     }
 }

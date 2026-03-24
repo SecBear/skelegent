@@ -23,12 +23,12 @@
 //! No API keys required — all operators are pure in-process functions.
 
 use async_trait::async_trait;
+use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
 use layer0::error::OperatorError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
-use layer0::DispatchContext;
 use skg_orch_local::LocalOrch;
 use skg_orch_patterns::WorkflowBuilder;
 use std::sync::Arc;
@@ -49,7 +49,10 @@ impl Operator for ResearchOp {
     ) -> Result<OperatorOutput, OperatorError> {
         let topic = input.message.as_text().unwrap_or("unknown topic");
         let result = format!("Research findings on {topic}");
-        Ok(OperatorOutput::new(Content::text(result), ExitReason::Complete))
+        Ok(OperatorOutput::new(
+            Content::text(result),
+            ExitReason::Complete,
+        ))
     }
 }
 
@@ -67,7 +70,10 @@ impl Operator for AnalyzeOp {
     ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("");
         let result = format!("Analysis of: {text}");
-        Ok(OperatorOutput::new(Content::text(result), ExitReason::Complete))
+        Ok(OperatorOutput::new(
+            Content::text(result),
+            ExitReason::Complete,
+        ))
     }
 }
 
@@ -85,7 +91,10 @@ impl Operator for SummarizeOp {
     ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("");
         let result = format!("Summary: {text}");
-        Ok(OperatorOutput::new(Content::text(result), ExitReason::Complete))
+        Ok(OperatorOutput::new(
+            Content::text(result),
+            ExitReason::Complete,
+        ))
     }
 }
 
@@ -104,7 +113,10 @@ impl Operator for FormatOp {
     ) -> Result<OperatorOutput, OperatorError> {
         let text = input.message.as_text().unwrap_or("");
         let result = format!("Formatted:\n{text}");
-        Ok(OperatorOutput::new(Content::text(result), ExitReason::Complete))
+        Ok(OperatorOutput::new(
+            Content::text(result),
+            ExitReason::Complete,
+        ))
     }
 }
 
@@ -136,9 +148,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    - parallel() → ParallelOperator with the default concatenating reducer
     //    - Two or more compiled steps are wrapped in a Pipeline that chains them.
     let workflow = WorkflowBuilder::new(Arc::clone(&dispatcher))
-        .step(research_id)                            // Step 1: research
-        .parallel(vec![analyze_id, summarize_id])     // Step 2: analyze + summarize concurrently
-        .step(format_id)                              // Step 3: format combined result
+        .step(research_id) // Step 1: research
+        .parallel(vec![analyze_id, summarize_id]) // Step 2: analyze + summarize concurrently
+        .step(format_id) // Step 3: format combined result
         .build();
 
     // 3. Execute the workflow with a topic as the initial input.
@@ -146,7 +158,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = OperatorInput::new(Content::text(topic), TriggerType::User);
     // The root DispatchContext identifies this top-level invocation. Each
     // step the Pipeline creates a child context with the step's operator ID.
-    let ctx = DispatchContext::new(DispatchId::new("workflow-run-1"), OperatorId::new("workflow"));
+    let ctx = DispatchContext::new(
+        DispatchId::new("workflow-run-1"),
+        OperatorId::new("workflow"),
+    );
 
     println!("=== Workflow: sequential → parallel → sequential ===");
     println!("Input topic: {topic}\n");

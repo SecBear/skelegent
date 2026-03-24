@@ -8,6 +8,7 @@
 //! All tests require live API keys and are `#[ignore]` by default.
 //! They verify that OperatorOutput structure is consistent across providers.
 
+use futures_util::StreamExt;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::operator::{ExitReason, Operator, OperatorInput, TriggerType};
@@ -21,7 +22,6 @@ use skg_tool::ToolRegistry;
 use skg_turn::Provider;
 use skg_turn::infer::InferRequest;
 use skg_turn::stream::StreamEvent;
-use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -66,8 +66,8 @@ async fn anthropic_react_simple_prompt() {
         max_tokens: Some(256),
         temperature: None,
         tool_filter: None,
-            tool_result_formatter: None,
-            tool_error_formatter: None,
+        tool_result_formatter: None,
+        tool_error_formatter: None,
         ..ReactLoopConfig::default()
     };
 
@@ -195,8 +195,8 @@ async fn openai_react_simple_prompt() {
         max_tokens: Some(256),
         temperature: None,
         tool_filter: None,
-            tool_result_formatter: None,
-            tool_error_formatter: None,
+        tool_result_formatter: None,
+        tool_error_formatter: None,
         ..ReactLoopConfig::default()
     };
 
@@ -270,7 +270,11 @@ async fn openai_streaming_text() {
     println!("OpenAI streaming response: {text}");
 
     let captured = events.lock().unwrap();
-    assert!(captured.iter().any(|e| matches!(e, StreamEvent::TextDelta(_))));
+    assert!(
+        captured
+            .iter()
+            .any(|e| matches!(e, StreamEvent::TextDelta(_)))
+    );
     assert!(captured.iter().any(|e| matches!(e, StreamEvent::Done(_))));
     assert!(response.usage.input_tokens > 0);
     assert!(response.usage.output_tokens > 0);
@@ -305,8 +309,8 @@ async fn ollama_react_simple_prompt() {
         max_tokens: Some(256),
         temperature: None,
         tool_filter: None,
-            tool_result_formatter: None,
-            tool_error_formatter: None,
+        tool_result_formatter: None,
+        tool_error_formatter: None,
         ..ReactLoopConfig::default()
     };
 
@@ -354,7 +358,11 @@ async fn ollama_streaming_text() {
     println!("Ollama streaming response: {text}");
 
     let captured = events.lock().unwrap();
-    assert!(captured.iter().any(|e| matches!(e, StreamEvent::TextDelta(_))));
+    assert!(
+        captured
+            .iter()
+            .any(|e| matches!(e, StreamEvent::TextDelta(_)))
+    );
     assert!(captured.iter().any(|e| matches!(e, StreamEvent::Done(_))));
     println!(
         "Tokens: {} in, {} out",

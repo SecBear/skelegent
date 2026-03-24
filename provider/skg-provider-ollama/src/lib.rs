@@ -291,8 +291,10 @@ impl Provider for OllamaProvider {
         // These checks must happen before `assert_real_requests_allowed` so that
         // tests exercising rejection never hit the network guard.
         let tool_choice_set = request.tool_choice.is_some();
-        let response_format_is_json_schema =
-            matches!(request.response_format, Some(ResponseFormat::JsonSchema { .. }));
+        let response_format_is_json_schema = matches!(
+            request.response_format,
+            Some(ResponseFormat::JsonSchema { .. })
+        );
         let api_request = self.build_infer_request(&request);
         let http_request = self
             .client
@@ -369,8 +371,10 @@ impl Provider for OllamaProvider {
         request: InferRequest,
     ) -> impl std::future::Future<Output = Result<InferStream, ProviderError>> + Send {
         let tool_choice_set = request.tool_choice.is_some();
-        let response_format_is_json_schema =
-            matches!(request.response_format, Some(ResponseFormat::JsonSchema { .. }));
+        let response_format_is_json_schema = matches!(
+            request.response_format,
+            Some(ResponseFormat::JsonSchema { .. })
+        );
         let mut api_request = self.build_infer_request(&request);
         api_request.stream = true;
 
@@ -590,7 +594,6 @@ impl Provider for OllamaProvider {
     }
 }
 
-
 /// Extract plain text from layer0 [`Content`].
 fn content_text(content: &Content) -> String {
     match content {
@@ -698,8 +701,7 @@ mod tests {
     /// Ollama rejects [`InferRequest`]s that set `tool_choice` — it has no native API for it.
     async fn ollama_rejects_tool_choice() {
         let provider = OllamaProvider::new();
-        let request = InferRequest::new(vec![])
-            .with_tool_choice(ToolChoice::Auto);
+        let request = InferRequest::new(vec![]).with_tool_choice(ToolChoice::Auto);
         let err = provider.infer(request).await.unwrap_err();
         assert!(
             matches!(err, ProviderError::InvalidRequest { .. }),
@@ -711,12 +713,11 @@ mod tests {
     /// Ollama rejects `JsonSchema` response_format — only `Text` and `Json` are allowed.
     async fn ollama_rejects_json_schema_response_format() {
         let provider = OllamaProvider::new();
-        let request = InferRequest::new(vec![])
-            .with_response_format(ResponseFormat::JsonSchema {
-                name: "my_schema".into(),
-                schema: serde_json::json!({}),
-                strict: true,
-            });
+        let request = InferRequest::new(vec![]).with_response_format(ResponseFormat::JsonSchema {
+            name: "my_schema".into(),
+            schema: serde_json::json!({}),
+            strict: true,
+        });
         let err = provider.infer(request).await.unwrap_err();
         assert!(
             matches!(err, ProviderError::InvalidRequest { .. }),

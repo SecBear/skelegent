@@ -84,12 +84,11 @@ mod tests {
             input: OperatorInput,
             _ctx: &DispatchContext,
         ) -> Result<OperatorOutput, OperatorError> {
-            let msg = format!(
-                "{}{}",
-                self.prefix,
-                input.message.as_text().unwrap_or("")
-            );
-            Ok(OperatorOutput::new(Content::text(msg), ExitReason::Complete))
+            let msg = format!("{}{}", self.prefix, input.message.as_text().unwrap_or(""));
+            Ok(OperatorOutput::new(
+                Content::text(msg),
+                ExitReason::Complete,
+            ))
         }
     }
 
@@ -107,7 +106,10 @@ mod tests {
         ) -> Result<OperatorOutput, OperatorError> {
             let n = self.count.fetch_add(1, Ordering::Relaxed) + 1;
             let msg = format!("{}-iter{n}", input.message.as_text().unwrap_or(""));
-            Ok(OperatorOutput::new(Content::text(msg), ExitReason::Complete))
+            Ok(OperatorOutput::new(
+                Content::text(msg),
+                ExitReason::Complete,
+            ))
         }
     }
 
@@ -350,10 +352,7 @@ mod tests {
                 prefix: "[L]".into(),
             }),
         );
-        orch.register(
-            OperatorId::new("right"),
-            Arc::new(EchoOperator),
-        );
+        orch.register(OperatorId::new("right"), Arc::new(EchoOperator));
         let orch = Arc::new(orch);
 
         let op = WorkflowBuilder::new(Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>)
@@ -434,6 +433,9 @@ mod tests {
         // Default reducer on empty vec: parts.join("") → empty string, Complete exit.
         assert_eq!(output.exit_reason, ExitReason::Complete);
         let text = output.message.as_text().unwrap_or("");
-        assert!(text.is_empty(), "expected empty text from empty split, got: {text:?}");
+        assert!(
+            text.is_empty(),
+            "expected empty text from empty split, got: {text:?}"
+        );
     }
 }

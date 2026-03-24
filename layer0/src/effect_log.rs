@@ -26,8 +26,7 @@ pub enum EffectLogError {
 /// bound (`impl EffectLog` or `L: EffectLog`) rather than `dyn EffectLog`.
 pub trait EffectLog: Send + Sync {
     /// Append an effect to the log.
-    fn append(&self, effect: &Effect)
-        -> impl Future<Output = Result<(), EffectLogError>> + Send;
+    fn append(&self, effect: &Effect) -> impl Future<Output = Result<(), EffectLogError>> + Send;
 
     /// Read effects in append order, starting from `offset`.
     ///
@@ -224,7 +223,10 @@ mod tests {
 
         let trace1 = log.read_by_correlation("trace-1", 0, 10).await.unwrap();
         assert_eq!(trace1.len(), 2);
-        assert!(trace1[0].meta.seq < trace1[1].meta.seq, "trace1 entries should be in order");
+        assert!(
+            trace1[0].meta.seq < trace1[1].meta.seq,
+            "trace1 entries should be in order"
+        );
 
         let trace2 = log.read_by_correlation("trace-2", 0, 10).await.unwrap();
         assert_eq!(trace2.len(), 1);

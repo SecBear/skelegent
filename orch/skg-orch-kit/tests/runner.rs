@@ -240,7 +240,10 @@ impl Operator for HandoffTargetOperator {
     ) -> Result<OperatorOutput, OperatorError> {
         // LocalEffectHandler routes context.metadata → input.metadata.
         // The ticket field must be present in the structured metadata.
-        assert_eq!(input.metadata.get("ticket").and_then(|v| v.as_i64()), Some(123));
+        assert_eq!(
+            input.metadata.get("ticket").and_then(|v| v.as_i64()),
+            Some(123)
+        );
         Ok(OperatorOutput::new(
             Content::text("accepted"),
             ExitReason::Complete,
@@ -575,7 +578,9 @@ async fn runner_processes_effects_through_middleware() {
         Arc::clone(&state) as Arc<dyn StateStore>,
         Some(orch.clone() as Arc<dyn Signalable>),
     ));
-    let stack = EffectStack::new().push(PrefixKeyMiddleware { prefix: "enriched-".into() });
+    let stack = EffectStack::new().push(PrefixKeyMiddleware {
+        prefix: "enriched-".into(),
+    });
     let runner = OrchestratedRunner::new(orch.clone() as Arc<dyn Dispatcher>, handler)
         .with_effect_middleware(stack);
 
@@ -588,7 +593,10 @@ async fn runner_processes_effects_through_middleware() {
         .expect("runner should succeed");
 
     // State must have been written under the enriched key.
-    assert_eq!(state.read_raw("enriched-mw-key").await, Some(json!({"v": 99})));
+    assert_eq!(
+        state.read_raw("enriched-mw-key").await,
+        Some(json!({"v": 99}))
+    );
     // The original key must not exist.
     assert_eq!(state.read_raw("mw-key").await, None);
     // Trace event reflects the enriched key name.

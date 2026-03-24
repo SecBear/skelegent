@@ -780,7 +780,11 @@ mod tests {
         let mut stream = mp.infer_stream(infer_req).await.unwrap();
 
         // The stream yields exactly one Done event wrapping the full response.
-        let event = stream.next().await.expect("stream must yield Done").unwrap();
+        let event = stream
+            .next()
+            .await
+            .expect("stream must yield Done")
+            .unwrap();
         let StreamEvent::Done(response) = event else {
             panic!("expected Done event, got {event:?}");
         };
@@ -855,13 +859,21 @@ mod tests {
         let mut stream = router.infer_stream(req).await.unwrap();
 
         // First event must be TextDelta (proving native streaming, not single-Done).
-        let event1 = stream.next().await.expect("stream must yield TextDelta").unwrap();
+        let event1 = stream
+            .next()
+            .await
+            .expect("stream must yield TextDelta")
+            .unwrap();
         let StreamEvent::TextDelta(chunk) = event1 else {
             panic!("expected TextDelta, got {event1:?}");
         };
         assert_eq!(chunk, "backend-1:chunk1");
 
-        let event2 = stream.next().await.expect("stream must yield Done").unwrap();
+        let event2 = stream
+            .next()
+            .await
+            .expect("stream must yield Done")
+            .unwrap();
         let StreamEvent::Done(response) = event2 else {
             panic!("expected Done, got {event2:?}");
         };

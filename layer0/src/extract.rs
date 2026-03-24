@@ -90,12 +90,7 @@ impl<T: Clone + Send + Sync + 'static> FromContext for Ext<T> {
             .get::<T>()
             .cloned()
             .map(Ext)
-            .ok_or_else(|| {
-                Rejection(format!(
-                    "missing extension: {}",
-                    std::any::type_name::<T>()
-                ))
-            })
+            .ok_or_else(|| Rejection(format!("missing extension: {}", std::any::type_name::<T>())))
     }
 }
 
@@ -131,10 +126,7 @@ mod tests {
     use crate::id::{DispatchId, OperatorId};
 
     fn make_ctx() -> DispatchContext {
-        DispatchContext::new(
-            DispatchId::new("dispatch-1"),
-            OperatorId::new("operator-1"),
-        )
+        DispatchContext::new(DispatchId::new("dispatch-1"), OperatorId::new("operator-1"))
     }
 
     #[test]

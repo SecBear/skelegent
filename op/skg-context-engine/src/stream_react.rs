@@ -10,7 +10,9 @@ use crate::context::Context;
 use crate::error::EngineError;
 use crate::ops::response::AppendResponse;
 use crate::ops::tool::{ExecuteTool, format_tool_result};
-use crate::react::{ReactLoopConfig, check_approval, check_exit, format_tool_error, is_handoff_sentinel};
+use crate::react::{
+    ReactLoopConfig, check_approval, check_exit, format_tool_error, is_handoff_sentinel,
+};
 use futures_util::StreamExt;
 use layer0::DispatchContext;
 use layer0::content::Content;
@@ -703,8 +705,7 @@ mod tests {
     #[tokio::test]
     async fn stream_react_loop_with_tool_call() {
         let provider = TestProvider::new();
-        provider
-            .respond_with_tool_call("echo", "c1", json!({"msg": "hi"}));
+        provider.respond_with_tool_call("echo", "c1", json!({"msg": "hi"}));
         provider.respond_with_text("echoed!");
 
         let mut tools = ToolRegistry::new();
@@ -748,13 +749,16 @@ mod tests {
             async fn infer_stream(
                 &self,
                 _request: skg_turn::InferRequest,
-            ) -> Result<skg_turn::stream::InferStream, skg_turn::provider::ProviderError> {
+            ) -> Result<skg_turn::stream::InferStream, skg_turn::provider::ProviderError>
+            {
                 let response = skg_turn::test_utils::make_text_response("hello");
                 let events: Vec<Result<StreamEvent, skg_turn::provider::ProviderError>> = vec![
                     Ok(StreamEvent::TextDelta("hello".into())),
                     Ok(StreamEvent::Done(response)),
                 ];
-                Ok(skg_turn::stream::InferStream::new(futures_util::stream::iter(events)))
+                Ok(skg_turn::stream::InferStream::new(
+                    futures_util::stream::iter(events),
+                ))
             }
         }
 
@@ -765,8 +769,7 @@ mod tests {
             .unwrap();
 
         let tools = ToolRegistry::new();
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
         let events_clone = Arc::clone(&events);
 

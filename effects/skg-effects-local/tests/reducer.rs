@@ -61,7 +61,11 @@ async fn reducer_applied_on_write() {
         .await
         .expect("read failed")
         .expect("key missing");
-    assert_eq!(stored, json!([1, 2]), "AppendList should have produced [1,2]");
+    assert_eq!(
+        stored,
+        json!([1, 2]),
+        "AppendList should have produced [1,2]"
+    );
 }
 
 /// Without a registry, successive writes are last-writer-wins (Overwrite default).
@@ -88,7 +92,11 @@ async fn no_registry_is_overwrite() {
         .await
         .expect("read failed")
         .expect("key missing");
-    assert_eq!(stored, json!(2), "last-writer-wins Overwrite should yield 2");
+    assert_eq!(
+        stored,
+        json!(2),
+        "last-writer-wins Overwrite should yield 2"
+    );
 }
 
 /// A registry with no key-specific entries behaves identically to Overwrite.

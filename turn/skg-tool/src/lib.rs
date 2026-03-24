@@ -522,14 +522,21 @@ mod tests {
     fn output_schema_custom() {
         struct SchemaTool;
         impl ToolDyn for SchemaTool {
-            fn name(&self) -> &str { "schema_tool" }
-            fn description(&self) -> &str { "has output schema" }
-            fn input_schema(&self) -> serde_json::Value { json!({"type": "object"}) }
+            fn name(&self) -> &str {
+                "schema_tool"
+            }
+            fn description(&self) -> &str {
+                "has output schema"
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                json!({"type": "object"})
+            }
             fn call(
                 &self,
                 _input: serde_json::Value,
                 _ctx: &DispatchContext,
-            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
+            {
                 Box::pin(async { Ok(json!(null)) })
             }
             fn output_schema(&self) -> Option<serde_json::Value> {
@@ -547,14 +554,21 @@ mod tests {
     fn aliased_tool_delegates_output_schema() {
         struct InnerWithSchema;
         impl ToolDyn for InnerWithSchema {
-            fn name(&self) -> &str { "inner" }
-            fn description(&self) -> &str { "" }
-            fn input_schema(&self) -> serde_json::Value { json!({"type": "object"}) }
+            fn name(&self) -> &str {
+                "inner"
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                json!({"type": "object"})
+            }
             fn call(
                 &self,
                 _input: serde_json::Value,
                 _ctx: &DispatchContext,
-            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
+            {
                 Box::pin(async { Ok(json!(null)) })
             }
             fn output_schema(&self) -> Option<serde_json::Value> {
@@ -566,5 +580,4 @@ mod tests {
         let schema = aliased.output_schema().unwrap();
         assert_eq!(schema["type"], "string");
     }
-
 }

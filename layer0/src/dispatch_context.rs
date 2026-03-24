@@ -193,7 +193,6 @@ impl DispatchContext {
             ))
         }
     }
-
 }
 
 impl fmt::Debug for DispatchContext {
@@ -287,13 +286,9 @@ impl TraceContext {
             // splitmix64 provides good bit dispersion without any external dep.
             // No two calls return the same ID, even for fan-out from the same parent.
             let counter = SPAN_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let parent_hash: u64 = self
-                .span_id
-                .bytes()
-                .enumerate()
-                .fold(0u64, |acc, (i, b)| {
-                    acc.wrapping_add((b as u64).wrapping_mul(i.wrapping_add(1) as u64))
-                });
+            let parent_hash: u64 = self.span_id.bytes().enumerate().fold(0u64, |acc, (i, b)| {
+                acc.wrapping_add((b as u64).wrapping_mul(i.wrapping_add(1) as u64))
+            });
             let seed = counter.wrapping_add(parent_hash);
             // splitmix64 bit mixer — no external crate needed.
             let mixed = {
