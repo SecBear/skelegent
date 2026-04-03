@@ -5,6 +5,7 @@ use crate::deadline::PortableWakeDeadline;
 use crate::id::{RunId, WaitPointId};
 use crate::model::{RunOutcome, RunStatus, RunView};
 use crate::wait::{ResumeInput, WaitReason};
+use layer0::ProtocolError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -46,8 +47,8 @@ pub enum RunEvent {
     },
     /// Finish a run with a terminal failure.
     Fail {
-        /// Human-readable portable failure summary.
-        error: String,
+        /// Structured failure description.
+        error: ProtocolError,
     },
     /// Cancel a currently active run.
     Cancel,
@@ -67,8 +68,8 @@ pub enum ResumeAction {
     },
     /// Resume into terminal failure.
     Fail {
-        /// Human-readable portable failure summary.
-        error: String,
+        /// Structured failure description.
+        error: ProtocolError,
     },
 }
 
@@ -250,7 +251,7 @@ impl RunKernel {
         })
     }
 
-    fn fail(current: Option<&RunView>, error: String) -> Result<RunTransition, KernelError> {
+    fn fail(current: Option<&RunView>, error: ProtocolError) -> Result<RunTransition, KernelError> {
         let run_id = Self::running_run_id(current, "fail")?;
         Ok(RunTransition {
             next: RunView::terminal(
@@ -262,6 +263,7 @@ impl RunKernel {
             commands: vec![OrchestrationCommand::FailRun { run_id, error }],
         })
     }
+
     fn cancel(current: Option<&RunView>) -> Result<RunTransition, KernelError> {
         let run_id = Self::cancellable_run_id(current)?;
         let commands = match current {

@@ -13,7 +13,7 @@ use thiserror::Error;
 /// so downstream callers migrating one boundary at a time compile without
 /// changes.
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProtocolError {
     /// Machine-readable error code.
     pub code: ErrorCode,

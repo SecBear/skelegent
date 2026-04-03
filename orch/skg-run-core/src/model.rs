@@ -1,7 +1,7 @@
 //! Portable durable run read models.
 
 use crate::id::{RunId, WaitPointId};
-use crate::wait::WaitReason;
+use layer0::{ProtocolError, WaitReason};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -32,10 +32,10 @@ pub enum RunOutcome {
         /// Terminal result payload.
         result: Value,
     },
-    /// The run failed with a backend-neutral error summary.
+    /// The run failed with a structured protocol error.
     Failed {
-        /// Human-readable failure summary.
-        error: String,
+        /// Structured failure description.
+        error: ProtocolError,
     },
     /// The run was cancelled before completion.
     Cancelled,
@@ -86,8 +86,8 @@ pub enum RunView {
     Failed {
         /// Durable run identifier.
         run_id: RunId,
-        /// Human-readable failure summary.
-        error: String,
+        /// Structured failure description.
+        error: ProtocolError,
     },
     /// The run was cancelled before completion.
     Cancelled {
