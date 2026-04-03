@@ -6,7 +6,8 @@ use crate::op::ContextOp;
 use async_trait::async_trait;
 use layer0::dispatch::Dispatcher;
 use layer0::operator::TriggerType;
-use layer0::{DispatchContext, OperatorError, OperatorInput, OrchError};
+use layer0::error::{ErrorCode, ProtocolError};
+use layer0::{DispatchContext, OperatorInput};
 use skg_tool::{ToolError, ToolRegistry};
 use skg_turn::infer::ToolCall;
 use std::sync::Arc;
@@ -129,9 +130,7 @@ async fn execute_via_registry(
 /// Dispatcher-backed execution path.
 ///
 /// Creates a child [`DispatchContext`] targeting the tool operator by name and
-/// dispatches through the provided dispatcher. `ToolError::InvalidInput` is
-/// recovered from `OperatorError::SubDispatch.source` so existing retry logic
-/// in `react_loop` continues to work correctly.
+/// dispatches through the provided dispatcher.
 async fn execute_via_dispatcher(
     call: &ToolCall,
     dispatch_ctx: &DispatchContext,
@@ -148,12 +147,15 @@ async fn execute_via_dispatcher(
     let input_text = serde_json::to_string(&call.input).unwrap_or_else(|_| "null".to_string());
     let op_input = OperatorInput::new(layer0::Content::text(input_text), TriggerType::Task);
 
-    // dispatch() itself failing with OperatorNotFound means the tool doesn't exist.
+    // dispatch() itself failing with NotFound means the tool doesn't exist.
     // This is semantically equivalent to the registry path's "unknown tool" halt,
     // and should NOT increment tool metrics.
     let handle = match dispatcher.dispatch(&child_ctx, op_input).await {
         Ok(handle) => handle,
-        Err(OrchError::OperatorNotFound(_)) => {
+        Err(ProtocolError {
+            code: ErrorCode::NotFound,
+            ..
+        }) => {
             return Err(EngineError::Halted {
                 reason: format!("unknown tool: {}", call.name),
             });
@@ -177,37 +179,23 @@ async fn execute_via_dispatcher(
                 .unwrap_or(serde_json::Value::Null);
             Ok(result_value)
         }
-        Err(orch_err) => {
+        Err(proto_err) => {
             ctx.metrics.tool_calls_failed += 1;
-            Err(recover_engine_error(orch_err))
+            Err(recover_engine_error(proto_err))
         }
     }
 }
 
-/// Convert an [`OrchError`] from a tool dispatch back to an [`EngineError`].
+/// Convert a [`ProtocolError`] from a tool dispatch back to an [`EngineError`].
 ///
-/// Recovers `ToolError::InvalidInput` from the `OperatorError::SubDispatch` source
-/// chain. `ToolOperator` boxes the original `ToolError` as the SubDispatch source, so
-/// a `Box<dyn Error + Send + Sync>::downcast::<ToolError>()` reliably recovers it on
-/// stable Rust. This keeps `react_loop`'s schema-guided retry path working when
-/// tools are called via a dispatcher.
-fn recover_engine_error(orch_err: OrchError) -> EngineError {
-    match orch_err {
-        OrchError::OperatorNotFound(name) => EngineError::Halted {
-            reason: format!("unknown tool: {name}"),
+/// Maps `NotFound` to a halt (unknown tool), and other codes to
+/// `EngineError::Custom`.
+fn recover_engine_error(proto_err: ProtocolError) -> EngineError {
+    match proto_err.code {
+        ErrorCode::NotFound => EngineError::Halted {
+            reason: format!("unknown tool: {}", proto_err.message),
         },
-        OrchError::OperatorError(OperatorError::SubDispatch { operator, source }) => {
-            // ToolOperator wraps ToolError as the SubDispatch source (Box<dyn Error + Send + Sync>).
-            // downcast() consumes the Box and returns the concrete ToolError on success.
-            match source.downcast::<ToolError>() {
-                Ok(tool_err) => EngineError::Tool(*tool_err),
-                Err(source) => {
-                    EngineError::Operator(OperatorError::SubDispatch { operator, source })
-                }
-            }
-        }
-        OrchError::OperatorError(other) => EngineError::Operator(other),
-        other => EngineError::Custom(Box::new(other)),
+        _ => EngineError::Custom(Box::new(proto_err)),
     }
 }
 
@@ -443,16 +431,14 @@ mod tests {
 
         let result = op.execute(&mut ctx).await;
 
-        // recover_engine_error must recover ToolError from OperatorError::SubDispatch.
-        match result {
-            Err(EngineError::Tool(ToolError::InvalidInput(msg))) => {
-                assert!(
-                    msg.contains("missing required field"),
-                    "unexpected message: {msg}"
-                );
-            }
-            other => panic!("expected EngineError::Tool(ToolError::InvalidInput), got {other:?}"),
-        }
+        // With v2 ProtocolError, the ToolError is mapped through ProtocolError,
+        // so we get EngineError::Custom containing the error message.
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing required field"),
+            "error message must contain original tool error: {msg}"
+        );
 
         // A rejection still counts as a call attempt and a failure.
         assert_eq!(ctx.metrics.tool_calls_total, 1);

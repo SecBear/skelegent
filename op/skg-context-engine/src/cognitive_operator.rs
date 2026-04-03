@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::Dispatcher;
 use layer0::context::{Message, Role};
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::OperatorId;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
 use skg_tool::ToolRegistry;
@@ -153,7 +153,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         &self,
         input: OperatorInput,
         dispatch_ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let mut ctx = self.create_context();
         let mut config = self.config.clone();
 
@@ -201,7 +201,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         if !config.system_prompt.is_empty() {
             ctx.inject_system(&config.system_prompt)
                 .await
-                .map_err(OperatorError::context_assembly)?;
+                .map_err(|e| map_engine_error(e))?;
         }
 
         // Seed context with pre-assembled messages from caller, if any.
@@ -210,13 +210,13 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         if let Some(messages) = input.context.filter(|m| !m.is_empty()) {
             ctx.inject_messages(messages)
                 .await
-                .map_err(OperatorError::context_assembly)?;
+                .map_err(|e| map_engine_error(e))?;
         }
 
         // Inject user message
         ctx.inject_message(Message::new(Role::User, input.message))
             .await
-            .map_err(OperatorError::context_assembly)?;
+            .map_err(|e| map_engine_error(e))?;
 
         // Apply allowed_operators from dispatch input as a tool filter.
         // When a parent sets allowed_operators, only those tools are visible
@@ -240,45 +240,32 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
     }
 }
 
-/// Classified mapping from [`EngineError`] to [`OperatorError`].
+/// Classified mapping from [`EngineError`] to [`ProtocolError`].
 ///
 /// Preserves error semantics: retryable provider errors stay retryable,
-/// operator errors pass through, retryable tool errors become `Retryable`,
-/// and non-retryable tool errors become `NonRetryable`.
-pub fn map_engine_error(err: EngineError) -> OperatorError {
+/// and non-retryable errors are classified appropriately.
+pub fn map_engine_error(err: EngineError) -> ProtocolError {
+    use layer0::error::ErrorCode;
     match err {
         EngineError::Provider(err) => {
-            if err.is_retryable() {
-                OperatorError::model_retryable(err)
-            } else {
-                OperatorError::Model {
-                    source: Box::new(err),
-                    retryable: false,
-                }
-            }
+            let retryable = err.is_retryable();
+            ProtocolError::new(ErrorCode::Unavailable, err.to_string(), retryable)
         }
-        EngineError::Operator(err) => err,
+        EngineError::Operator(op_err) => {
+            // OperatorError has a From impl to ProtocolError
+            ProtocolError::from(op_err)
+        }
         EngineError::Tool(err) => {
-            // Preserve retryability signal from the tool layer rather than
-            // always masking it as SubDispatch (which callers cannot retry).
-            let message = err.to_string();
-            if err.is_retryable() {
-                OperatorError::Retryable {
-                    message,
-                    source: Some(Box::new(err)),
-                }
-            } else {
-                OperatorError::NonRetryable {
-                    message,
-                    source: Some(Box::new(err)),
-                }
-            }
+            let retryable = err.is_retryable();
+            ProtocolError::new(ErrorCode::Internal, err.to_string(), retryable)
         }
-        EngineError::Halted { reason } => OperatorError::Halted { reason },
-        EngineError::Exit { reason, detail } => OperatorError::Halted {
-            reason: format!("{reason:?}: {detail}"),
-        },
-        EngineError::Custom(err) => OperatorError::Other(err),
+        EngineError::Halted { reason } => {
+            ProtocolError::new(ErrorCode::Conflict, reason, false)
+        }
+        EngineError::Exit { outcome, detail } => {
+            ProtocolError::new(ErrorCode::Conflict, format!("{outcome}: {detail}"), false)
+        }
+        EngineError::Custom(err) => ProtocolError::internal(err.to_string()),
     }
 }
 
@@ -287,7 +274,7 @@ mod tests {
     use super::*;
     use layer0::content::Content;
     use layer0::id::DispatchId;
-    use layer0::operator::{ExitReason, OperatorConfig, TriggerType};
+    use layer0::operator::{LimitReason, Outcome, OperatorConfig, TerminalOutcome, TriggerType};
     use skg_turn::test_utils::{TestProvider, make_text_response};
 
     fn test_ctx() -> DispatchContext {
@@ -317,7 +304,12 @@ mod tests {
 
         let output = op.execute(simple_input("Hi"), &test_ctx()).await.unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
     }
 
@@ -340,13 +332,8 @@ mod tests {
         let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config());
 
         let result = op.execute(simple_input("test"), &test_ctx()).await;
-        assert!(matches!(
-            result,
-            Err(OperatorError::Model {
-                retryable: true,
-                ..
-            })
-        ));
+        let err = result.unwrap_err();
+        assert!(err.retryable, "rate-limited error should be retryable: {err:?}");
     }
 
     #[tokio::test]
@@ -357,7 +344,12 @@ mod tests {
         let output = Operator::execute(op.as_ref(), simple_input("Hi"), &test_ctx())
             .await
             .unwrap();
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 
     #[tokio::test]
@@ -385,9 +377,14 @@ mod tests {
         let result = op.execute(simple_input("hi"), &test_ctx()).await;
 
         // Budget guard returns a structured exit (MaxTurns) — not an error.
-        // ExitReason::MaxTurns is an expected termination, not a failure.
+        // Outcome::Limited { limit: LimitReason::MaxTurns } is an expected termination, not a failure.
         let output = result.unwrap();
-        assert_eq!(output.exit_reason, layer0::operator::ExitReason::MaxTurns);
+        assert_eq!(
+            output.outcome,
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns,
+            }
+        );
     }
 
     // ── allowed_operators filtering ────────────────────────────────────────
@@ -443,7 +440,12 @@ mod tests {
 
         // The model never saw tool_b or tool_c, so it returned text
         // (no tool calls). The exit is Complete.
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 
     #[test]
@@ -511,51 +513,47 @@ mod tests {
     #[test]
     fn map_engine_error_transient_tool_becomes_retryable() {
         use crate::error::EngineError;
-        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::Transient("network blip".into()));
         let mapped = map_engine_error(err);
         assert!(
-            matches!(mapped, OperatorError::Retryable { .. }),
-            "transient tool error should map to Retryable, got {mapped:?}"
+            mapped.retryable,
+            "transient tool error should map to retryable, got {mapped:?}"
         );
     }
 
     #[test]
     fn map_engine_error_rate_limited_tool_becomes_retryable() {
         use crate::error::EngineError;
-        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::RateLimited {
             retry_after: None,
             message: "429".into(),
         });
         let mapped = map_engine_error(err);
         assert!(
-            matches!(mapped, OperatorError::Retryable { .. }),
-            "rate-limited tool error should map to Retryable, got {mapped:?}"
+            mapped.retryable,
+            "rate-limited tool error should map to retryable, got {mapped:?}"
         );
     }
 
     #[test]
     fn map_engine_error_execution_failed_tool_becomes_non_retryable() {
         use crate::error::EngineError;
-        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::ExecutionFailed("boom".into()));
         let mapped = map_engine_error(err);
         assert!(
-            matches!(mapped, OperatorError::NonRetryable { .. }),
-            "execution-failed tool error should map to NonRetryable, got {mapped:?}"
+            !mapped.retryable,
+            "execution-failed tool error should map to non-retryable, got {mapped:?}"
         );
     }
 
     #[test]
     fn map_engine_error_tool_not_found_becomes_non_retryable() {
         use crate::error::EngineError;
-        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::NotFound("my_tool".into()));
         let mapped = map_engine_error(err);
         assert!(
-            matches!(mapped, OperatorError::NonRetryable { .. }),
-            "not-found tool error should map to NonRetryable, got {mapped:?}"
+            !mapped.retryable,
+            "not-found tool error should map to non-retryable, got {mapped:?}"
         );
     }
 
@@ -692,7 +690,7 @@ mod tests {
             &self,
             _ctx: &DispatchContext,
             _input: OperatorInput,
-        ) -> Result<layer0::DispatchHandle, layer0::error::OrchError> {
+        ) -> Result<layer0::DispatchHandle, layer0::error::ProtocolError> {
             panic!("PanicDispatcher::dispatch called — not expected in this test");
         }
     }
@@ -706,7 +704,12 @@ mod tests {
 
         let output = op.execute(simple_input("Hi"), &test_ctx()).await.unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
     }
 
@@ -724,7 +727,7 @@ mod tests {
                 &self,
                 _ctx: &DispatchContext,
                 _input: OperatorInput,
-            ) -> Result<layer0::DispatchHandle, layer0::error::OrchError> {
+            ) -> Result<layer0::DispatchHandle, layer0::error::ProtocolError> {
                 panic!("WitnessDispatcher::dispatch — not expected in this test");
             }
         }
@@ -766,6 +769,11 @@ mod tests {
             .with_dispatcher(Arc::new(PanicDispatcher));
 
         let output = op.execute(simple_input("hi"), &test_ctx()).await.unwrap();
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 }

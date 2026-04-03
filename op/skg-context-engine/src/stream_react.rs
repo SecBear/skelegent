@@ -17,9 +17,11 @@ use futures_util::StreamExt;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::duration::DurationMs;
-use layer0::effect::{Effect, EffectKind, HandoffContext};
+use layer0::effect::HandoffContext;
 use layer0::id::OperatorId;
-use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
+use layer0::intent::{Intent, IntentKind};
+use layer0::operator::{LimitReason, Outcome, OperatorMetadata, OperatorOutput, TerminalOutcome, TransferOutcome};
+use layer0::wait::WaitReason;
 use skg_tool::ToolRegistry;
 use skg_turn::infer::InferResponse;
 use skg_turn::provider::Provider;
@@ -114,11 +116,17 @@ pub async fn stream_react_loop<P: Provider>(
 
         // Phase 5: Check tool approval
         let tool_calls = response.tool_calls.clone();
-        let approval_effects = check_approval(&tool_calls, tools);
+        let approval_intents = check_approval(&tool_calls, tools);
 
-        if !approval_effects.is_empty() {
-            ctx.extend_effects(approval_effects);
-            return Ok(make_output(response, ExitReason::AwaitingApproval, ctx));
+        if !approval_intents.is_empty() {
+            ctx.extend_intents(approval_intents);
+            return Ok(make_output(
+                response,
+                Outcome::Suspended {
+                    reason: WaitReason::Approval,
+                },
+                ctx,
+            ));
         }
 
         // Phase 6: Dispatch tool calls (non-streaming)
@@ -144,7 +152,7 @@ pub async fn stream_react_loop<P: Provider>(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        ctx.push_effect(Effect::new(EffectKind::Handoff {
+                        ctx.push_intent(Intent::new(IntentKind::Handoff {
                             operator: OperatorId::from(target.as_str()),
                             context: HandoffContext {
                                 task: Content::text(reason),
@@ -154,7 +162,9 @@ pub async fn stream_react_loop<P: Provider>(
                         }));
                         return Ok(make_context_output(
                             Content::text(""),
-                            ExitReason::HandedOff,
+                            Outcome::Transfer {
+                                transfer: TransferOutcome::HandedOff,
+                            },
                             ctx,
                         ));
                     }
@@ -163,8 +173,8 @@ pub async fn stream_react_loop<P: Provider>(
                         None => format_tool_result(&value),
                     }
                 }
-                Err(EngineError::Exit { reason, .. }) => {
-                    return Ok(make_context_output(Content::text(""), reason, ctx));
+                Err(EngineError::Exit { outcome, .. }) => {
+                    return Ok(make_context_output(Content::text(""), outcome, ctx));
                 }
                 Err(e) => match &config.tool_error_formatter {
                     Some(f) => f(&call.name, &e.to_string()),
@@ -186,13 +196,15 @@ fn structured_exit_output(
     ctx: &mut Context,
 ) -> Result<OperatorOutput, EngineError> {
     match err {
-        EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
+        EngineError::Exit { outcome, .. } => {
+            Ok(make_context_output(Content::text(""), outcome, ctx))
+        }
         other => Err(other),
     }
 }
 
-fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
-    let mut output = OperatorOutput::new(message, exit);
+fn make_context_output(message: Content, outcome: Outcome, ctx: &mut Context) -> OperatorOutput {
+    let mut output = OperatorOutput::new(message, outcome);
     let mut meta = OperatorMetadata::default();
     meta.tokens_in = ctx.metrics.tokens_in;
     meta.tokens_out = ctx.metrics.tokens_out;
@@ -200,12 +212,12 @@ fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) ->
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = ctx.drain_effects();
+    output.intents = ctx.drain_intents();
     output
 }
 
-fn make_output(response: InferResponse, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
-    make_context_output(response.content, exit, ctx)
+fn make_output(response: InferResponse, outcome: Outcome, ctx: &mut Context) -> OperatorOutput {
+    make_context_output(response.content, outcome, ctx)
 }
 
 /// Compile the context into an [`InferRequest`](skg_turn::InferRequest) for streaming.
@@ -342,7 +354,12 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         let request = provider
             .last_request()
             .expect("provider should record request");
@@ -383,7 +400,12 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         let request = provider
             .last_request()
             .expect("provider should record request");
@@ -410,7 +432,7 @@ mod tests {
 
         async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
             Err(EngineError::Exit {
-                reason: ExitReason::Timeout,
+                outcome: Outcome::Limited { limit: LimitReason::Timeout },
                 detail: "append boundary timeout".into(),
             })
         }
@@ -447,7 +469,12 @@ mod tests {
         .await
         .expect("append exit should return structured operator output");
 
-        assert_eq!(output.exit_reason, ExitReason::Timeout);
+        assert_eq!(
+            output.outcome,
+            Outcome::Limited {
+                limit: LimitReason::Timeout,
+            }
+        );
         let captured = events.lock().unwrap();
         assert!(
             !captured.iter().any(|e| matches!(e, StreamEvent::Done(_))),
@@ -463,7 +490,7 @@ mod tests {
 
         async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
             Err(EngineError::Exit {
-                reason: ExitReason::Timeout,
+                outcome: Outcome::Limited { limit: LimitReason::Timeout },
                 detail: "stream boundary timeout".into(),
             })
         }
@@ -499,7 +526,12 @@ mod tests {
         .await
         .expect("stream exit should return structured operator output");
 
-        assert_eq!(output.exit_reason, ExitReason::Timeout);
+        assert_eq!(
+            output.outcome,
+            Outcome::Limited {
+                limit: LimitReason::Timeout,
+            }
+        );
         let captured = events.lock().unwrap();
         assert!(
             !captured.iter().any(|e| matches!(e, StreamEvent::Done(_))),
@@ -549,7 +581,7 @@ mod tests {
     async fn assert_stream_budget_exit_before_provider_call(
         mutate_ctx: impl FnOnce(&mut Context),
         config: BudgetGuardConfig,
-        expected_exit: ExitReason,
+        expected_outcome: Outcome,
     ) {
         let provider = TestProvider::new();
         provider.respond_with_text("should never be used");
@@ -578,7 +610,7 @@ mod tests {
         .await
         .expect("budget exits should return structured operator output");
 
-        assert_eq!(output.exit_reason, expected_exit);
+        assert_eq!(output.outcome, expected_outcome);
         assert_eq!(output.message.as_text(), Some(""));
         assert_eq!(provider.call_count(), 0);
     }
@@ -593,7 +625,9 @@ mod tests {
                 max_duration: None,
                 max_tool_calls: None,
             },
-            ExitReason::BudgetExhausted,
+            Outcome::Limited {
+                limit: LimitReason::BudgetExhausted,
+            },
         )
         .await;
     }
@@ -608,7 +642,9 @@ mod tests {
                 max_duration: None,
                 max_tool_calls: None,
             },
-            ExitReason::MaxTurns,
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns,
+            },
         )
         .await;
     }
@@ -623,7 +659,9 @@ mod tests {
                 max_duration: Some(Duration::from_secs(1)),
                 max_tool_calls: None,
             },
-            ExitReason::Timeout,
+            Outcome::Limited {
+                limit: LimitReason::Timeout,
+            },
         )
         .await;
     }
@@ -694,7 +732,12 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
 
         let captured = events.lock().unwrap();
         // TestProvider uses Provider's default infer_stream impl, which wraps the
@@ -729,7 +772,12 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         assert_eq!(output.metadata.turns_used, 2);
     }
 
@@ -791,7 +839,12 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         let captured = events.lock().unwrap();
         let text_pos = captured
             .iter()

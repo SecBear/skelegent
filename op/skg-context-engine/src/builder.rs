@@ -203,7 +203,7 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
     pub async fn run(
         self,
         message: &str,
-    ) -> Result<layer0::operator::OperatorOutput, layer0::error::OperatorError> {
+    ) -> Result<layer0::operator::OperatorOutput, layer0::error::ProtocolError> {
         use layer0::DispatchContext;
         use layer0::content::Content;
         use layer0::id::{DispatchId, OperatorId};
@@ -329,7 +329,7 @@ mod tests {
     use super::*;
     use layer0::content::Content;
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{ExitReason, OperatorInput, TriggerType};
+    use layer0::operator::{Outcome, OperatorInput, TerminalOutcome, TriggerType};
     use layer0::{DispatchContext, operator::Operator};
     use skg_turn::test_utils::{TestProvider, make_text_response};
 
@@ -357,7 +357,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
     }
 
@@ -373,7 +378,12 @@ mod tests {
         let output = Operator::execute(&op, simple_input("Hello"), &test_ctx())
             .await
             .unwrap();
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 
     /// `max_turns` wires a `BudgetGuard` that exits cleanly after the limit.
@@ -397,7 +407,12 @@ mod tests {
             .unwrap();
 
         // One-turn model response completes normally; guard fires before a second call.
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 
     /// [`CognitiveBuilder::run()`] is a one-shot convenience: build + execute with a
@@ -413,7 +428,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         assert_eq!(output.message.as_text().unwrap(), "Hello from run!");
     }
 
@@ -431,7 +451,7 @@ mod tests {
             &self,
             _ctx: &DispatchContext,
             _input: OperatorInput,
-        ) -> Result<layer0::DispatchHandle, layer0::error::OrchError> {
+        ) -> Result<layer0::DispatchHandle, layer0::error::ProtocolError> {
             panic!("NullDispatcher::dispatch called — not expected");
         }
     }
@@ -451,7 +471,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
     }
 
@@ -469,7 +494,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 
     /// Dispatcher chains correctly with max_turns (rule wiring).
@@ -487,6 +517,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 }

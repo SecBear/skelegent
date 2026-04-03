@@ -4,7 +4,7 @@ use crate::context::Context;
 use crate::error::EngineError;
 use crate::op::ContextOp;
 use async_trait::async_trait;
-use layer0::operator::ExitReason;
+use layer0::operator::{LimitReason, Outcome};
 use rust_decimal::Decimal;
 use std::time::Duration;
 
@@ -62,8 +62,8 @@ impl BudgetGuard {
         Self { config }
     }
 
-    fn exit(reason: ExitReason, detail: String) -> EngineError {
-        EngineError::Exit { reason, detail }
+    fn exit(outcome: Outcome, detail: String) -> EngineError {
+        EngineError::Exit { outcome, detail }
     }
 }
 
@@ -88,7 +88,9 @@ impl ContextOp for BudgetGuard {
                 "budget guard: cost limit exceeded"
             );
             return Err(Self::exit(
-                ExitReason::BudgetExhausted,
+                Outcome::Limited {
+                    limit: LimitReason::BudgetExhausted,
+                },
                 format!("cost budget exceeded: {} > {}", ctx.metrics.cost, max_cost),
             ));
         }
@@ -103,7 +105,9 @@ impl ContextOp for BudgetGuard {
                 "budget guard: turn limit exceeded"
             );
             return Err(Self::exit(
-                ExitReason::MaxTurns,
+                Outcome::Limited {
+                    limit: LimitReason::MaxTurns,
+                },
                 format!(
                     "turn limit exceeded: {} >= {}",
                     ctx.metrics.turns_completed, max_turns
@@ -121,7 +125,9 @@ impl ContextOp for BudgetGuard {
                 "budget guard: duration exceeded"
             );
             return Err(Self::exit(
-                ExitReason::Timeout,
+                Outcome::Limited {
+                    limit: LimitReason::Timeout,
+                },
                 format!(
                     "duration exceeded: {:?} > {:?}",
                     ctx.metrics.start.elapsed(),
@@ -140,7 +146,9 @@ impl ContextOp for BudgetGuard {
                 "budget guard: tool call limit exceeded"
             );
             return Err(Self::exit(
-                ExitReason::BudgetExhausted,
+                Outcome::Limited {
+                    limit: LimitReason::BudgetExhausted,
+                },
                 format!(
                     "tool call limit exceeded: {} >= {}",
                     ctx.metrics.tool_calls_total, max_tool_calls
@@ -189,10 +197,10 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
-    fn assert_exit(err: EngineError, expected_reason: ExitReason) {
+    fn assert_exit(err: EngineError, expected_outcome: Outcome) {
         match err {
-            EngineError::Exit { reason, detail } => {
-                assert_eq!(reason, expected_reason);
+            EngineError::Exit { outcome, detail } => {
+                assert_eq!(outcome, expected_outcome);
                 assert!(!detail.is_empty());
             }
             other => panic!("expected structured exit, got {other:?}"),
@@ -207,7 +215,12 @@ mod tests {
         let guard = BudgetGuard::new();
         let err = guard.execute(&mut ctx).await.unwrap_err();
 
-        assert_exit(err, ExitReason::MaxTurns);
+        assert_exit(
+            err,
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns,
+            },
+        );
     }
 
     #[tokio::test]
@@ -233,7 +246,12 @@ mod tests {
         });
 
         let err = guard.execute(&mut ctx).await.unwrap_err();
-        assert_exit(err, ExitReason::BudgetExhausted);
+        assert_exit(
+            err,
+            Outcome::Limited {
+                limit: LimitReason::BudgetExhausted,
+            },
+        );
     }
 
     #[tokio::test]
@@ -249,7 +267,12 @@ mod tests {
         });
 
         let err = guard.execute(&mut ctx).await.unwrap_err();
-        assert_exit(err, ExitReason::Timeout);
+        assert_exit(
+            err,
+            Outcome::Limited {
+                limit: LimitReason::Timeout,
+            },
+        );
     }
     #[tokio::test]
     async fn budget_guard_tool_limit_returns_budget_exhausted_not_max_turns() {
@@ -265,6 +288,11 @@ mod tests {
         });
 
         let err = guard.execute(&mut ctx).await.unwrap_err();
-        assert_exit(err, ExitReason::BudgetExhausted);
+        assert_exit(
+            err,
+            Outcome::Limited {
+                limit: LimitReason::BudgetExhausted,
+            },
+        );
     }
 }
