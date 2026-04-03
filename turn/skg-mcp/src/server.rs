@@ -743,8 +743,8 @@ mod tests {
     #[tokio::test]
     async fn mcp_server_from_operators_constructs() {
         use async_trait::async_trait;
-        use layer0::OperatorError;
-        use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
+        use layer0::error::ProtocolError;
+        use layer0::operator::{OperatorInput, OperatorOutput, Outcome, TerminalOutcome};
 
         struct EchoOperator;
 
@@ -754,8 +754,11 @@ mod tests {
                 &self,
                 input: OperatorInput,
                 _ctx: &layer0::DispatchContext,
-            ) -> Result<OperatorOutput, OperatorError> {
-                Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+            ) -> Result<OperatorOutput, ProtocolError> {
+                Ok(OperatorOutput::new(
+                    input.message,
+                    Outcome::Terminal { terminal: TerminalOutcome::Completed },
+                ))
             }
         }
 
@@ -776,8 +779,9 @@ mod tests {
     #[tokio::test]
     async fn operator_tool_adapter_roundtrip() {
         use async_trait::async_trait;
-        use layer0::operator::{ExitReason, OperatorInput, OperatorOutput};
-        use layer0::{Content, OperatorError};
+        use layer0::error::ProtocolError;
+        use layer0::operator::{OperatorInput, OperatorOutput, Outcome, TerminalOutcome};
+        use layer0::Content;
         use serde_json::json;
 
         struct ConstOperator {
@@ -790,11 +794,11 @@ mod tests {
                 &self,
                 _input: OperatorInput,
                 _ctx: &layer0::DispatchContext,
-            ) -> Result<OperatorOutput, OperatorError> {
+            ) -> Result<OperatorOutput, ProtocolError> {
                 let text = self.response.to_string();
                 Ok(OperatorOutput::new(
                     Content::text(text),
-                    ExitReason::Complete,
+                    Outcome::Terminal { terminal: TerminalOutcome::Completed },
                 ))
             }
         }

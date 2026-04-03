@@ -1,6 +1,6 @@
-use layer0::{ApprovalFacts, ApprovalPolicy, CapabilityKind, ExecutionClass};
+use layer0::{ApprovalFacts, CapabilityKind, DispatchContext, ExecutionClass};
 use serde_json::json;
-use skg_tool::{DispatchContext, ToolConcurrencyHint, ToolDyn, ToolError, tool_descriptor};
+use skg_tool::{ApprovalPolicy, ToolConcurrencyHint, ToolDyn, ToolError, tool_descriptor};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -69,7 +69,9 @@ impl ToolDyn for ExclusiveConditionalTool {
     }
 
     fn approval_policy(&self) -> ApprovalPolicy {
-        ApprovalPolicy::Conditional(Arc::new(|input| input.get("requires").is_some()))
+        ApprovalPolicy::Conditional(Arc::new(|input: &serde_json::Value| {
+            input.get("requires").is_some()
+        }))
     }
 }
 
