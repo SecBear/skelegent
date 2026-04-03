@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "intent_id": "intent-1",
+    "seq": 1
+  },
+  "kind": {
+    "kind": "write_memory",
+    "scope": {
+      "session": "session-1"
+    },
+    "key": "profile:name",
+    "value": {
+      "name": "Ada"
+    },
+    "memory_scope": "session"
+  }
+}

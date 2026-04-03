@@ -2,7 +2,9 @@
 
 use crate::context::Message;
 use crate::dispatch_context::DispatchContext;
-use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
+use crate::error::ProtocolError;
+use crate::intent::Intent;
+use crate::{content::Content, duration::DurationMs, effect::Effect, id::*};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -141,8 +143,117 @@ impl OperatorConfig {
     }
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// OUTCOME FAMILY (v2)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Why an operator invocation ended (v2 typed replacement for [`ExitReason`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Outcome {
+    /// Invocation completed with a terminal result.
+    Terminal {
+        /// Terminal outcome variant.
+        terminal: TerminalOutcome,
+    },
+    /// Control transferred to another operator.
+    Transfer {
+        /// Transfer outcome variant.
+        transfer: TransferOutcome,
+    },
+    /// Invocation suspended waiting for external input.
+    Suspended {
+        /// Why the invocation is suspended.
+        reason: crate::wait::WaitReason,
+    },
+    /// Invocation stopped due to a resource or policy limit.
+    Limited {
+        /// Which limit was hit.
+        limit: LimitReason,
+    },
+    /// Invocation was intercepted by a middleware or policy gate.
+    Intercepted {
+        /// What kind of interception.
+        interception: InterceptionKind,
+    },
+}
+
+/// Terminal outcomes — the operator produced a final result.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalOutcome {
+    /// Natural completion — model produced a final response.
+    Completed,
+    /// Unrecoverable error during execution.
+    Failed,
+}
+
+/// Transfer outcomes — control moved to another operator.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferOutcome {
+    /// Delegated work to another operator (current continues after).
+    Delegated,
+    /// Handed off control entirely (current is done).
+    HandedOff,
+}
+
+/// Why an invocation was stopped due to resource or policy limits.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitReason {
+    /// Hit the max turns/iterations limit.
+    MaxTurns,
+    /// Budget exhausted (cost or tool-call step limit).
+    BudgetExhausted,
+    /// Wall-clock timeout.
+    Timeout,
+    /// Circuit breaker tripped.
+    CircuitBreaker,
+}
+
+/// How an invocation was intercepted.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterceptionKind {
+    /// Middleware or policy halted execution.
+    PolicyHalt {
+        /// Reason provided by the interceptor.
+        reason: String,
+    },
+    /// Provider safety system blocked generation.
+    SafetyStop {
+        /// Reason provided by the provider.
+        reason: String,
+    },
+}
+
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Terminal { terminal } => write!(f, "terminal:{terminal:?}"),
+            Self::Transfer { transfer } => write!(f, "transfer:{transfer:?}"),
+            Self::Suspended { reason } => write!(f, "suspended:{reason:?}"),
+            Self::Limited { limit } => write!(f, "limited:{limit:?}"),
+            Self::Intercepted { interception } => write!(f, "intercepted:{interception:?}"),
+        }
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// EXIT REASON (v1 — deprecated)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 /// Why an operator invocation ended. The caller needs to know this to decide
 /// what happens next (retry? continue? escalate?).
+///
+/// **Deprecated:** Use [`Outcome`] instead.
+#[deprecated(note = "Use Outcome instead")]
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -195,11 +306,19 @@ pub enum ExitReason {
 /// execution, and any side-effects the operator wants executed.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(deprecated)]
 pub struct OperatorOutput {
     /// The operator's response content.
     pub message: Content,
 
-    /// Why the operator invocation ended.
+    /// Why the operator invocation ended (v2 typed outcome).
+    pub outcome: Outcome,
+
+    /// Why the operator invocation ended (v1 — deprecated).
+    ///
+    /// **Deprecated:** Use [`outcome`](Self::outcome) instead.
+    #[deprecated(note = "Use outcome instead")]
+    #[allow(deprecated)]
     pub exit_reason: ExitReason,
 
     /// Execution metadata (cost, tokens, timing).
@@ -225,6 +344,14 @@ pub struct OperatorOutput {
     /// and executed by the workflow. Same operator code, different execution.
     #[serde(default)]
     pub effects: Vec<Effect>,
+
+    /// Executable intents declared during this invocation (v2).
+    ///
+    /// Intents are the v2 replacement for effects. During the migration period,
+    /// both `effects` and `intents` may be populated. New code should use
+    /// `intents`; the effects field is retained for backward compatibility.
+    #[serde(default)]
+    pub intents: Vec<Intent>,
 }
 
 /// Execution metadata. Every field is concrete (not optional) because
@@ -277,6 +404,7 @@ pub struct SubDispatchRecord {
     pub success: bool,
 }
 
+#[allow(deprecated)]
 impl ExitReason {
     /// Create an `InterceptorHalt` exit reason.
     pub fn interceptor_halt(reason: impl Into<String>) -> Self {
@@ -298,6 +426,7 @@ impl ExitReason {
     }
 }
 
+#[allow(deprecated)]
 impl std::fmt::Display for ExitReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -389,12 +518,36 @@ impl OperatorInput {
 
 impl OperatorOutput {
     /// Create a new OperatorOutput with required fields.
-    pub fn new(message: Content, exit_reason: ExitReason) -> Self {
+    ///
+    /// Accepts the v2 [`Outcome`] and bridges to the deprecated `exit_reason`
+    /// field for backward compatibility.
+    #[allow(deprecated)]
+    pub fn new(message: Content, outcome: Outcome) -> Self {
+        let exit_reason = outcome_to_exit_reason(&outcome);
         Self {
             message,
+            outcome,
             exit_reason,
             metadata: OperatorMetadata::default(),
             effects: vec![],
+            intents: vec![],
+        }
+    }
+
+    /// Create from the deprecated v1 [`ExitReason`].
+    ///
+    /// **Deprecated:** Prefer `new(message, Outcome::...)` instead.
+    #[deprecated(note = "Use new(message, Outcome) instead")]
+    #[allow(deprecated)]
+    pub fn from_exit_reason(message: Content, exit_reason: ExitReason) -> Self {
+        let outcome = exit_reason_to_outcome(&exit_reason);
+        Self {
+            message,
+            outcome,
+            exit_reason,
+            metadata: OperatorMetadata::default(),
+            effects: vec![],
+            intents: vec![],
         }
     }
 
@@ -415,6 +568,94 @@ impl OperatorOutput {
     /// ```
     pub fn has_unhandled_effects(&self) -> bool {
         !self.effects.is_empty()
+    }
+}
+
+// ── Outcome ↔ ExitReason bridge functions ───────────────────────────────────
+
+/// Convert a v2 Outcome to a v1 ExitReason for backward-compatible bridging.
+#[allow(deprecated)]
+fn outcome_to_exit_reason(outcome: &Outcome) -> ExitReason {
+    match outcome {
+        Outcome::Terminal {
+            terminal: TerminalOutcome::Completed,
+        } => ExitReason::Complete,
+        Outcome::Terminal {
+            terminal: TerminalOutcome::Failed,
+        } => ExitReason::Error,
+        Outcome::Transfer {
+            transfer: TransferOutcome::HandedOff,
+        } => ExitReason::HandedOff,
+        Outcome::Transfer {
+            transfer: TransferOutcome::Delegated,
+        } => ExitReason::Custom("delegated".into()),
+        Outcome::Suspended { .. } => ExitReason::AwaitingApproval,
+        Outcome::Limited {
+            limit: LimitReason::MaxTurns,
+        } => ExitReason::MaxTurns,
+        Outcome::Limited {
+            limit: LimitReason::BudgetExhausted,
+        } => ExitReason::BudgetExhausted,
+        Outcome::Limited {
+            limit: LimitReason::Timeout,
+        } => ExitReason::Timeout,
+        Outcome::Limited {
+            limit: LimitReason::CircuitBreaker,
+        } => ExitReason::CircuitBreaker,
+        Outcome::Intercepted {
+            interception: InterceptionKind::PolicyHalt { reason },
+        } => ExitReason::InterceptorHalt {
+            reason: reason.clone(),
+        },
+        Outcome::Intercepted {
+            interception: InterceptionKind::SafetyStop { reason },
+        } => ExitReason::SafetyStop {
+            reason: reason.clone(),
+        },
+    }
+}
+
+/// Convert a v1 ExitReason to a v2 Outcome for backward-compatible bridging.
+#[allow(deprecated)]
+fn exit_reason_to_outcome(exit_reason: &ExitReason) -> Outcome {
+    match exit_reason {
+        ExitReason::Complete => Outcome::Terminal {
+            terminal: TerminalOutcome::Completed,
+        },
+        ExitReason::Error => Outcome::Terminal {
+            terminal: TerminalOutcome::Failed,
+        },
+        ExitReason::MaxTurns => Outcome::Limited {
+            limit: LimitReason::MaxTurns,
+        },
+        ExitReason::BudgetExhausted => Outcome::Limited {
+            limit: LimitReason::BudgetExhausted,
+        },
+        ExitReason::Timeout => Outcome::Limited {
+            limit: LimitReason::Timeout,
+        },
+        ExitReason::CircuitBreaker => Outcome::Limited {
+            limit: LimitReason::CircuitBreaker,
+        },
+        ExitReason::InterceptorHalt { reason } => Outcome::Intercepted {
+            interception: InterceptionKind::PolicyHalt {
+                reason: reason.clone(),
+            },
+        },
+        ExitReason::SafetyStop { reason } => Outcome::Intercepted {
+            interception: InterceptionKind::SafetyStop {
+                reason: reason.clone(),
+            },
+        },
+        ExitReason::AwaitingApproval => Outcome::Suspended {
+            reason: crate::wait::WaitReason::Approval,
+        },
+        ExitReason::HandedOff => Outcome::Transfer {
+            transfer: TransferOutcome::HandedOff,
+        },
+        ExitReason::Custom(_) => Outcome::Terminal {
+            terminal: TerminalOutcome::Completed, // best-effort mapping
+        },
     }
 }
 
@@ -517,7 +758,7 @@ pub trait Operator: Send + Sync {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError>;
+    ) -> Result<OperatorOutput, ProtocolError>;
 }
 
 /// Optional metadata about an operator's capabilities and requirements.
@@ -597,6 +838,7 @@ mod tests {
         assert_eq!(config.system_addendum.as_deref(), Some("Be concise."));
     }
 
+    #[allow(deprecated)]
     #[test]
     fn exit_reason_constructors() {
         let halt = ExitReason::interceptor_halt("policy violation");
@@ -619,6 +861,7 @@ mod tests {
         assert_eq!(custom, ExitReason::Custom("user_cancel".into()));
     }
 
+    #[allow(deprecated)]
     #[test]
     fn exit_reason_display() {
         assert_eq!(ExitReason::Complete.to_string(), "complete");
@@ -695,11 +938,52 @@ mod tests {
         assert!(!back.parallel_safe);
     }
 
+    #[test]
+    fn outcome_serde_round_trip() {
+        let outcomes = vec![
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Failed,
+            },
+            Outcome::Transfer {
+                transfer: TransferOutcome::HandedOff,
+            },
+            Outcome::Limited {
+                limit: LimitReason::BudgetExhausted,
+            },
+            Outcome::Intercepted {
+                interception: InterceptionKind::SafetyStop {
+                    reason: "content filtered".into(),
+                },
+            },
+        ];
+        for outcome in outcomes {
+            let json = serde_json::to_string(&outcome).unwrap();
+            let back: Outcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, outcome);
+        }
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn outcome_exit_reason_bridge_round_trip() {
+        let outcome = Outcome::Terminal {
+            terminal: TerminalOutcome::Completed,
+        };
+        let exit = outcome_to_exit_reason(&outcome);
+        assert_eq!(exit, ExitReason::Complete);
+
+        let back = exit_reason_to_outcome(&exit);
+        assert_eq!(back, outcome);
+    }
+
     #[tokio::test]
     async fn operator_with_meta() {
         use crate::content::Content;
         use crate::dispatch_context::DispatchContext;
-        use crate::error::OperatorError;
+        use crate::error::ProtocolError;
         use crate::id::{DispatchId, OperatorId};
 
         struct Echo;
@@ -710,8 +994,13 @@ mod tests {
                 &self,
                 input: OperatorInput,
                 _ctx: &DispatchContext,
-            ) -> Result<OperatorOutput, OperatorError> {
-                Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+            ) -> Result<OperatorOutput, ProtocolError> {
+                Ok(OperatorOutput::new(
+                    input.message,
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
+                ))
             }
         }
 
@@ -746,7 +1035,12 @@ mod tests {
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let output = echo.execute(input, &ctx).await.unwrap();
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
 
         // Both traits as trait objects
         fn accepts_meta(_m: &dyn OperatorMeta) {}

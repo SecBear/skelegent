@@ -16,7 +16,7 @@
 //!
 //! | Surface | Types | What it does |
 //! |---------|-------|-------------|
-//! | ⑤ Middleware | [`DispatchMiddleware`], [`StoreMiddleware`], [`ExecMiddleware`], [`EffectMiddleware`] | Interception + policy |
+//! | ⑤ Middleware | [`DispatchMiddleware`], [`StoreMiddleware`], [`ExecMiddleware`] | Interception + policy |
 //! | ⑥ Message compaction metadata | [`CompactionPolicy`] | Advisory retention hints attached to messages |
 //!
 //! ## Design Principle
@@ -50,6 +50,7 @@
 #![deny(missing_docs)]
 
 pub mod approval;
+pub mod capability;
 pub mod content;
 pub mod context;
 pub mod dispatch;
@@ -57,28 +58,58 @@ pub mod dispatch_context;
 pub mod duration;
 pub mod effect;
 pub mod effect_log;
-pub mod effect_middleware;
 pub mod environment;
 pub mod error;
+pub mod event;
 pub mod extract;
 pub mod id;
+pub mod intent;
 pub mod lifecycle;
 pub mod middleware;
 pub mod operator;
 pub mod reducer;
 pub mod secret;
 pub mod state;
+pub mod wait;
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 
-// Re-exports for convenience
+// ── v2 re-exports ───────────────────────────────────────────────────────────
+
+// Outcome family
+pub use operator::{InterceptionKind, LimitReason, Outcome, TerminalOutcome, TransferOutcome};
+
+// Intent (types shared with effect module are re-exported from effect below)
+pub use intent::{Intent, IntentKind, IntentMeta};
+
+// ExecutionEvent
+pub use event::{EventKind, EventMeta, EventSource, ExecutionEvent};
+
+// Wait / Resume
+pub use wait::{ResumeInput, WaitReason, WaitState};
+
+// Capability discovery
+pub use capability::{
+    ApprovalFacts, AuthFacts, CapabilityDescriptor, CapabilityFilter, CapabilityId, CapabilityKind,
+    CapabilityModality, CapabilitySource, ExecutionClass, SchedulingFacts, StreamingSupport,
+};
+
+// Uniform error
+pub use error::{ErrorCode, ProtocolError};
+
+// Dispatch aliases
+pub use dispatch::{CollectedInvocation, InvocationHandle};
+
+// ── Existing re-exports (v1-compatible) ─────────────────────────────────────
+
 pub use approval::{
     ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
     ToolCallDecision,
 };
 pub use content::{Content, ContentBlock};
 pub use context::{Message, MessageMeta, Role};
+#[allow(deprecated)]
 pub use dispatch::{
     Artifact, CollectedDispatch, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher,
     EffectEmitter,
@@ -89,8 +120,8 @@ pub use effect::{
     Effect, EffectKind, EffectMeta, HandoffContext, MemoryScope, Scope, SignalPayload,
 };
 pub use effect_log::{EffectLog, EffectLogError, InMemoryEffectLog};
-pub use effect_middleware::{EffectAction, EffectMiddleware, EffectStack, LoggingEffectMiddleware};
 pub use environment::{Environment, EnvironmentSpec};
+#[allow(deprecated)]
 pub use error::{EnvError, OperatorError, OrchError, StateError};
 pub use id::{DispatchId, OperatorId, SessionId, WorkflowId};
 pub use lifecycle::CompactionPolicy;
@@ -98,6 +129,7 @@ pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
     StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,
 };
+#[allow(deprecated)]
 pub use operator::{
     ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMeta, OperatorMetadata,
     OperatorOutput, SubDispatchRecord, ToolMetadata,

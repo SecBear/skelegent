@@ -2,6 +2,7 @@
 //! Run with: cargo test --features test-utils --test phase2
 
 #![cfg(feature = "test-utils")]
+#![allow(deprecated)]
 
 use layer0::dispatch_context::DispatchContext;
 use layer0::id::{DispatchId, OperatorId};

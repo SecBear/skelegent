@@ -60,7 +60,7 @@
 use crate::content::Content;
 use crate::dispatch_context::DispatchContext;
 use crate::effect::Effect;
-use crate::error::OrchError;
+use crate::error::ProtocolError;
 use crate::id::DispatchId;
 use crate::operator::{OperatorInput, OperatorOutput};
 use async_trait::async_trait;
@@ -91,7 +91,7 @@ pub trait Dispatcher: Send + Sync {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError>;
+    ) -> Result<DispatchHandle, ProtocolError>;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -149,8 +149,7 @@ pub enum DispatchEvent {
     /// Terminal event. No further events follow.
     Failed {
         /// The error.
-        #[serde(with = "orch_error_serde")]
-        error: OrchError,
+        error: ProtocolError,
     },
 
     /// Operator is awaiting human approval for pending tool calls.
@@ -378,7 +377,7 @@ impl DispatchHandle {
     ///
     /// This is the migration path for callers that don't need streaming.
     /// Equivalent to the old blocking `Dispatcher::dispatch` behavior.
-    pub async fn collect(mut self) -> Result<OperatorOutput, OrchError> {
+    pub async fn collect(mut self) -> Result<OperatorOutput, ProtocolError> {
         let mut terminal_output = None;
         let mut terminal_error = None;
         let mut collected_effects = Vec::new();
@@ -411,8 +410,8 @@ impl DispatchHandle {
             }
             Ok(output)
         } else {
-            Err(OrchError::DispatchFailed(
-                "dispatch ended without terminal event".into(),
+            Err(ProtocolError::unavailable(
+                "dispatch ended without terminal event",
             ))
         }
     }
@@ -473,7 +472,7 @@ impl DispatchHandle {
     ///
     /// `EffectEmitted` events appear in both the `events` vec and `output.effects`,
     /// consistent with how [`collect`](Self::collect) populates `output.effects`.
-    pub async fn collect_all(mut self) -> Result<CollectedDispatch, OrchError> {
+    pub async fn collect_all(mut self) -> Result<CollectedDispatch, ProtocolError> {
         let mut events = Vec::new();
         let mut terminal_output = None;
         let mut terminal_error = None;
@@ -498,8 +497,8 @@ impl DispatchHandle {
         }
 
         let Some(mut output) = terminal_output else {
-            return Err(OrchError::DispatchFailed(
-                "dispatch ended without terminal event".into(),
+            return Err(ProtocolError::unavailable(
+                "dispatch ended without terminal event",
             ));
         };
 
@@ -635,10 +634,15 @@ impl std::fmt::Debug for DispatchSender {
 /// The emitter wraps an `Option<DispatchSender>`: `None` when no
 /// consumer is listening (tests, batch callers). Emission methods
 /// become no-ops in that case — zero overhead.
+///
+/// **Deprecated:** This type will be replaced by `ExecutionEvent`-based
+/// emission in a future release.
+#[deprecated(note = "Will be replaced by ExecutionEvent-based emission")]
 pub struct EffectEmitter {
     sender: Option<DispatchSender>,
 }
 
+#[allow(deprecated)]
 impl EffectEmitter {
     /// Create an emitter that forwards events to a dispatch handle.
     pub fn new(sender: DispatchSender) -> Self {
@@ -736,6 +740,7 @@ impl EffectEmitter {
     }
 }
 
+#[allow(deprecated)]
 impl std::fmt::Debug for EffectEmitter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EffectEmitter")
@@ -744,22 +749,18 @@ impl std::fmt::Debug for EffectEmitter {
     }
 }
 
-// Serde adapter for OrchError: serializes as Display string, deserializes as DispatchFailed.
-// OrchError cannot derive Serialize/Deserialize because several variants hold Box<dyn Error>.
-// For SSE consumers the error message is sufficient.
-mod orch_error_serde {
-    use crate::error::OrchError;
-    use serde::{Deserialize, Deserializer, Serializer};
+// ── Type aliases ─────────────────────────────────────────────────────────────
 
-    pub fn serialize<S: Serializer>(error: &OrchError, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&error.to_string())
-    }
+/// Alias for `DispatchHandle` — the v2 name for invocation handles.
+///
+/// `InvocationHandle` is the preferred name going forward. `DispatchHandle`
+/// remains available as a deprecated alias.
+pub type InvocationHandle = DispatchHandle;
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<OrchError, D::Error> {
-        let msg = String::deserialize(d)?;
-        Ok(OrchError::DispatchFailed(msg))
-    }
-}
+/// Alias for `CollectedDispatch` — the v2 name for collected invocation results.
+///
+/// `CollectedInvocation` is the preferred name going forward.
+pub type CollectedInvocation = CollectedDispatch;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // TESTS
@@ -770,11 +771,17 @@ mod tests {
     use super::*;
     use crate::content::Content;
     use crate::id::DispatchId;
-    use crate::operator::OperatorOutput;
+    use crate::operator::{OperatorOutput, Outcome, TerminalOutcome};
     use std::sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
     };
+
+    fn completed_outcome() -> Outcome {
+        Outcome::Terminal {
+            terminal: TerminalOutcome::Completed,
+        }
+    }
 
     /// Helper: create a handle that immediately emits the given events then completes.
     fn make_handle_with_events(events: Vec<DispatchEvent>) -> DispatchHandle {
@@ -797,10 +804,7 @@ mod tests {
 
     fn completed_event() -> DispatchEvent {
         DispatchEvent::Completed {
-            output: OperatorOutput::new(
-                Content::text("done"),
-                crate::operator::ExitReason::Complete,
-            ),
+            output: OperatorOutput::new(Content::text("done"), completed_outcome()),
         }
     }
 
@@ -880,7 +884,7 @@ mod tests {
                 .send(DispatchEvent::Completed {
                     output: OperatorOutput::new(
                         Content::text("should not reach"),
-                        crate::operator::ExitReason::Complete,
+                        completed_outcome(),
                     ),
                 })
                 .await;
@@ -924,10 +928,6 @@ mod tests {
     }
 
     /// collect() must extend output.effects rather than replace them.
-    ///
-    /// Scenario: the operator sets output.effects in make_output() (e.g. WriteMemory),
-    /// and ALSO emits effects via the EffectEmitted channel (e.g. a Signal). Both
-    /// must appear in the final output — neither should shadow the other.
     #[tokio::test]
     async fn collect_extends_output_effects_not_replaces() {
         use crate::effect::{Effect, EffectKind};
@@ -943,22 +943,18 @@ mod tests {
 
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("extend-test"));
         tokio::spawn(async move {
-            // Emit an effect via the channel.
             let _ = sender
                 .send(DispatchEvent::EffectEmitted {
                     effect: channel_effect,
                 })
                 .await;
-            // Complete with an output that already carries its own effect.
-            let mut output =
-                OperatorOutput::new(Content::text("done"), crate::operator::ExitReason::Complete);
+            let mut output = OperatorOutput::new(Content::text("done"), completed_outcome());
             output.effects.push(output_effect);
             let _ = sender.send(DispatchEvent::Completed { output }).await;
         });
 
         let result = handle.collect().await.unwrap();
 
-        // Both effects must survive — channel effects extend, not replace.
         assert_eq!(
             result.effects.len(),
             2,
@@ -982,10 +978,7 @@ mod tests {
         use crate::approval::ApprovalRequest;
         use crate::content::Content;
         use crate::effect::{Effect, EffectKind};
-        use crate::error::OrchError;
-        use crate::operator::{ExitReason, OperatorOutput};
 
-        // Helper: serialize then deserialize and assert no panic.
         fn round_trip(ev: DispatchEvent) {
             let json = serde_json::to_string(&ev).expect("serialize");
             assert!(!json.is_empty());
@@ -1005,11 +998,10 @@ mod tests {
             }),
         });
         round_trip(DispatchEvent::Completed {
-            output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+            output: OperatorOutput::new(Content::text("done"), completed_outcome()),
         });
-        // Failed: error serialized as string, deserializes as DispatchFailed.
         round_trip(DispatchEvent::Failed {
-            error: OrchError::DispatchFailed("something went wrong".into()),
+            error: ProtocolError::unavailable("something went wrong"),
         });
         round_trip(DispatchEvent::AwaitingApproval(ApprovalRequest::new(
             "run-1",
@@ -1023,8 +1015,6 @@ mod tests {
         use crate::approval::ApprovalRequest;
         use crate::content::Content;
         use crate::effect::{Effect, EffectKind};
-        use crate::error::OrchError;
-        use crate::operator::{ExitReason, OperatorOutput};
 
         assert_eq!(
             DispatchEvent::Progress {
@@ -1052,14 +1042,14 @@ mod tests {
         );
         assert_eq!(
             DispatchEvent::Completed {
-                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+                output: OperatorOutput::new(Content::text("done"), completed_outcome()),
             }
             .event_type(),
             "dispatch.completed"
         );
         assert_eq!(
             DispatchEvent::Failed {
-                error: OrchError::DispatchFailed("x".into()),
+                error: ProtocolError::unavailable("x"),
             }
             .event_type(),
             "dispatch.failed"
@@ -1083,9 +1073,8 @@ mod tests {
             "unexpected prefix: {line:?}"
         );
         assert!(line.ends_with("\n\n"), "missing trailing blank: {line:?}");
-        // Extract and validate the JSON payload.
         let data_start = line.find("data: ").unwrap() + 6;
-        let data_end = line.len() - 2; // strip trailing \n\n
+        let data_end = line.len() - 2;
         let data = &line[data_start..data_end];
         let v: serde_json::Value = serde_json::from_str(data).expect("valid JSON");
         assert_eq!(v["type"], "progress");

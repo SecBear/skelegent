@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "event_id": "event-3",
+    "dispatch_id": "dispatch-1",
+    "seq": 3,
+    "timestamp_unix_ms": 1700000000200,
+    "source": "orchestrator"
+  },
+  "kind": {
+    "kind": "failed",
+    "error": {
+      "code": "internal",
+      "message": "boom",
+      "retryable": false,
+      "details": {}
+    }
+  }
+}

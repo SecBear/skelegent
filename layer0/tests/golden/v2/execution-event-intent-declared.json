@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "event_id": "event-1",
+    "dispatch_id": "dispatch-1",
+    "seq": 1,
+    "timestamp_unix_ms": 1700000000000,
+    "source": "runtime"
+  },
+  "kind": {
+    "kind": "intent_declared",
+    "intent": {
+      "meta": {
+        "intent_id": "intent-2",
+        "seq": 2
+      },
+      "kind": {
+        "kind": "request_approval",
+        "tool_name": "dangerous_tool",
+        "call_id": "call-1",
+        "input": {
+          "cmd": "rm -rf /tmp/test"
+        }
+      }
+    }
+  }
+}

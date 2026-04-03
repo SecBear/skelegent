@@ -1,8 +1,8 @@
 //! EchoOperator — returns the input message as the output.
 
 use crate::dispatch_context::DispatchContext;
-use crate::error::OperatorError;
-use crate::operator::{ExitReason, OperatorInput, OperatorOutput};
+use crate::error::ProtocolError;
+use crate::operator::{OperatorInput, OperatorOutput, Outcome, TerminalOutcome};
 use async_trait::async_trait;
 
 /// An operator implementation that echoes the input message back as output.
@@ -15,7 +15,12 @@ impl crate::operator::Operator for EchoOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
-        Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+    ) -> Result<OperatorOutput, ProtocolError> {
+        Ok(OperatorOutput::new(
+            input.message,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        ))
     }
 }

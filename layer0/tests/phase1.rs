@@ -8,6 +8,8 @@
 //! - Content helper methods
 //! - Custom variant round-trips
 
+#![allow(deprecated)]
+
 use layer0::*;
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -221,7 +223,12 @@ fn sample_operator_output() -> OperatorOutput {
     )];
     meta.duration = DurationMs::from_secs(2);
 
-    let mut output = OperatorOutput::new(Content::text("done"), ExitReason::Complete);
+    let mut output = OperatorOutput::new(
+        Content::text("done"),
+        Outcome::Terminal {
+            terminal: TerminalOutcome::Completed,
+        },
+    );
     output.metadata = meta;
     output
 }
@@ -1380,7 +1387,12 @@ async fn collect_all_preserves_intermediate_events() {
             .unwrap();
         sender
             .send(DispatchEvent::Completed {
-                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+                output: OperatorOutput::new(
+                    Content::text("done"),
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
+                ),
             })
             .await
             .unwrap();
@@ -1416,7 +1428,12 @@ async fn collect_discards_progress_but_collect_all_preserves_it() {
             .unwrap();
         sender
             .send(DispatchEvent::Completed {
-                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+                output: OperatorOutput::new(
+                    Content::text("done"),
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
+                ),
             })
             .await
             .unwrap();
@@ -1435,7 +1452,12 @@ async fn collect_all_empty_events_on_immediate_complete() {
     tokio::spawn(async move {
         sender
             .send(DispatchEvent::Completed {
-                output: OperatorOutput::new(Content::text("ok"), ExitReason::Complete),
+                output: OperatorOutput::new(
+                    Content::text("ok"),
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
+                ),
             })
             .await
             .unwrap();
@@ -1458,14 +1480,14 @@ async fn collect_all_returns_error_on_failure() {
             .unwrap();
         sender
             .send(DispatchEvent::Failed {
-                error: OrchError::DispatchFailed("boom".into()),
+                error: ProtocolError::unavailable("boom"),
             })
             .await
             .unwrap();
     });
 
     let err = handle.collect_all().await.unwrap_err();
-    assert!(matches!(err, OrchError::DispatchFailed(_)));
+    assert_eq!(err.code, ErrorCode::Unavailable);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

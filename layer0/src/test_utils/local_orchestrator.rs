@@ -2,7 +2,7 @@
 
 use crate::dispatch::{DispatchEvent, DispatchHandle, DispatchSender};
 use crate::dispatch_context::DispatchContext;
-use crate::error::OrchError;
+use crate::error::ProtocolError;
 use crate::id::OperatorId;
 use crate::operator::{Operator, OperatorInput};
 use async_trait::async_trait;
@@ -41,11 +41,13 @@ impl crate::dispatch::Dispatcher for LocalOrchestrator {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let op = self
             .operators
             .get(ctx.operator_id.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
+            .ok_or_else(|| {
+                ProtocolError::not_found(format!("operator not found: {}", ctx.operator_id))
+            })?
             .clone();
 
         let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
@@ -70,12 +72,8 @@ async fn run_dispatch(
         Ok(output) => {
             let _ = sender.send(DispatchEvent::Completed { output }).await;
         }
-        Err(op_err) => {
-            let _ = sender
-                .send(DispatchEvent::Failed {
-                    error: OrchError::OperatorError(op_err),
-                })
-                .await;
+        Err(error) => {
+            let _ = sender.send(DispatchEvent::Failed { error }).await;
         }
     }
 }

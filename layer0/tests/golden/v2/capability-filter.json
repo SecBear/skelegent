@@ -1,0 +1,7 @@
+{
+  "kinds": ["tool", "resource"],
+  "name_contains": "memory",
+  "requires_streaming": false,
+  "requires_approval": true,
+  "tags": ["state"]
+}
