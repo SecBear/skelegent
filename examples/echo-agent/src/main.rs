@@ -125,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Response    : {}",
         output.message.as_text().unwrap_or("(no text)")
     );
-    println!("Effects     : {}", output.effects.len());
+    println!("Intents     : {}", output.intents.len());
     println!(
         "Tokens      : in={}, out={}",
         output.metadata.tokens_in, output.metadata.tokens_out

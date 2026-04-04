@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use layer0::operator::Operator;
 use layer0::error::ProtocolError;
+use layer0::operator::Operator;
 use layer0::operator::{Outcome, TerminalOutcome};
 use layer0::{
     Content, DispatchContext, DurationMs, OperatorInput, OperatorOutput, SubDispatchRecord,
@@ -151,10 +151,7 @@ mod tests {
     use super::*;
     use crate::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
     use layer0::operator::{Outcome, TerminalOutcome, TriggerType};
-    use layer0::{
-        Content, DispatchContext, DispatchId, Dispatcher, OperatorId, OperatorInput,
-        error::ProtocolError,
-    };
+    use layer0::{Content, DispatchContext, DispatchId, Dispatcher, OperatorId, OperatorInput};
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;
@@ -275,7 +272,9 @@ mod tests {
         assert!(
             matches!(
                 output.outcome,
-                Outcome::Terminal { terminal: TerminalOutcome::Completed }
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed
+                }
             ),
             "expected Completed outcome"
         );
@@ -329,7 +328,9 @@ mod tests {
         assert!(
             matches!(
                 output.outcome,
-                Outcome::Terminal { terminal: TerminalOutcome::Completed }
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed
+                }
             ),
             "expected Completed outcome"
         );

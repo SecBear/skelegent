@@ -56,8 +56,6 @@ pub mod context;
 pub mod dispatch;
 pub mod dispatch_context;
 pub mod duration;
-pub mod effect;
-pub mod effect_log;
 pub mod environment;
 pub mod error;
 pub mod event;
@@ -75,13 +73,15 @@ pub mod wait;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 
-// ── v2 re-exports ───────────────────────────────────────────────────────────
+// ── Re-exports ───────────────────────────────────────────────────────────────
 
 // Outcome family
 pub use operator::{InterceptionKind, LimitReason, Outcome, TerminalOutcome, TransferOutcome};
 
-// Intent (types shared with effect module are re-exported from effect below)
-pub use intent::{Intent, IntentKind, IntentMeta};
+// Intent
+pub use intent::{
+    HandoffContext, Intent, IntentKind, IntentMeta, MemoryScope, Scope, SignalPayload,
+};
 
 // ExecutionEvent
 pub use event::{EventKind, EventMeta, EventSource, ExecutionEvent};
@@ -96,44 +96,32 @@ pub use capability::{
 };
 
 // Uniform error
-pub use error::{ErrorCode, ProtocolError};
+pub use error::{EnvError, ErrorCode, ProtocolError, StateError};
 
-// Dispatch aliases
-pub use dispatch::{CollectedInvocation, InvocationHandle};
-
-// ── Existing re-exports (v1-compatible) ─────────────────────────────────────
-
-pub use approval::{
-    ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
-    ToolCallDecision,
-};
-pub use content::{Content, ContentBlock};
-pub use context::{Message, MessageMeta, Role};
-#[allow(deprecated)]
+// Dispatch
 pub use dispatch::{
-    Artifact, CollectedDispatch, DispatchEvent, DispatchHandle, DispatchSender, Dispatcher,
-    EffectEmitter,
+    Artifact, CollectedDispatch, CollectedInvocation, DispatchEvent, DispatchHandle, DispatchSender,
+    Dispatcher, InvocationHandle,
 };
 pub use dispatch_context::{AuthIdentity, DispatchContext, Extensions, TraceContext};
 pub use duration::DurationMs;
-pub use effect::{
-    Effect, EffectKind, EffectMeta, HandoffContext, MemoryScope, Scope, SignalPayload,
-};
-pub use effect_log::{EffectLog, EffectLogError, InMemoryEffectLog};
 pub use environment::{Environment, EnvironmentSpec};
-#[allow(deprecated)]
-pub use error::{EnvError, OperatorError, OrchError, StateError};
 pub use id::{DispatchId, OperatorId, SessionId, WorkflowId};
 pub use lifecycle::CompactionPolicy;
 pub use middleware::{
     DispatchMiddleware, DispatchNext, DispatchStack, ExecMiddleware, ExecNext, ExecStack,
     StoreMiddleware, StoreReadNext, StoreStack, StoreWriteNext,
 };
-#[allow(deprecated)]
 pub use operator::{
-    ExitReason, Operator, OperatorConfig, OperatorInput, OperatorMeta, OperatorMetadata,
-    OperatorOutput, SubDispatchRecord, ToolMetadata,
+    Operator, OperatorConfig, OperatorInput, OperatorMeta, OperatorMetadata, OperatorOutput,
+    SubDispatchRecord, ToolMetadata,
 };
+pub use approval::{
+    ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
+    ToolCallDecision,
+};
+pub use content::{Content, ContentBlock};
+pub use context::{Message, MessageMeta, Role};
 pub use reducer::{AppendList, MergeObject, Overwrite, ReducerRegistry, StateReducer, Sum};
 pub use secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 pub use state::{

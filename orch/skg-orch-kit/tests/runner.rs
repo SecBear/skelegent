@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
-use layer0::effect::{Effect, EffectKind, HandoffContext, MemoryScope, Scope, SignalPayload};
+use layer0::{HandoffContext, Intent, IntentKind, MemoryScope, Scope, SignalPayload};
 use layer0::error::{ProtocolError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{
@@ -71,12 +71,11 @@ impl Dispatcher for SimpleOrch {
 
 #[async_trait]
 impl Signalable for SimpleOrch {
-    #[allow(deprecated)]
     async fn signal(
         &self,
         target: &WorkflowId,
         signal: SignalPayload,
-    ) -> Result<(), layer0::error::OrchError> {
+    ) -> Result<(), layer0::error::ProtocolError> {
         self.signals.lock().await.push((target.clone(), signal));
         Ok(())
     }
@@ -160,7 +159,7 @@ impl Operator for WriterOperator {
                 terminal: TerminalOutcome::Completed,
             },
         );
-        output.effects.push(Effect::new(EffectKind::WriteMemory {
+        output.intents.push(Intent::new(IntentKind::WriteMemory {
             scope: Scope::Global,
             key: "k1".into(),
             value: json!({"v": 1}),
@@ -171,7 +170,7 @@ impl Operator for WriterOperator {
             salience: None,
             ttl: None,
         }));
-        output.effects.push(Effect::new(EffectKind::Signal {
+        output.intents.push(Intent::new(IntentKind::Signal {
             target: WorkflowId::new("wf1"),
             payload: SignalPayload::new("sig.type", json!({"ok": true})),
         }));
@@ -194,7 +193,7 @@ impl Operator for DelegateOperator {
                 terminal: TerminalOutcome::Completed,
             },
         );
-        output.effects.push(Effect::new(EffectKind::Delegate {
+        output.intents.push(Intent::new(IntentKind::Delegate {
             operator: OperatorId::new("child"),
             input: Box::new(OperatorInput::new(
                 Content::text("child task"),
@@ -239,7 +238,7 @@ impl Operator for HandoffOperator {
                 terminal: TerminalOutcome::Completed,
             },
         );
-        output.effects.push(Effect::new(EffectKind::Handoff {
+        output.intents.push(Intent::new(IntentKind::Handoff {
             operator: OperatorId::new("handoff_target"),
             context: HandoffContext {
                 task: Content::text(""),
@@ -290,7 +289,7 @@ impl Operator for FullPipelineRootOperator {
                 terminal: TerminalOutcome::Completed,
             },
         );
-        output.effects.push(Effect::new(EffectKind::WriteMemory {
+        output.intents.push(Intent::new(IntentKind::WriteMemory {
             scope: Scope::Global,
             key: "k-pipeline".into(),
             value: json!({"v": 42}),
@@ -301,14 +300,14 @@ impl Operator for FullPipelineRootOperator {
             salience: None,
             ttl: None,
         }));
-        output.effects.push(Effect::new(EffectKind::Delegate {
+        output.intents.push(Intent::new(IntentKind::Delegate {
             operator: OperatorId::new("child"),
             input: Box::new(OperatorInput::new(
                 Content::text("child task"),
                 TriggerType::Task,
             )),
         }));
-        output.effects.push(Effect::new(EffectKind::Handoff {
+        output.intents.push(Intent::new(IntentKind::Handoff {
             operator: OperatorId::new("handoff_target"),
             context: HandoffContext {
                 task: Content::text(""),
@@ -316,11 +315,11 @@ impl Operator for FullPipelineRootOperator {
                 metadata: Some(json!({"ticket": 123})),
             },
         }));
-        output.effects.push(Effect::new(EffectKind::Signal {
+        output.intents.push(Intent::new(IntentKind::Signal {
             target: WorkflowId::new("wf-pipeline"),
             payload: SignalPayload::new("pipeline.signal", json!({"ok": true})),
         }));
-        output.effects.push(Effect::new(EffectKind::DeleteMemory {
+        output.intents.push(Intent::new(IntentKind::DeleteMemory {
             scope: Scope::Global,
             key: "k-pipeline".into(),
         }));
@@ -464,7 +463,7 @@ async fn runner_has_safety_bound_for_infinite_followups() {
                     terminal: TerminalOutcome::Completed,
                 },
             );
-            output.effects.push(Effect::new(EffectKind::Delegate {
+            output.intents.push(Intent::new(IntentKind::Delegate {
                 operator: OperatorId::new("root"),
                 input: Box::new(OperatorInput::new(Content::text("loop"), TriggerType::Task)),
             }));
@@ -554,8 +553,8 @@ struct PrefixKeyMiddleware {
 
 #[async_trait]
 impl EffectMiddleware for PrefixKeyMiddleware {
-    async fn on_effect(&self, mut effect: Effect, _ctx: &DispatchContext) -> EffectAction {
-        if let EffectKind::WriteMemory { ref mut key, .. } = effect.kind {
+    async fn on_effect(&self, mut effect: Intent, _ctx: &DispatchContext) -> EffectAction {
+        if let IntentKind::WriteMemory { ref mut key, .. } = effect.kind {
             *key = format!("{}{}", self.prefix, key);
         }
         EffectAction::Continue(Box::new(effect))
@@ -567,8 +566,8 @@ struct SkipWriteMemoryMiddleware;
 
 #[async_trait]
 impl EffectMiddleware for SkipWriteMemoryMiddleware {
-    async fn on_effect(&self, effect: Effect, _ctx: &DispatchContext) -> EffectAction {
-        if matches!(effect.kind, EffectKind::WriteMemory { .. }) {
+    async fn on_effect(&self, effect: Intent, _ctx: &DispatchContext) -> EffectAction {
+        if matches!(effect.kind, IntentKind::WriteMemory { .. }) {
             EffectAction::Skip
         } else {
             EffectAction::Continue(Box::new(effect))
@@ -592,7 +591,7 @@ impl Operator for MwWriterOperator {
                 terminal: TerminalOutcome::Completed,
             },
         );
-        output.effects.push(Effect::new(EffectKind::WriteMemory {
+        output.intents.push(Intent::new(IntentKind::WriteMemory {
             scope: Scope::Global,
             key: "mw-key".into(),
             value: json!({"v": 99}),
@@ -729,7 +728,7 @@ impl Operator for FifoRootOperator {
             },
         );
         for name in ["first", "second", "third"] {
-            output.effects.push(Effect::new(EffectKind::Delegate {
+            output.intents.push(Intent::new(IntentKind::Delegate {
                 operator: OperatorId::new(name),
                 input: Box::new(OperatorInput::new(Content::text(name), TriggerType::Task)),
             }));

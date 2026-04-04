@@ -22,7 +22,7 @@ use std::sync::Arc;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::EffectKind;
+use layer0::IntentKind;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, TriggerType};
 use skg_context_engine::{CognitiveOperator, ReactLoopConfig};
@@ -281,10 +281,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("Exit reason:     {:?}", output.outcome);
     println!();
-    println!("Effects ({} total):", output.effects.len());
-    for (i, effect) in output.effects.iter().enumerate() {
-        match &effect.kind {
-            EffectKind::Handoff { operator, context } => {
+    println!("Intents ({} total):", output.intents.len());
+    for (i, intent) in output.intents.iter().enumerate() {
+        match &intent.kind {
+            IntentKind::Handoff { operator, context } => {
                 println!(
                     "  [{}] Handoff → {} | reason: \"{}\"",
                     i,

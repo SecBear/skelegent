@@ -17,10 +17,11 @@ use futures_util::StreamExt;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::duration::DurationMs;
-use layer0::effect::HandoffContext;
 use layer0::id::OperatorId;
-use layer0::intent::{Intent, IntentKind};
-use layer0::operator::{LimitReason, Outcome, OperatorMetadata, OperatorOutput, TerminalOutcome, TransferOutcome};
+use layer0::intent::{HandoffContext, Intent, IntentKind};
+use layer0::operator::{OperatorMetadata, OperatorOutput, Outcome, TransferOutcome};
+#[cfg(test)]
+use layer0::operator::{LimitReason, TerminalOutcome};
 use layer0::wait::WaitReason;
 use skg_tool::ToolRegistry;
 use skg_turn::infer::InferResponse;
@@ -432,7 +433,9 @@ mod tests {
 
         async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
             Err(EngineError::Exit {
-                outcome: Outcome::Limited { limit: LimitReason::Timeout },
+                outcome: Outcome::Limited {
+                    limit: LimitReason::Timeout,
+                },
                 detail: "append boundary timeout".into(),
             })
         }
@@ -490,7 +493,9 @@ mod tests {
 
         async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
             Err(EngineError::Exit {
-                outcome: Outcome::Limited { limit: LimitReason::Timeout },
+                outcome: Outcome::Limited {
+                    limit: LimitReason::Timeout,
+                },
                 detail: "stream boundary timeout".into(),
             })
         }

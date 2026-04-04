@@ -213,11 +213,11 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
         let output = op.execute(input, &ctx).await?;
-        if output.has_unhandled_effects() {
+        if output.has_unhandled_intents() {
             eprintln!(
-                "warning: OperatorOutput contains {} effect(s) that will not be executed. \
-                 Use an EffectHandler or OrchestratedRunner to process effects.",
-                output.effects.len(),
+                "warning: OperatorOutput contains {} intent(s) that will not be executed. \
+                 Use an EffectHandler or OrchestratedRunner to process intents.",
+                output.intents.len(),
             );
         }
         Ok(output)
@@ -329,7 +329,7 @@ mod tests {
     use super::*;
     use layer0::content::Content;
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{Outcome, OperatorInput, TerminalOutcome, TriggerType};
+    use layer0::operator::{OperatorInput, Outcome, TerminalOutcome, TriggerType};
     use layer0::{DispatchContext, operator::Operator};
     use skg_turn::test_utils::{TestProvider, make_text_response};
 

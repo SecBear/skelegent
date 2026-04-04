@@ -75,13 +75,13 @@ impl Operator for Pipeline {
         ctx: &DispatchContext,
     ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_input = input;
-        let mut all_effects: Vec<layer0::Effect> = Vec::new();
+        let mut all_effects: Vec<layer0::Intent> = Vec::new();
         let mut last_output: Option<OperatorOutput> = None;
 
         for step in &self.steps {
             let mut output = step.execute(current_input, ctx).await?;
 
-            all_effects.append(&mut output.effects);
+            all_effects.append(&mut output.intents);
 
             let is_completed = matches!(
                 output.outcome,
@@ -90,7 +90,7 @@ impl Operator for Pipeline {
                 }
             );
             if !is_completed {
-                output.effects = all_effects;
+                output.intents = all_effects;
                 return Ok(output);
             }
 
@@ -100,7 +100,7 @@ impl Operator for Pipeline {
 
         match last_output {
             Some(mut out) => {
-                out.effects = all_effects;
+                out.intents = all_effects;
                 Ok(out)
             }
             None => Ok(OperatorOutput::new(

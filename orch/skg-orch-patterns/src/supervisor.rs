@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::context::{Message, Role};
 use layer0::dispatch::Dispatcher;
-use layer0::effect::{EffectKind, HandoffContext};
+use layer0::{HandoffContext, IntentKind};
 use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{
@@ -41,7 +41,7 @@ fn next_dispatch_id() -> DispatchId {
 /// the input. After each `HandedOff` exit it determines the next speaker
 /// using the following hybrid rule:
 ///
-/// 1. If the last [`EffectKind::Handoff`] effect names an `operator` that is
+/// 1. If the last [`IntentKind::Handoff`] effect names an `operator` that is
 ///    present in `agents`, that operator is dispatched directly —
 ///    bypassing the selector.
 /// 2. Otherwise the selector is consulted to choose the next speaker.
@@ -94,7 +94,7 @@ impl Operator for SupervisorOperator {
     ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_input = input;
         // Accumulated effects from every round.
-        let mut all_effects: Vec<layer0::Effect> = Vec::new();
+        let mut all_effects: Vec<layer0::Intent> = Vec::new();
         // Conversation history passed to the selector for context-aware routing.
         // Messages carry role + content so selectors can implement attribution-based
         // routing (e.g., "don't repeat last speaker", "route after user turn").
@@ -126,8 +126,8 @@ impl Operator for SupervisorOperator {
             // Extract the target operator and structured context from the last Handoff
             // effect BEFORE draining them, so we can use context.task as next input.
             let handoff: Option<(OperatorId, HandoffContext)> =
-                output.effects.iter().rev().find_map(|e| {
-                    if let EffectKind::Handoff {
+                output.intents.iter().rev().find_map(|e| {
+                    if let IntentKind::Handoff {
                         ref operator,
                         ref context,
                     } = e.kind
@@ -141,13 +141,13 @@ impl Operator for SupervisorOperator {
             let handoff_ctx = handoff.map(|(_, hctx)| hctx);
 
             // Absorb effects before examining the outcome.
-            all_effects.append(&mut output.effects);
+            all_effects.append(&mut output.intents);
 
             match &output.outcome {
                 Outcome::Terminal {
                     terminal: TerminalOutcome::Completed,
                 } => {
-                    output.effects = all_effects;
+                    output.intents = all_effects;
                     return Ok(output);
                 }
                 Outcome::Transfer {
@@ -174,7 +174,7 @@ impl Operator for SupervisorOperator {
                 }
                 // Unexpected exit (budget, timeout, error, …) — surface immediately.
                 _ => {
-                    output.effects = all_effects;
+                    output.intents = all_effects;
                     return Ok(output);
                 }
             }
@@ -187,7 +187,7 @@ impl Operator for SupervisorOperator {
                 limit: LimitReason::MaxTurns,
             },
         );
-        timeout_output.effects = all_effects;
+        timeout_output.intents = all_effects;
         Ok(timeout_output)
     }
 }
@@ -203,7 +203,7 @@ mod tests {
     use async_trait::async_trait;
     use layer0::DispatchContext;
     use layer0::content::Content;
-    use layer0::effect::{Effect, EffectKind, HandoffContext};
+    use layer0::{HandoffContext, Intent, IntentKind};
     use layer0::error::ProtocolError;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{
@@ -274,7 +274,7 @@ mod tests {
             } else {
                 self.task.clone()
             };
-            out.effects.push(Effect::new(EffectKind::Handoff {
+            out.intents.push(Intent::new(IntentKind::Handoff {
                 operator: self.target.clone(),
                 context: HandoffContext {
                     task: Content::text(next_task),
@@ -333,9 +333,9 @@ mod tests {
         );
         // Effects from both rounds should be present: A emits one Handoff effect.
         assert_eq!(
-            output.effects.len(),
+            output.intents.len(),
             1,
-            "one Effect::Handoff from agent A should be accumulated"
+            "one Intent::Handoff from agent A should be accumulated"
         );
     }
 
@@ -373,7 +373,7 @@ mod tests {
             "must exit with MaxTurns after 3 rounds"
         );
         // 3 rounds × 1 Handoff effect each.
-        assert_eq!(output.effects.len(), 3);
+        assert_eq!(output.intents.len(), 3);
     }
 
     /// Verifies that `context.task` from `HandoffContext` flows through as the
@@ -396,7 +396,7 @@ mod tests {
                         transfer: TransferOutcome::HandedOff,
                     },
                 );
-                out.effects.push(Effect::new(EffectKind::Handoff {
+                out.intents.push(Intent::new(IntentKind::Handoff {
                     operator: OperatorId::new("receiver"),
                     context: HandoffContext {
                         task: Content::text("explicit-task-for-receiver"),

@@ -470,10 +470,7 @@ fn fail_event_produces_protocol_error_in_run_view() {
     )
     .unwrap();
 
-    assert_eq!(
-        transition.next.status(),
-        skg_run_core::RunStatus::Failed,
-    );
+    assert_eq!(transition.next.status(), skg_run_core::RunStatus::Failed,);
     // The FailRun command carries the same error.
     assert!(matches!(
         transition.commands.as_slice(),

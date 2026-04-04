@@ -6,7 +6,7 @@ use crate::op::ContextOp;
 use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use layer0::lifecycle::CompactionPolicy;
 use layer0::state::{SearchResult, StateStore};
 use std::sync::Arc;

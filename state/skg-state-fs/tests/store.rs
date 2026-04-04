@@ -1,4 +1,4 @@
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use layer0::id::SessionId;
 use layer0::state::{StateReader, StateStore};
 use skg_state_fs::FsStore;

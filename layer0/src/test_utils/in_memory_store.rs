@@ -1,6 +1,6 @@
 //! InMemoryStore — HashMap-backed StateStore for testing.
 
-use crate::effect::Scope;
+use crate::intent::Scope;
 use crate::error::StateError;
 use crate::state::{MemoryLink, SearchResult, StateStore};
 use async_trait::async_trait;

@@ -5,7 +5,7 @@
 
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use serde_json::json;
 use skg_context_engine::ops::cognitive::{
     CommitCognitiveState, CompressCognitiveStateConfig, Entity, Relation,

@@ -1,14 +1,13 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::dispatch::Artifact;
-use layer0::effect::{Effect, EffectKind, HandoffContext, MemoryScope, Scope, SignalPayload};
 use layer0::error::{ProtocolError, StateError};
 use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
 use layer0::state::{Lifetime, MemoryLink, StateStore, StoreOptions};
 use layer0::test_utils::InMemoryStore;
+use layer0::{HandoffContext, Intent, IntentKind, MemoryScope, Scope, SignalPayload};
 use serde_json::json;
 use skg_effects_core::Signalable;
 use skg_effects_core::{EffectHandler, EffectOutcome, UnknownEffectPolicy};
@@ -120,7 +119,7 @@ async fn halt_hook_prevents_memory_write() {
 
     let outcome = handler
         .handle(
-            &Effect::new(EffectKind::WriteMemory {
+            &Intent::new(IntentKind::WriteMemory {
                 scope: Scope::Global,
                 key: "secret".into(),
                 value: json!("sensitive"),
@@ -145,7 +144,7 @@ async fn halt_hook_prevents_memory_write() {
     assert_eq!(got, None, "halt guard must prevent the write");
 }
 
-/// Without middleware the `WriteMemory` effect writes normally (regression guard).
+/// Without middleware the `WriteMemory` intent writes normally (regression guard).
 #[tokio::test]
 async fn no_hooks_writes_normally() {
     let state = Arc::new(InMemoryStore::new());
@@ -154,7 +153,7 @@ async fn no_hooks_writes_normally() {
 
     let outcome = handler
         .handle(
-            &Effect::new(EffectKind::WriteMemory {
+            &Intent::new(IntentKind::WriteMemory {
                 scope: Scope::Global,
                 key: "k".into(),
                 value: json!(42),
@@ -192,7 +191,7 @@ async fn observer_hook_sees_key_and_value() {
 
     let outcome = handler
         .handle(
-            &Effect::new(EffectKind::WriteMemory {
+            &Intent::new(IntentKind::WriteMemory {
                 scope: Scope::Global,
                 key: "observed_key".into(),
                 value: json!({"x": 1}),
@@ -248,7 +247,7 @@ async fn modify_hook_replaces_value() {
 
     let outcome = handler
         .handle(
-            &Effect::new(EffectKind::WriteMemory {
+            &Intent::new(IntentKind::WriteMemory {
                 scope: Scope::Global,
                 key: "m".into(),
                 value: json!("original"),
@@ -315,7 +314,7 @@ async fn lifetime_guardrail_blocks_transient_write() {
     // Transient write: middleware must block it.
     let outcome = handler
         .handle(
-            &Effect::new(EffectKind::WriteMemory {
+            &Intent::new(IntentKind::WriteMemory {
                 scope: Scope::Global,
                 key: "transient_key".into(),
                 value: serde_json::json!("should_not_land"),
@@ -345,7 +344,7 @@ async fn lifetime_guardrail_blocks_transient_write() {
     // Durable write: middleware must allow it.
     let outcome = handler
         .handle(
-            &Effect::new(EffectKind::WriteMemory {
+            &Intent::new(IntentKind::WriteMemory {
                 scope: Scope::Global,
                 key: "durable_key".into(),
                 value: serde_json::json!("should_land"),
@@ -393,7 +392,7 @@ async fn handoff_preserves_structured_state_in_metadata() {
 
     let outcome = handler
         .handle(
-            &Effect::new(EffectKind::Handoff {
+            &Intent::new(IntentKind::Handoff {
                 operator: OperatorId::new("next-op"),
                 context: HandoffContext {
                     task: Content::text("pick up from here"),
@@ -423,16 +422,16 @@ async fn handoff_preserves_structured_state_in_metadata() {
     }
 }
 
-/// Effect::LinkMemory creates a graph link that is traversable via the store.
+/// Intent::LinkMemory creates a graph link that is traversable via the store.
 #[tokio::test]
-async fn link_memory_effect_creates_graph_link() {
+async fn link_memory_intent_creates_graph_link() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(NoOpOrch);
     let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>));
 
     let outcome = handler
         .handle(
-            &Effect::new(EffectKind::LinkMemory {
+            &Intent::new(IntentKind::LinkMemory {
                 scope: Scope::Global,
                 link: MemoryLink::new("notes/meeting", "decisions/arch", "references"),
             }),
@@ -458,47 +457,28 @@ async fn link_memory_effect_creates_graph_link() {
     );
 }
 
-/// Progress and Artifact effects are caller-interpreted (routed via dispatch-channel
-/// wiring through EffectEmitter → DispatchHandle, not EffectHandler). The handler must
-/// skip them cleanly under `IgnoreAndWarn`.
+/// Custom intents are skipped cleanly under `IgnoreAndWarn`.
 #[tokio::test]
-async fn progress_and_artifact_effects_skip_cleanly() {
+async fn custom_intents_skip_cleanly() {
     let state = Arc::new(InMemoryStore::new());
     let orch = Arc::new(NoOpOrch);
     let handler = LocalEffectHandler::new(state.clone(), Some(orch as Arc<dyn Signalable>))
         .with_unknown_policy(UnknownEffectPolicy::IgnoreAndWarn);
 
-    // Progress effect must be skipped.
-    let progress_outcome = handler
+    let custom_outcome = handler
         .handle(
-            &Effect::new(EffectKind::Progress {
-                content: Content::text("step 1"),
+            &Intent::new(IntentKind::Custom {
+                name: "domain.specific".into(),
+                payload: json!({ "content": "step 1" }),
             }),
             &test_ctx(),
         )
         .await
-        .expect("Progress must not error under IgnoreAndWarn");
+        .expect("Custom must not error under IgnoreAndWarn");
 
     assert!(
-        matches!(progress_outcome, EffectOutcome::Skipped),
-        "Progress effect must produce Skipped, got {:?}",
-        progress_outcome,
-    );
-
-    // Artifact effect must be skipped.
-    let artifact_outcome = handler
-        .handle(
-            &Effect::new(EffectKind::Artifact {
-                artifact: Artifact::new("art-1", vec![Content::text("hello")]),
-            }),
-            &test_ctx(),
-        )
-        .await
-        .expect("Artifact must not error under IgnoreAndWarn");
-
-    assert!(
-        matches!(artifact_outcome, EffectOutcome::Skipped),
-        "Artifact effect must produce Skipped, got {:?}",
-        artifact_outcome,
+        matches!(custom_outcome, EffectOutcome::Skipped),
+        "Custom intent must produce Skipped, got {:?}",
+        custom_outcome,
     );
 }

@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
-use layer0::effect::SignalPayload;
+use layer0::SignalPayload;
 use layer0::error::ProtocolError;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{DispatchNext, DispatchStack};
@@ -127,7 +127,7 @@ mod tests {
     use layer0::DispatchContext;
     use layer0::content::Content;
     use layer0::dispatch::{DispatchHandle, Dispatcher};
-    use layer0::effect::SignalPayload;
+    use layer0::SignalPayload;
     use layer0::error::ProtocolError;
     use layer0::id::{DispatchId, OperatorId, WorkflowId};
     use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};

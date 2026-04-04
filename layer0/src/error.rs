@@ -84,182 +84,6 @@ impl std::fmt::Display for ProtocolError {
 
 impl std::error::Error for ProtocolError {}
 
-// ── OperatorError (v1 — deprecated) ────────────────────────────────────────
-
-/// Operator execution errors.
-///
-/// **Deprecated:** Use [`ProtocolError`] instead. This type is retained for
-/// backward compatibility and will be removed in a future release.
-#[deprecated(note = "Use ProtocolError instead")]
-#[non_exhaustive]
-#[derive(Debug, Error)]
-pub enum OperatorError {
-    /// Provider/model failure.
-    #[error("model error: {source}")]
-    Model {
-        /// The underlying provider error.
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-        /// Whether the caller should retry.
-        retryable: bool,
-    },
-
-    /// Sub-dispatch failure.
-    #[error("sub-dispatch error in {operator}: {source}")]
-    SubDispatch {
-        /// Which operator/tool failed.
-        operator: String,
-        /// The underlying error.
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// Context assembly failed before the model call.
-    #[error("context assembly: {source}")]
-    ContextAssembly {
-        /// The underlying error.
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-
-    /// The operator failed but retrying might succeed.
-    /// The orchestrator's retry policy decides.
-    #[error("retryable: {message}")]
-    Retryable {
-        /// Description.
-        message: String,
-        /// Optional underlying cause.
-        #[source]
-        source: Option<Box<dyn std::error::Error + Send + Sync>>,
-    },
-
-    /// The operator failed and retrying won't help.
-    /// Budget exceeded, invalid input, safety refusal.
-    #[error("non-retryable: {message}")]
-    NonRetryable {
-        /// Description.
-        message: String,
-        /// Optional underlying cause.
-        #[source]
-        source: Option<Box<dyn std::error::Error + Send + Sync>>,
-    },
-
-    /// A rule or policy halted execution — distinct from a permanent failure.
-    #[error("halted: {reason}")]
-    Halted {
-        /// Why execution was halted.
-        reason: String,
-    },
-
-    /// Catch-all. Include context.
-    #[error("{0}")]
-    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
-}
-
-#[allow(deprecated)]
-impl OperatorError {
-    /// Non-retryable model error from a message.
-    pub fn model(msg: impl Into<String>) -> Self {
-        let s: String = msg.into();
-        Self::Model {
-            source: s.into(),
-            retryable: false,
-        }
-    }
-
-    /// Retryable model error from a source error.
-    pub fn model_retryable(source: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::Model {
-            source: Box::new(source),
-            retryable: true,
-        }
-    }
-
-    /// Context assembly error from a source error.
-    pub fn context_assembly(source: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::ContextAssembly {
-            source: Box::new(source),
-        }
-    }
-
-    /// Simple retryable error from a message.
-    pub fn retryable(msg: impl Into<String>) -> Self {
-        Self::Retryable {
-            message: msg.into(),
-            source: None,
-        }
-    }
-
-    /// Simple non-retryable error from a message.
-    pub fn non_retryable(msg: impl Into<String>) -> Self {
-        Self::NonRetryable {
-            message: msg.into(),
-            source: None,
-        }
-    }
-
-    /// Whether this error represents a condition that might succeed on retry.
-    ///
-    /// Returns `true` for `Model { retryable: true, .. }` and `Retryable { .. }`.
-    /// All other variants are considered permanent failures.
-    pub fn is_retryable(&self) -> bool {
-        match self {
-            Self::Model { retryable, .. } => *retryable,
-            Self::Retryable { .. } => true,
-            _ => false,
-        }
-    }
-}
-
-/// Orchestration errors.
-///
-/// **Deprecated:** Use [`ProtocolError`] instead. This type is retained for
-/// backward compatibility and will be removed in a future release.
-#[deprecated(note = "Use ProtocolError instead")]
-#[non_exhaustive]
-#[derive(Debug, Error)]
-#[allow(deprecated)]
-pub enum OrchError {
-    /// The requested operator was not found.
-    #[error("operator not found: {0}")]
-    OperatorNotFound(String),
-
-    /// The requested workflow was not found.
-    #[error("workflow not found: {0}")]
-    WorkflowNotFound(String),
-
-    /// Dispatching a turn failed.
-    #[error("dispatch failed: {0}")]
-    DispatchFailed(String),
-
-    /// Signal delivery failed.
-    #[error("signal delivery failed: {0}")]
-    SignalFailed(String),
-
-    /// An operator error propagated through orchestration.
-    #[error("operator error: {0}")]
-    OperatorError(#[from] OperatorError),
-
-    /// An environment error propagated through orchestration.
-    #[error("environment error: {0}")]
-    EnvironmentError(EnvError),
-
-    /// Catch-all.
-    #[error("{0}")]
-    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
-}
-
-#[allow(deprecated)]
-impl From<EnvError> for OrchError {
-    fn from(e: EnvError) -> Self {
-        match e {
-            // Preserve the inner OperatorError so callers can match on it directly.
-            EnvError::OperatorError(op) => OrchError::OperatorError(op),
-            other => OrchError::EnvironmentError(other),
-        }
-    }
-}
-
 /// State errors.
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -289,7 +113,6 @@ pub enum StateError {
 /// Environment errors.
 #[non_exhaustive]
 #[derive(Debug, Error)]
-#[allow(deprecated)]
 pub enum EnvError {
     /// Failed to provision the execution environment.
     #[error("provisioning failed: {0}")]
@@ -307,88 +130,9 @@ pub enum EnvError {
     #[error("resource limit exceeded: {0}")]
     ResourceExceeded(String),
 
-    /// An operator error propagated through the environment.
-    #[error("operator error: {0}")]
-    OperatorError(#[from] OperatorError),
-
     /// Catch-all.
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
-}
-
-// ── From impls: v1 → ProtocolError ──────────────────────────────────────────
-
-#[allow(deprecated)]
-impl From<OperatorError> for ProtocolError {
-    fn from(e: OperatorError) -> Self {
-        match e {
-            OperatorError::Model {
-                retryable: true,
-                source,
-            } => ProtocolError::new(ErrorCode::Unavailable, source.to_string(), true)
-                .with_detail("kind", "operator_error")
-                .with_detail("variant", "model"),
-            OperatorError::Model {
-                retryable: false,
-                source,
-            } => ProtocolError::new(ErrorCode::Internal, source.to_string(), false),
-            OperatorError::SubDispatch { operator, source } => {
-                ProtocolError::new(ErrorCode::Unavailable, source.to_string(), false)
-                    .with_detail("variant", "sub_dispatch")
-                    .with_detail("operator", operator)
-            }
-            OperatorError::ContextAssembly { source } => {
-                ProtocolError::new(ErrorCode::InvalidInput, source.to_string(), false)
-            }
-            OperatorError::Retryable { message, .. } => {
-                ProtocolError::new(ErrorCode::Unavailable, message, true)
-            }
-            OperatorError::NonRetryable { message, .. } => {
-                ProtocolError::new(ErrorCode::Internal, message, false)
-            }
-            OperatorError::Halted { reason } => {
-                ProtocolError::new(ErrorCode::Conflict, reason, false)
-            }
-            OperatorError::Other(source) => {
-                ProtocolError::new(ErrorCode::Internal, source.to_string(), false)
-            }
-        }
-    }
-}
-
-#[allow(deprecated)]
-impl From<OrchError> for ProtocolError {
-    fn from(e: OrchError) -> Self {
-        match e {
-            OrchError::OperatorNotFound(name) => ProtocolError::new(
-                ErrorCode::NotFound,
-                format!("operator not found: {name}"),
-                false,
-            )
-            .with_detail("variant", "operator_not_found")
-            .with_detail("name", name),
-            OrchError::WorkflowNotFound(name) => ProtocolError::new(
-                ErrorCode::NotFound,
-                format!("workflow not found: {name}"),
-                false,
-            ),
-            OrchError::DispatchFailed(msg) => ProtocolError::new(
-                ErrorCode::Unavailable,
-                format!("dispatch failed: {msg}"),
-                true,
-            ),
-            OrchError::SignalFailed(msg) => ProtocolError::new(
-                ErrorCode::Unavailable,
-                format!("signal delivery failed: {msg}"),
-                true,
-            ),
-            OrchError::OperatorError(inner) => ProtocolError::from(inner),
-            OrchError::EnvironmentError(inner) => ProtocolError::from(inner),
-            OrchError::Other(source) => {
-                ProtocolError::new(ErrorCode::Internal, source.to_string(), false)
-            }
-        }
-    }
 }
 
 impl From<EnvError> for ProtocolError {
@@ -414,8 +158,6 @@ impl From<EnvError> for ProtocolError {
                 format!("resource limit exceeded: {msg}"),
                 false,
             ),
-            #[allow(deprecated)]
-            EnvError::OperatorError(inner) => ProtocolError::from(inner),
             EnvError::Other(source) => {
                 ProtocolError::new(ErrorCode::Internal, source.to_string(), false)
             }
@@ -426,63 +168,6 @@ impl From<EnvError> for ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[allow(deprecated)]
-    #[test]
-    fn operator_error_retryable_classification() {
-        assert!(OperatorError::model_retryable(std::io::Error::other("x")).is_retryable());
-        assert!(OperatorError::retryable("transient").is_retryable());
-        assert!(!OperatorError::model("permanent").is_retryable());
-        assert!(!OperatorError::non_retryable("fatal").is_retryable());
-        assert!(
-            !OperatorError::Halted {
-                reason: "stopped".into(),
-            }
-            .is_retryable()
-        );
-    }
-
-    #[allow(deprecated)]
-    #[test]
-    fn operator_error_to_protocol_error_mapping() {
-        let model_retry = OperatorError::model_retryable(std::io::Error::other("transient"));
-        let pe: ProtocolError = model_retry.into();
-        assert_eq!(pe.code, ErrorCode::Unavailable);
-        assert!(pe.retryable);
-        assert_eq!(pe.details.get("variant").map(String::as_str), Some("model"));
-
-        let model_perm = OperatorError::model("permanent");
-        let pe: ProtocolError = model_perm.into();
-        assert_eq!(pe.code, ErrorCode::Internal);
-        assert!(!pe.retryable);
-
-        let ctx = OperatorError::context_assembly(std::io::Error::other("bad input"));
-        let pe: ProtocolError = ctx.into();
-        assert_eq!(pe.code, ErrorCode::InvalidInput);
-        assert!(!pe.retryable);
-
-        let halted = OperatorError::Halted {
-            reason: "policy".into(),
-        };
-        let pe: ProtocolError = halted.into();
-        assert_eq!(pe.code, ErrorCode::Conflict);
-        assert!(!pe.retryable);
-    }
-
-    #[allow(deprecated)]
-    #[test]
-    fn orch_error_to_protocol_error_mapping() {
-        let not_found = OrchError::OperatorNotFound("echo".into());
-        let pe: ProtocolError = not_found.into();
-        assert_eq!(pe.code, ErrorCode::NotFound);
-        assert!(!pe.retryable);
-        assert_eq!(pe.details.get("name").map(String::as_str), Some("echo"));
-
-        let dispatch = OrchError::DispatchFailed("timeout".into());
-        let pe: ProtocolError = dispatch.into();
-        assert_eq!(pe.code, ErrorCode::Unavailable);
-        assert!(pe.retryable);
-    }
 
     #[test]
     fn protocol_error_display() {

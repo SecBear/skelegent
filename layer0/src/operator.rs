@@ -4,7 +4,7 @@ use crate::context::Message;
 use crate::dispatch_context::DispatchContext;
 use crate::error::ProtocolError;
 use crate::intent::Intent;
-use crate::{content::Content, duration::DurationMs, effect::Effect, id::*};
+use crate::{content::Content, duration::DurationMs, id::*};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -245,111 +245,34 @@ impl std::fmt::Display for Outcome {
     }
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// EXIT REASON (v1 — deprecated)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/// Why an operator invocation ended. The caller needs to know this to decide
-/// what happens next (retry? continue? escalate?).
-///
-/// **Deprecated:** Use [`Outcome`] instead.
-#[deprecated(note = "Use Outcome instead")]
-#[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExitReason {
-    /// Model produced a final text response (natural completion).
-    Complete,
-    /// Hit the max_turns limit.
-    MaxTurns,
-    /// Hit the cost budget (`max_cost`) or the tool-call step limit (`max_tool_calls`).
-    /// Runtime/orchestration code may distinguish the exact cause above Layer 0.
-    BudgetExhausted,
-    /// Circuit breaker tripped (consecutive failures).
-    CircuitBreaker,
-    /// Wall-clock timeout.
-    Timeout,
-    /// Interceptor/middleware halted execution.
-    InterceptorHalt {
-        /// The reason the interceptor halted execution.
-        reason: String,
-    },
-    /// Unrecoverable error during execution.
-    Error,
-    /// Provider safety system stopped generation (HTTP 200, content filtered).
-    ///
-    /// Semantically distinct from `Error` (not a transport or execution failure)
-    /// and `Complete` (model did not finish naturally). Arrives via
-    /// `StopReason::ContentFilter` in the provider response — the provider
-    /// acknowledged the request but refused to complete it. Not retriable
-    /// without modification to the context or request.
-    SafetyStop {
-        /// Human-readable reason string supplied by the provider or runtime.
-        reason: String,
-    },
-    /// One or more tool calls require human approval before execution.
-    /// The calling layer should inspect [`OperatorOutput::effects`] for
-    /// [`Effect::ToolApprovalRequired`] entries, obtain approval, then
-    /// either execute the tools and re-enter the loop, or inject a denial
-    /// message and re-enter.
-    AwaitingApproval,
-    /// The current operator handed off control to another operator.
-    ///
-    /// The calling layer should inspect [`OperatorOutput::effects`] for an
-    /// [`Effect::Handoff`] entry to find the target operator.
-    HandedOff,
-    /// Future exit reasons.
-    Custom(String),
-}
-
 /// Output from an operator. Contains the response, metadata about
-/// execution, and any side-effects the operator wants executed.
+/// execution, and any intents the operator wants executed.
+///
+/// CRITICAL DESIGN DECISION: The operator declares intents but does
+/// not execute them. The calling layer (orchestrator, lifecycle
+/// coordinator) decides when and how to execute them. This is
+/// what makes the operator runtime independent of the layers around it.
+///
+/// An operator running in-process has its intents executed immediately.
+/// An operator running in a Temporal activity has its intents serialized
+/// and executed by the workflow. Same operator code, different execution.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(deprecated)]
 pub struct OperatorOutput {
     /// The operator's response content.
     pub message: Content,
 
-    /// Why the operator invocation ended (v2 typed outcome).
+    /// Why the operator invocation ended.
     pub outcome: Outcome,
-
-    /// Why the operator invocation ended (v1 — deprecated).
-    ///
-    /// **Deprecated:** Use [`outcome`](Self::outcome) instead.
-    #[deprecated(note = "Use outcome instead")]
-    #[allow(deprecated)]
-    pub exit_reason: ExitReason,
 
     /// Execution metadata (cost, tokens, timing).
     pub metadata: OperatorMetadata,
 
-    /// Side-effects the operator wants executed.
+    /// Executable intents declared during this invocation.
     ///
-    /// **Preferred path:** declare effects via `Context::push_effect()` /
-    /// `Context::extend_effects()` during execution. The context engine's
-    /// `make_output()` drains declared effects into this field.
-    ///
-    /// **Dispatch-channel path:** `EffectEmitter` exists for dispatch-layer
-    /// wiring of progress/artifact events to `DispatchHandle`, but operators
-    /// do not receive it — it is NOT a parameter on `Operator::execute`.
-    ///
-    /// CRITICAL DESIGN DECISION: The operator declares effects but does
-    /// not execute them. The calling layer (orchestrator, lifecycle
-    /// coordinator) decides when and how to execute them. This is
-    /// what makes the operator runtime independent of the layers around it.
-    ///
-    /// An operator running in-process has its effects executed immediately.
-    /// An operator running in a Temporal activity has its effects serialized
-    /// and executed by the workflow. Same operator code, different execution.
-    #[serde(default)]
-    pub effects: Vec<Effect>,
-
-    /// Executable intents declared during this invocation (v2).
-    ///
-    /// Intents are the v2 replacement for effects. During the migration period,
-    /// both `effects` and `intents` may be populated. New code should use
-    /// `intents`; the effects field is retained for backward compatibility.
+    /// Intents are declared via `Context::push_intent()` / `Context::extend_intents()`
+    /// during execution. The context engine's `make_output()` drains declared intents
+    /// into this field.
     #[serde(default)]
     pub intents: Vec<Intent>,
 }
@@ -402,47 +325,6 @@ pub struct SubDispatchRecord {
     pub duration: DurationMs,
     /// Whether the call succeeded.
     pub success: bool,
-}
-
-#[allow(deprecated)]
-impl ExitReason {
-    /// Create an `InterceptorHalt` exit reason.
-    pub fn interceptor_halt(reason: impl Into<String>) -> Self {
-        Self::InterceptorHalt {
-            reason: reason.into(),
-        }
-    }
-
-    /// Create a `SafetyStop` exit reason.
-    pub fn safety_stop(reason: impl Into<String>) -> Self {
-        Self::SafetyStop {
-            reason: reason.into(),
-        }
-    }
-
-    /// Create a `Custom` exit reason.
-    pub fn custom(reason: impl Into<String>) -> Self {
-        Self::Custom(reason.into())
-    }
-}
-
-#[allow(deprecated)]
-impl std::fmt::Display for ExitReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Complete => write!(f, "complete"),
-            Self::MaxTurns => write!(f, "max_turns"),
-            Self::BudgetExhausted => write!(f, "budget_exhausted"),
-            Self::CircuitBreaker => write!(f, "circuit_breaker"),
-            Self::Timeout => write!(f, "timeout"),
-            Self::InterceptorHalt { reason } => write!(f, "interceptor_halt: {reason}"),
-            Self::Error => write!(f, "error"),
-            Self::SafetyStop { reason } => write!(f, "safety_stop: {reason}"),
-            Self::AwaitingApproval => write!(f, "awaiting_approval"),
-            Self::HandedOff => write!(f, "handed_off"),
-            Self::Custom(reason) => write!(f, "custom: {reason}"),
-        }
-    }
 }
 
 impl TriggerType {
@@ -518,144 +400,23 @@ impl OperatorInput {
 
 impl OperatorOutput {
     /// Create a new OperatorOutput with required fields.
-    ///
-    /// Accepts the v2 [`Outcome`] and bridges to the deprecated `exit_reason`
-    /// field for backward compatibility.
-    #[allow(deprecated)]
     pub fn new(message: Content, outcome: Outcome) -> Self {
-        let exit_reason = outcome_to_exit_reason(&outcome);
         Self {
             message,
             outcome,
-            exit_reason,
             metadata: OperatorMetadata::default(),
-            effects: vec![],
             intents: vec![],
         }
     }
 
-    /// Create from the deprecated v1 [`ExitReason`].
+    /// Check whether this output contains intents that need an executor.
     ///
-    /// **Deprecated:** Prefer `new(message, Outcome::...)` instead.
-    #[deprecated(note = "Use new(message, Outcome) instead")]
-    #[allow(deprecated)]
-    pub fn from_exit_reason(message: Content, exit_reason: ExitReason) -> Self {
-        let outcome = exit_reason_to_outcome(&exit_reason);
-        Self {
-            message,
-            outcome,
-            exit_reason,
-            metadata: OperatorMetadata::default(),
-            effects: vec![],
-            intents: vec![],
-        }
-    }
-
-    /// Check whether this output contains effects that need an interpreter.
-    ///
-    /// Returns `true` if [`effects`](Self::effects) is non-empty. Callers that
-    /// consume `OperatorOutput` directly (without an `EffectHandler` or
+    /// Returns `true` if [`intents`](Self::intents) is non-empty. Callers that
+    /// consume `OperatorOutput` directly (without an `IntentHandler` or
     /// `OrchestratedRunner`) should check this and decide whether the unhandled
-    /// effects are acceptable or a bug.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let output = op.execute(input, &ctx).await?
-    /// if output.has_unhandled_effects() {
-    ///     tracing::warn!("effects will not be executed: {:?}", output.effects);
-    /// }
-    /// ```
-    pub fn has_unhandled_effects(&self) -> bool {
-        !self.effects.is_empty()
-    }
-}
-
-// ── Outcome ↔ ExitReason bridge functions ───────────────────────────────────
-
-/// Convert a v2 Outcome to a v1 ExitReason for backward-compatible bridging.
-#[allow(deprecated)]
-fn outcome_to_exit_reason(outcome: &Outcome) -> ExitReason {
-    match outcome {
-        Outcome::Terminal {
-            terminal: TerminalOutcome::Completed,
-        } => ExitReason::Complete,
-        Outcome::Terminal {
-            terminal: TerminalOutcome::Failed,
-        } => ExitReason::Error,
-        Outcome::Transfer {
-            transfer: TransferOutcome::HandedOff,
-        } => ExitReason::HandedOff,
-        Outcome::Transfer {
-            transfer: TransferOutcome::Delegated,
-        } => ExitReason::Custom("delegated".into()),
-        Outcome::Suspended { .. } => ExitReason::AwaitingApproval,
-        Outcome::Limited {
-            limit: LimitReason::MaxTurns,
-        } => ExitReason::MaxTurns,
-        Outcome::Limited {
-            limit: LimitReason::BudgetExhausted,
-        } => ExitReason::BudgetExhausted,
-        Outcome::Limited {
-            limit: LimitReason::Timeout,
-        } => ExitReason::Timeout,
-        Outcome::Limited {
-            limit: LimitReason::CircuitBreaker,
-        } => ExitReason::CircuitBreaker,
-        Outcome::Intercepted {
-            interception: InterceptionKind::PolicyHalt { reason },
-        } => ExitReason::InterceptorHalt {
-            reason: reason.clone(),
-        },
-        Outcome::Intercepted {
-            interception: InterceptionKind::SafetyStop { reason },
-        } => ExitReason::SafetyStop {
-            reason: reason.clone(),
-        },
-    }
-}
-
-/// Convert a v1 ExitReason to a v2 Outcome for backward-compatible bridging.
-#[allow(deprecated)]
-fn exit_reason_to_outcome(exit_reason: &ExitReason) -> Outcome {
-    match exit_reason {
-        ExitReason::Complete => Outcome::Terminal {
-            terminal: TerminalOutcome::Completed,
-        },
-        ExitReason::Error => Outcome::Terminal {
-            terminal: TerminalOutcome::Failed,
-        },
-        ExitReason::MaxTurns => Outcome::Limited {
-            limit: LimitReason::MaxTurns,
-        },
-        ExitReason::BudgetExhausted => Outcome::Limited {
-            limit: LimitReason::BudgetExhausted,
-        },
-        ExitReason::Timeout => Outcome::Limited {
-            limit: LimitReason::Timeout,
-        },
-        ExitReason::CircuitBreaker => Outcome::Limited {
-            limit: LimitReason::CircuitBreaker,
-        },
-        ExitReason::InterceptorHalt { reason } => Outcome::Intercepted {
-            interception: InterceptionKind::PolicyHalt {
-                reason: reason.clone(),
-            },
-        },
-        ExitReason::SafetyStop { reason } => Outcome::Intercepted {
-            interception: InterceptionKind::SafetyStop {
-                reason: reason.clone(),
-            },
-        },
-        ExitReason::AwaitingApproval => Outcome::Suspended {
-            reason: crate::wait::WaitReason::Approval,
-        },
-        ExitReason::HandedOff => Outcome::Transfer {
-            transfer: TransferOutcome::HandedOff,
-        },
-        ExitReason::Custom(_) => Outcome::Terminal {
-            terminal: TerminalOutcome::Completed, // best-effort mapping
-        },
+    /// intents are acceptable or a bug.
+    pub fn has_unhandled_intents(&self) -> bool {
+        !self.intents.is_empty()
     }
 }
 
@@ -838,56 +599,6 @@ mod tests {
         assert_eq!(config.system_addendum.as_deref(), Some("Be concise."));
     }
 
-    #[allow(deprecated)]
-    #[test]
-    fn exit_reason_constructors() {
-        let halt = ExitReason::interceptor_halt("policy violation");
-        assert_eq!(
-            halt,
-            ExitReason::InterceptorHalt {
-                reason: "policy violation".into()
-            }
-        );
-
-        let safety = ExitReason::safety_stop("content filtered");
-        assert_eq!(
-            safety,
-            ExitReason::SafetyStop {
-                reason: "content filtered".into()
-            }
-        );
-
-        let custom = ExitReason::custom("user_cancel");
-        assert_eq!(custom, ExitReason::Custom("user_cancel".into()));
-    }
-
-    #[allow(deprecated)]
-    #[test]
-    fn exit_reason_display() {
-        assert_eq!(ExitReason::Complete.to_string(), "complete");
-        assert_eq!(ExitReason::MaxTurns.to_string(), "max_turns");
-        assert_eq!(ExitReason::BudgetExhausted.to_string(), "budget_exhausted");
-        assert_eq!(ExitReason::CircuitBreaker.to_string(), "circuit_breaker");
-        assert_eq!(ExitReason::Timeout.to_string(), "timeout");
-        assert_eq!(
-            ExitReason::interceptor_halt("blocked").to_string(),
-            "interceptor_halt: blocked"
-        );
-        assert_eq!(ExitReason::Error.to_string(), "error");
-        assert_eq!(
-            ExitReason::safety_stop("filtered").to_string(),
-            "safety_stop: filtered"
-        );
-        assert_eq!(
-            ExitReason::AwaitingApproval.to_string(),
-            "awaiting_approval"
-        );
-        assert_eq!(
-            ExitReason::custom("user_cancel").to_string(),
-            "custom: user_cancel"
-        );
-    }
-
     #[test]
     fn trigger_type_custom_constructor() {
         let trigger = TriggerType::custom("webhook");
@@ -964,19 +675,6 @@ mod tests {
             let back: Outcome = serde_json::from_str(&json).unwrap();
             assert_eq!(back, outcome);
         }
-    }
-
-    #[allow(deprecated)]
-    #[test]
-    fn outcome_exit_reason_bridge_round_trip() {
-        let outcome = Outcome::Terminal {
-            terminal: TerminalOutcome::Completed,
-        };
-        let exit = outcome_to_exit_reason(&outcome);
-        assert_eq!(exit, ExitReason::Complete);
-
-        let back = exit_reason_to_outcome(&exit);
-        assert_eq!(back, outcome);
     }
 
     #[tokio::test]

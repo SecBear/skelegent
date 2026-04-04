@@ -1,4 +1,4 @@
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use layer0::intent::{Intent, IntentKind};
 use skg_context_engine::Context;
 

@@ -55,7 +55,7 @@ impl Operator for SequentialOperator {
     ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_input = input;
         // Accumulate effects from all steps as we go.
-        let mut all_effects: Vec<layer0::Effect> = Vec::new();
+        let mut all_effects: Vec<layer0::Intent> = Vec::new();
         let mut last_output: Option<OperatorOutput> = None;
 
         for step_id in &self.steps {
@@ -69,7 +69,7 @@ impl Operator for SequentialOperator {
                 .await?;
 
             // Absorb this step's effects into the running total.
-            all_effects.append(&mut output.effects);
+            all_effects.append(&mut output.intents);
 
             let is_completed = matches!(
                 output.outcome,
@@ -79,7 +79,7 @@ impl Operator for SequentialOperator {
             );
             if !is_completed {
                 // Stop and surface the failure; attach all accumulated effects.
-                output.effects = all_effects;
+                output.intents = all_effects;
                 return Ok(output);
             }
 
@@ -91,7 +91,7 @@ impl Operator for SequentialOperator {
         // All steps completed normally.
         match last_output {
             Some(mut output) => {
-                output.effects = all_effects;
+                output.intents = all_effects;
                 Ok(output)
             }
             // Empty pipeline: return a no-op completion.

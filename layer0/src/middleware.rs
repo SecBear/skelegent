@@ -10,7 +10,7 @@
 
 use crate::dispatch::DispatchHandle;
 use crate::dispatch_context::DispatchContext;
-use crate::effect::Scope;
+use crate::intent::Scope;
 use crate::environment::EnvironmentSpec;
 use crate::error::{EnvError, ProtocolError, StateError};
 use crate::operator::{OperatorInput, OperatorOutput};

@@ -171,11 +171,11 @@ impl RunnerServiceImpl {
             }
         })?;
 
-        if output.has_unhandled_effects() {
+        if output.has_unhandled_intents() {
             warn!(
                 operator = operator_id,
-                effect_count = output.effects.len(),
-                "operator produced unhandled effects — the runner does not interpret effects; callers must handle them"
+                intent_count = output.intents.len(),
+                "operator produced unhandled intents — the runner does not interpret intents; callers must handle them"
             );
         }
 
@@ -270,15 +270,6 @@ impl Runner for RunnerServiceImpl {
                     DispatchEvent::ArtifactProduced { artifact } => {
                         // Map artifacts to partial_output.
                         match serde_json::to_vec(artifact) {
-                            Ok(bytes) => ExecuteEvent {
-                                event: Some(execute_event::Event::PartialOutput(bytes)),
-                            },
-                            Err(_) => continue,
-                        }
-                    }
-                    DispatchEvent::EffectEmitted { effect } => {
-                        // Map effects to partial_output.
-                        match serde_json::to_vec(effect) {
                             Ok(bytes) => ExecuteEvent {
                                 event: Some(execute_event::Event::PartialOutput(bytes)),
                             },

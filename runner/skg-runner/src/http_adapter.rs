@@ -174,7 +174,7 @@ async fn execute_handler(
         .map_err(|e| CoreError::InvalidArgument(format!("invalid base64 in `spec`: {e}")))?;
 
     let output = runner.execute_operator(&req.operator, &input_bytes).await?;
-    let has_unhandled = output.has_unhandled_effects();
+    let has_unhandled = output.has_unhandled_intents();
 
     let output_bytes = serde_json::to_vec(&output)
         .map_err(|e| CoreError::Internal(format!("failed to serialize OperatorOutput: {e}")))?;
@@ -256,13 +256,6 @@ async fn execute_stream_handler(
                         }
                     }
                 }
-                DispatchEvent::EffectEmitted { effect } => match serde_json::to_string(effect) {
-                    Ok(json) => Event::default().event("effect").data(json),
-                    Err(e) => {
-                        error!("failed to serialize effect: {e}");
-                        continue;
-                    }
-                },
                 DispatchEvent::Completed { output } => match serde_json::to_string(output) {
                     Ok(json) => Event::default().event("output").data(json),
                     Err(e) => {

@@ -259,8 +259,8 @@ mod tests {
         }
         assert_eq!(out.outcome, Outcome::Terminal { terminal: TerminalOutcome::Completed });
         assert!(
-            out.effects.is_empty(),
-            "no effects expected from barrier operator"
+            out.intents.is_empty(),
+            "no intents expected from barrier operator"
         );
     }
 }

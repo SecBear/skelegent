@@ -7,7 +7,7 @@
 //! via [`MemoryStore::bounded`] and basic case-insensitive substring search.
 
 use async_trait::async_trait;
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use layer0::error::StateError;
 use layer0::state::{SearchResult, StateStore, StoreOptions};
 use std::collections::{HashMap, HashSet};

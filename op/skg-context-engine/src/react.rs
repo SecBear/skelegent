@@ -20,12 +20,11 @@ use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::dispatch::Dispatcher;
 use layer0::duration::DurationMs;
-use layer0::effect::{Effect, EffectKind, HandoffContext};
 use layer0::id::OperatorId;
-use layer0::intent::{Intent, IntentKind};
-use layer0::operator::{
-    InterceptionKind, LimitReason, Outcome, TerminalOutcome, TransferOutcome,
-};
+use layer0::intent::{HandoffContext, Intent, IntentKind};
+use layer0::operator::{InterceptionKind, Outcome, TerminalOutcome, TransferOutcome};
+#[cfg(test)]
+use layer0::operator::LimitReason;
 use layer0::operator::{OperatorMetadata, OperatorOutput};
 use layer0::wait::WaitReason;
 use serde_json::Value;
@@ -1114,9 +1113,7 @@ async fn dispatch_function_tools(
             InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
         if let Err(err) = ctx.inject_message(result_msg).await {
             match err {
-                EngineError::Exit { outcome, .. } => {
-                    return Ok(ToolDispatchOutcome::Exit(outcome))
-                }
+                EngineError::Exit { outcome, .. } => return Ok(ToolDispatchOutcome::Exit(outcome)),
                 other => return Err(other),
             }
         }
@@ -1842,7 +1839,9 @@ mod tests {
 
         async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
             Err(EngineError::Exit {
-                outcome: Outcome::Limited { limit: LimitReason::Timeout },
+                outcome: Outcome::Limited {
+                    limit: LimitReason::Timeout,
+                },
                 detail: "tool dispatch paused".into(),
             })
         }

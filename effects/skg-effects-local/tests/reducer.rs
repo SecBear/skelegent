@@ -1,7 +1,7 @@
 //! Tests for ReducerRegistry wiring inside LocalEffectHandler.
 
 use layer0::DispatchContext;
-use layer0::effect::{Effect, EffectKind, MemoryScope, Scope};
+use layer0::{Intent, IntentKind, MemoryScope, Scope};
 use layer0::id::{DispatchId, OperatorId};
 use layer0::reducer::{AppendList, ReducerRegistry};
 use layer0::state::StateStore;
@@ -15,8 +15,8 @@ fn test_ctx() -> DispatchContext {
     DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
 }
 
-fn write_effect(key: &str, value: serde_json::Value) -> Effect {
-    Effect::new(EffectKind::WriteMemory {
+fn write_effect(key: &str, value: serde_json::Value) -> Intent {
+    Intent::new(IntentKind::WriteMemory {
         scope: Scope::Global,
         key: key.to_string(),
         value,

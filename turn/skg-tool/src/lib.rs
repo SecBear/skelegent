@@ -21,7 +21,7 @@ use thiserror::Error;
 use layer0::DispatchContext;
 use layer0::{
     ApprovalFacts, AuthFacts, CapabilityDescriptor, CapabilityId, CapabilityKind, ExecutionClass,
-    SchedulingFacts, StreamingSupport,
+    SchedulingFacts,
 };
 
 /// Errors from tool operations.

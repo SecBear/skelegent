@@ -1,11 +1,9 @@
 use layer0::dispatch::{DispatchEvent, InvocationHandle};
-use layer0::effect::{Effect, EffectKind};
 use layer0::error::ErrorCode;
 use layer0::id::DispatchId;
 use layer0::intent::{Intent, IntentKind};
 use layer0::operator::{Outcome, TerminalOutcome};
 use layer0::{Content, OperatorOutput, Scope};
-use serde_json::json;
 
 fn completed_outcome() -> Outcome {
     Outcome::Terminal {
@@ -42,34 +40,6 @@ async fn collect_does_not_duplicate_intents_from_completed_output() {
 
     // Intents were already on the output — collect() should NOT duplicate them.
     assert_eq!(result.intents.len(), 1);
-}
-
-// ── collect() merges channel effects with output effects ────────────────────
-
-#[tokio::test]
-async fn collect_extends_effects_from_channel_and_output() {
-    let channel_effect = Effect::new(EffectKind::Custom {
-        name: "from-channel".into(),
-        payload: json!({}),
-    });
-    let output_effect = Effect::new(EffectKind::Custom {
-        name: "from-output".into(),
-        payload: json!({}),
-    });
-
-    let mut output = OperatorOutput::new(Content::text("done"), completed_outcome());
-    output.effects.push(output_effect);
-
-    let result = collect_with_events(vec![
-        DispatchEvent::EffectEmitted {
-            effect: channel_effect,
-        },
-        DispatchEvent::Completed { output },
-    ])
-    .await
-    .expect("collect");
-
-    assert_eq!(result.effects.len(), 2);
 }
 
 // ── Missing terminal event error mapping ────────────────────────────────────

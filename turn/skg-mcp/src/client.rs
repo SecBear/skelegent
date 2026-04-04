@@ -12,8 +12,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use layer0::{
-    ApprovalFacts, AuthFacts, CapabilityDescriptor, CapabilityId, CapabilityKind, CapabilityModality,
-    ExecutionClass, SchedulingFacts, StreamingSupport, ToolMetadata,
+    ApprovalFacts, AuthFacts, CapabilityDescriptor, CapabilityId, CapabilityKind,
+    CapabilityModality, ExecutionClass, SchedulingFacts, StreamingSupport, ToolMetadata,
 };
 use rmcp::ServiceExt;
 use rmcp::model::{

@@ -1,13 +1,13 @@
 //! [`SwarmOperator`] — peer-to-peer handoff with explicit transition constraints.
 //!
 //! Unlike [`SupervisorOperator`] which uses a central selector, a swarm lets
-//! each operator declare its own successor via [`EffectKind::Handoff`]. The swarm
+//! each operator declare its own successor via [`IntentKind::Handoff`]. The swarm
 //! validates every transition against a pre-declared adjacency map and errors
 //! hard if an undeclared transition is attempted.
 //!
 //! # Flow
 //! 1. Dispatch the entry operator.
-//! 2. If it exits [`Outcome::Transfer { transfer: TransferOutcome::HandedOff }`], find the [`EffectKind::Handoff`] target.
+//! 2. If it exits [`Outcome::Transfer { transfer: TransferOutcome::HandedOff }`], find the [`IntentKind::Handoff`] target.
 //! 3. Verify the transition `current → target` is allowed.
 //! 4. Dispatch the target; repeat until [`Outcome::Terminal { terminal: TerminalOutcome::Completed }`] or `max_handoffs`.
 //!
@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::{EffectKind, HandoffContext};
+use layer0::{HandoffContext, IntentKind};
 use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{
@@ -49,12 +49,12 @@ fn next_dispatch_id() -> DispatchId {
 /// A peer-to-peer handoff operator with explicit transition constraints.
 ///
 /// Each operator in the swarm may hand off to another by emitting
-/// [`EffectKind::Handoff`] and returning [`Outcome::Transfer { transfer: TransferOutcome::HandedOff }`]. The swarm
+/// [`IntentKind::Handoff`] and returning [`Outcome::Transfer { transfer: TransferOutcome::HandedOff }`]. The swarm
 /// validates the transition against the declared adjacency map before
 /// dispatching the next operator.
 ///
 /// # Invariants
-/// * A `HandedOff` exit **must** have an accompanying `Effect::Handoff` in the
+/// * A `HandedOff` exit **must** have an accompanying `Intent::Handoff` in the
 ///   output effects, otherwise execution is an error.
 /// * A transition not present in the adjacency map is an error; the swarm does
 ///   not silently allow unlisted routes.
@@ -103,7 +103,7 @@ impl Operator for SwarmOperator {
     ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_id = self.entry.clone();
         let mut current_input = input;
-        let mut all_effects: Vec<layer0::Effect> = Vec::new();
+        let mut all_effects: Vec<layer0::Intent> = Vec::new();
         let mut handoffs: u32 = 0;
 
         loop {
@@ -119,8 +119,8 @@ impl Operator for SwarmOperator {
             // Extract the handoff target AND context from this round's effects
             // before moving them into the accumulator.
             let handoff: Option<(OperatorId, HandoffContext)> =
-                output.effects.iter().rev().find_map(|e| {
-                    if let EffectKind::Handoff {
+                output.intents.iter().rev().find_map(|e| {
+                    if let IntentKind::Handoff {
                         ref operator,
                         ref context,
                     } = e.kind
@@ -132,13 +132,13 @@ impl Operator for SwarmOperator {
                 });
 
             // Absorb this round's effects into the running total.
-            all_effects.append(&mut output.effects);
+            all_effects.append(&mut output.intents);
 
             match &output.outcome {
                 Outcome::Terminal {
                     terminal: TerminalOutcome::Completed,
                 } => {
-                    output.effects = all_effects;
+                    output.intents = all_effects;
                     return Ok(output);
                 }
                 Outcome::Transfer {
@@ -152,13 +152,13 @@ impl Operator for SwarmOperator {
                                 limit: LimitReason::MaxTurns,
                             },
                         );
-                        out.effects = all_effects;
+                        out.intents = all_effects;
                         return Ok(out);
                     }
 
                     let (target, context) = handoff.ok_or_else(|| {
                         ProtocolError::internal(format!(
-                            "operator '{}' exited HandedOff but emitted no EffectKind::Handoff",
+                            "operator '{}' exited HandedOff but emitted no IntentKind::Handoff",
                             current_id.as_str()
                         ))
                     })?;
@@ -188,9 +188,9 @@ impl Operator for SwarmOperator {
                     current_input = next_input;
                     current_id = target;
                 }
-                // Unexpected exit — surface immediately with accumulated effects.
+                // Unexpected exit — surface immediately with accumulated intents.
                 _ => {
-                    output.effects = all_effects;
+                    output.intents = all_effects;
                     return Ok(output);
                 }
             }
@@ -276,7 +276,7 @@ mod tests {
     use async_trait::async_trait;
     use layer0::DispatchContext;
     use layer0::content::Content;
-    use layer0::effect::{Effect, EffectKind, HandoffContext};
+    use layer0::{HandoffContext, Intent, IntentKind};
     use layer0::error::ProtocolError;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{
@@ -316,7 +316,7 @@ mod tests {
         }
     }
 
-    /// Operator that emits `Effect::Handoff` with a structured `HandoffContext`.
+    /// Operator that emits `Intent::Handoff` with a structured `HandoffContext`.
     struct HandoffOp {
         target: OperatorId,
         reply: String,
@@ -335,7 +335,7 @@ mod tests {
                     transfer: TransferOutcome::HandedOff,
                 },
             );
-            out.effects.push(Effect::new(EffectKind::Handoff {
+            out.intents.push(Intent::new(IntentKind::Handoff {
                 operator: self.target.clone(),
                 context: HandoffContext {
                     task: Content::text(self.reply.clone()),
@@ -389,8 +389,8 @@ mod tests {
             "from-b",
             "final message must come from op-b"
         );
-        // One Effect::Handoff from op-a.
-        assert_eq!(output.effects.len(), 1);
+        // One Intent::Handoff from op-a.
+        assert_eq!(output.intents.len(), 1);
     }
 
     /// A tries to hand off to C, but only A→B is declared. Must error.
@@ -457,7 +457,7 @@ mod tests {
                         transfer: TransferOutcome::HandedOff,
                     },
                 );
-                out.effects.push(Effect::new(EffectKind::Handoff {
+                out.intents.push(Intent::new(IntentKind::Handoff {
                     operator: OperatorId::new("receiver"),
                     context: HandoffContext {
                         task: Content::text("context-task-for-receiver"),

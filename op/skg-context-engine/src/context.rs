@@ -909,7 +909,7 @@ mod tests {
         use layer0::intent::{Intent, IntentKind};
         let mut ctx = Context::new();
         let intent = Intent::new(IntentKind::DeleteMemory {
-            scope: layer0::effect::Scope::Global,
+            scope: layer0::Scope::Global,
             key: "test_key".into(),
         });
         ctx.push_intent(intent.clone());
@@ -924,11 +924,11 @@ mod tests {
         use layer0::intent::{Intent, IntentKind};
         let mut ctx = Context::new();
         let i1 = Intent::new(IntentKind::DeleteMemory {
-            scope: layer0::effect::Scope::Global,
+            scope: layer0::Scope::Global,
             key: "a".into(),
         });
         let i2 = Intent::new(IntentKind::DeleteMemory {
-            scope: layer0::effect::Scope::Global,
+            scope: layer0::Scope::Global,
             key: "b".into(),
         });
         ctx.extend_intents(vec![i1, i2]);

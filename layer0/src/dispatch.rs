@@ -59,7 +59,6 @@
 
 use crate::content::Content;
 use crate::dispatch_context::DispatchContext;
-use crate::effect::Effect;
 use crate::error::ProtocolError;
 use crate::id::DispatchId;
 use crate::operator::{OperatorInput, OperatorOutput};
@@ -109,31 +108,15 @@ pub trait Dispatcher: Send + Sync {
 #[non_exhaustive]
 pub enum DispatchEvent {
     /// Intermediate progress (reasoning step, partial output, status update).
-    ///
-    /// The dispatch layer emits this when an operator produces an
-    /// [`Effect::Progress`](crate::effect::Effect::Progress).
     Progress {
         /// Progress content.
         content: Content,
     },
 
     /// An intermediate deliverable produced during execution.
-    ///
-    /// Emitted when an operator produces an
-    /// [`Effect::Artifact`](crate::effect::Effect::Artifact).
     ArtifactProduced {
         /// The artifact produced.
         artifact: Artifact,
-    },
-
-    /// An effect was emitted during operator execution.
-    ///
-    /// Emitted when [`EffectEmitter::effect`] is called by the dispatch layer.
-    /// The [`DispatchHandle::collect`] method gathers these into
-    /// [`OperatorOutput::effects`].
-    EffectEmitted {
-        /// The effect that was emitted.
-        effect: Effect,
     },
 
     /// Dispatch completed with final output.
@@ -171,7 +154,6 @@ impl DispatchEvent {
         match self {
             Self::Progress { .. } => "dispatch.progress",
             Self::ArtifactProduced { .. } => "dispatch.artifact_produced",
-            Self::EffectEmitted { .. } => "dispatch.effect_emitted",
             Self::Completed { .. } => "dispatch.completed",
             Self::Failed { .. } => "dispatch.failed",
             Self::AwaitingApproval(_) => "dispatch.awaiting_approval",
@@ -380,13 +362,9 @@ impl DispatchHandle {
     pub async fn collect(mut self) -> Result<OperatorOutput, ProtocolError> {
         let mut terminal_output = None;
         let mut terminal_error = None;
-        let mut collected_effects = Vec::new();
 
         while let Some(event) = self.rx.recv().await {
             match event {
-                DispatchEvent::EffectEmitted { effect } => {
-                    collected_effects.push(effect);
-                }
                 DispatchEvent::Completed { output } => {
                     terminal_output = Some(output);
                 }
@@ -401,13 +379,7 @@ impl DispatchHandle {
 
         if let Some(error) = terminal_error {
             Err(error)
-        } else if let Some(mut output) = terminal_output {
-            // Effects from the channel are merged with any effects already set
-            // on the output (e.g. by make_output()). extend() rather than
-            // replace() ensures neither source is silently discarded.
-            if !collected_effects.is_empty() {
-                output.effects.extend(collected_effects);
-            }
+        } else if let Some(output) = terminal_output {
             Ok(output)
         } else {
             Err(ProtocolError::unavailable(
@@ -496,24 +468,11 @@ impl DispatchHandle {
             return Err(error);
         }
 
-        let Some(mut output) = terminal_output else {
+        let Some(output) = terminal_output else {
             return Err(ProtocolError::unavailable(
                 "dispatch ended without terminal event",
             ));
         };
-
-        // Populate output.effects from EffectEmitted events, same as collect().
-        let collected_effects: Vec<Effect> = events
-            .iter()
-            .filter_map(|e| match e {
-                DispatchEvent::EffectEmitted { effect } => Some(effect.clone()),
-                _ => None,
-            })
-            .collect();
-
-        if !collected_effects.is_empty() {
-            output.effects.extend(collected_effects);
-        }
 
         Ok(CollectedDispatch { output, events })
     }
@@ -593,13 +552,6 @@ impl DispatchSender {
         }
     }
 
-    /// Clone the cancellation receiver.
-    ///
-    /// Used by [`EffectEmitter`] to observe cancellation without
-    /// requiring `&mut self`.
-    pub(crate) fn cancel_rx_clone(&self) -> watch::Receiver<bool> {
-        self.cancel_rx.clone()
-    }
 }
 
 // Manual Debug impl.
@@ -607,144 +559,6 @@ impl std::fmt::Debug for DispatchSender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DispatchSender")
             .field("is_cancelled", &self.is_cancelled())
-            .finish_non_exhaustive()
-    }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// EFFECT EMITTER
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/// Channel for streaming observable events during operator execution.
-///
-/// Used by the dispatch layer to wire a channel for streaming progress updates,
-/// artifacts, and other observable events to the dispatch caller's [`DispatchHandle`]
-/// in real-time. It is NOT passed to operators — operators declare effects via
-/// `Context::push_effect()` / `Context::extend_effects()` instead.
-///
-/// # Design
-///
-/// This is the Rust equivalent of Python's `StreamWriter` (LangGraph)
-/// or `yield` in an async generator (ADK, Autogen). The dispatch layer
-/// streams intermediate observable events via the emitter; the
-/// terminal result comes from the function return value. These are
-/// genuinely different categories — intermediate observations vs.
-/// final output — so two mechanisms is correct modeling.
-///
-/// The emitter wraps an `Option<DispatchSender>`: `None` when no
-/// consumer is listening (tests, batch callers). Emission methods
-/// become no-ops in that case — zero overhead.
-///
-/// **Deprecated:** This type will be replaced by `ExecutionEvent`-based
-/// emission in a future release.
-#[deprecated(note = "Will be replaced by ExecutionEvent-based emission")]
-pub struct EffectEmitter {
-    sender: Option<DispatchSender>,
-}
-
-#[allow(deprecated)]
-impl EffectEmitter {
-    /// Create an emitter that forwards events to a dispatch handle.
-    pub fn new(sender: DispatchSender) -> Self {
-        Self {
-            sender: Some(sender),
-        }
-    }
-
-    /// Create a no-op emitter that discards all events.
-    ///
-    /// Use in tests or when no streaming consumer exists.
-    pub fn noop() -> Self {
-        Self { sender: None }
-    }
-
-    /// Emit an intermediate progress event (reasoning step, partial output).
-    ///
-    /// No-op if no consumer is listening.
-    pub async fn progress(&self, content: Content) {
-        if let Some(ref sender) = self.sender {
-            let _ = sender.send(DispatchEvent::Progress { content }).await;
-        }
-    }
-
-    /// Emit an intermediate artifact produced during execution.
-    ///
-    /// No-op if no consumer is listening.
-    pub async fn artifact(&self, artifact: Artifact) {
-        let _ = self
-            .emit(DispatchEvent::ArtifactProduced { artifact })
-            .await;
-    }
-
-    /// Emit an effect through the dispatch channel.
-    ///
-    /// Used by the dispatch layer to stream effects through the dispatch
-    /// channel. The dispatch handle's [`collect`](DispatchHandle::collect)
-    /// method gathers emitted effects into [`OperatorOutput::effects`].
-    ///
-    /// No-op if no consumer is listening.
-    pub async fn effect(&self, effect: Effect) {
-        if let Some(ref sender) = self.sender {
-            let _ = sender.send(DispatchEvent::EffectEmitted { effect }).await;
-        }
-    }
-
-    /// Emit a raw [`DispatchEvent`].
-    ///
-    /// Prefer the typed methods ([`progress`](Self::progress),
-    /// [`artifact`](Self::artifact)) for common cases. Use this for
-    /// custom or future event types.
-    ///
-    /// Returns `Ok(())` if sent or no consumer, `Err` if the
-    /// consumer dropped the handle.
-    pub async fn emit(&self, event: DispatchEvent) -> Result<(), ()> {
-        if let Some(ref sender) = self.sender {
-            sender.send(event).await.map_err(|_| ())
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Check whether the dispatch caller has requested cancellation.
-    ///
-    /// Used by the dispatch layer to observe caller-side cancellation.
-    /// `EffectEmitter` is not passed to operators — they use
-    /// [`DispatchContext`](crate::dispatch_context::DispatchContext).
-    pub fn is_cancelled(&self) -> bool {
-        self.sender.as_ref().is_some_and(|s| s.is_cancelled())
-    }
-
-    /// Wait until the dispatch caller requests cancellation.
-    ///
-    /// Used by the dispatch layer to race cancellation against ongoing work via
-    /// `tokio::select!`. Returns immediately when no consumer exists (no-op emitter).
-    /// `EffectEmitter` is not passed to operators — they use
-    /// [`DispatchContext`](crate::dispatch_context::DispatchContext).
-    pub async fn cancelled(&self) {
-        if let Some(ref sender) = self.sender {
-            // Clone the cancel_rx to get a mutable receiver without
-            // requiring &mut self.
-            let mut rx = sender.cancel_rx_clone();
-            if *rx.borrow() {
-                return;
-            }
-            loop {
-                if rx.changed().await.is_err() {
-                    return;
-                }
-                if *rx.borrow() {
-                    return;
-                }
-            }
-        }
-    }
-}
-
-#[allow(deprecated)]
-impl std::fmt::Debug for EffectEmitter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EffectEmitter")
-            .field("active", &self.sender.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -927,57 +741,10 @@ mod tests {
         );
     }
 
-    /// collect() must extend output.effects rather than replace them.
-    #[tokio::test]
-    async fn collect_extends_output_effects_not_replaces() {
-        use crate::effect::{Effect, EffectKind};
-
-        let channel_effect = Effect::new(EffectKind::Custom {
-            name: "channel-effect".into(),
-            payload: serde_json::json!({}),
-        });
-        let output_effect = Effect::new(EffectKind::Custom {
-            name: "output-effect".into(),
-            payload: serde_json::json!({}),
-        });
-
-        let (handle, sender) = DispatchHandle::channel(DispatchId::new("extend-test"));
-        tokio::spawn(async move {
-            let _ = sender
-                .send(DispatchEvent::EffectEmitted {
-                    effect: channel_effect,
-                })
-                .await;
-            let mut output = OperatorOutput::new(Content::text("done"), completed_outcome());
-            output.effects.push(output_effect);
-            let _ = sender.send(DispatchEvent::Completed { output }).await;
-        });
-
-        let result = handle.collect().await.unwrap();
-
-        assert_eq!(
-            result.effects.len(),
-            2,
-            "expected both effects; got {:?}",
-            result.effects
-        );
-        let types: Vec<&str> = result
-            .effects
-            .iter()
-            .filter_map(|e| match &e.kind {
-                EffectKind::Custom { name, .. } => Some(name.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(types.contains(&"output-effect"), "output-effect missing");
-        assert!(types.contains(&"channel-effect"), "channel-effect missing");
-    }
-
     #[test]
     fn dispatch_event_serde_round_trip() {
         use crate::approval::ApprovalRequest;
         use crate::content::Content;
-        use crate::effect::{Effect, EffectKind};
 
         fn round_trip(ev: DispatchEvent) {
             let json = serde_json::to_string(&ev).expect("serialize");
@@ -990,12 +757,6 @@ mod tests {
         });
         round_trip(DispatchEvent::ArtifactProduced {
             artifact: Artifact::new("a1", vec![Content::text("output")]),
-        });
-        round_trip(DispatchEvent::EffectEmitted {
-            effect: Effect::new(EffectKind::Custom {
-                name: "ping".into(),
-                payload: serde_json::json!({}),
-            }),
         });
         round_trip(DispatchEvent::Completed {
             output: OperatorOutput::new(Content::text("done"), completed_outcome()),
@@ -1014,7 +775,6 @@ mod tests {
     fn event_type_names() {
         use crate::approval::ApprovalRequest;
         use crate::content::Content;
-        use crate::effect::{Effect, EffectKind};
 
         assert_eq!(
             DispatchEvent::Progress {
@@ -1029,16 +789,6 @@ mod tests {
             }
             .event_type(),
             "dispatch.artifact_produced"
-        );
-        assert_eq!(
-            DispatchEvent::EffectEmitted {
-                effect: Effect::new(EffectKind::Custom {
-                    name: "x".into(),
-                    payload: serde_json::json!({}),
-                }),
-            }
-            .event_type(),
-            "dispatch.effect_emitted"
         );
         assert_eq!(
             DispatchEvent::Completed {

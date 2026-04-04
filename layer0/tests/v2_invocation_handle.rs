@@ -1,55 +1,14 @@
 use layer0::dispatch::{DispatchEvent, InvocationHandle};
-use layer0::effect::{Effect, EffectKind};
 use layer0::error::ErrorCode;
 use layer0::id::DispatchId;
 use layer0::intent::{Intent, IntentKind};
 use layer0::operator::{Outcome, TerminalOutcome};
 use layer0::{Content, OperatorOutput, Scope};
-use serde_json::json;
 
 fn completed_outcome() -> Outcome {
     Outcome::Terminal {
         terminal: TerminalOutcome::Completed,
     }
-}
-
-// ── collect() merges streamed effects ───────────────────────────────────────
-
-#[tokio::test]
-async fn collect_merges_streamed_effects_with_output_effects() {
-    let streamed_effect = Effect::new(EffectKind::Custom {
-        name: "streamed".into(),
-        payload: json!({}),
-    });
-    let output_effect = Effect::new(EffectKind::Custom {
-        name: "output-native".into(),
-        payload: json!({}),
-    });
-
-    let (handle, sender) = InvocationHandle::channel(DispatchId::new("merge-test"));
-    tokio::spawn(async move {
-        let _ = sender
-            .send(DispatchEvent::EffectEmitted {
-                effect: streamed_effect,
-            })
-            .await;
-        let mut output = OperatorOutput::new(Content::text("done"), completed_outcome());
-        output.effects.push(output_effect);
-        let _ = sender.send(DispatchEvent::Completed { output }).await;
-    });
-
-    let result = handle.collect().await.expect("collect");
-    assert_eq!(result.effects.len(), 2);
-    let names: Vec<&str> = result
-        .effects
-        .iter()
-        .filter_map(|e| match &e.kind {
-            EffectKind::Custom { name, .. } => Some(name.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert!(names.contains(&"output-native"));
-    assert!(names.contains(&"streamed"));
 }
 
 // ── collect() preserves intents from terminal output ────────────────────────

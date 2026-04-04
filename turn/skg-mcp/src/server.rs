@@ -757,7 +757,9 @@ mod tests {
             ) -> Result<OperatorOutput, ProtocolError> {
                 Ok(OperatorOutput::new(
                     input.message,
-                    Outcome::Terminal { terminal: TerminalOutcome::Completed },
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
                 ))
             }
         }
@@ -779,9 +781,9 @@ mod tests {
     #[tokio::test]
     async fn operator_tool_adapter_roundtrip() {
         use async_trait::async_trait;
+        use layer0::Content;
         use layer0::error::ProtocolError;
         use layer0::operator::{OperatorInput, OperatorOutput, Outcome, TerminalOutcome};
-        use layer0::Content;
         use serde_json::json;
 
         struct ConstOperator {
@@ -798,7 +800,9 @@ mod tests {
                 let text = self.response.to_string();
                 Ok(OperatorOutput::new(
                     Content::text(text),
-                    Outcome::Terminal { terminal: TerminalOutcome::Completed },
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
                 ))
             }
         }

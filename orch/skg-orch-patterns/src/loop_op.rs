@@ -70,7 +70,7 @@ impl Operator for LoopOperator {
         ctx: &DispatchContext,
     ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_input = input;
-        let mut all_effects: Vec<layer0::Effect> = Vec::new();
+        let mut all_effects: Vec<layer0::Intent> = Vec::new();
 
         for _ in 0..self.max_iterations {
             let child_ctx = ctx.child(next_dispatch_id(), self.body.clone());
@@ -83,7 +83,7 @@ impl Operator for LoopOperator {
                 .await?;
 
             // Absorb effects before checking exit conditions.
-            all_effects.append(&mut output.effects);
+            all_effects.append(&mut output.intents);
 
             // Propagate unexpected exits immediately.
             let is_completed = matches!(
@@ -93,13 +93,13 @@ impl Operator for LoopOperator {
                 }
             );
             if !is_completed {
-                output.effects = all_effects;
+                output.intents = all_effects;
                 return Ok(output);
             }
 
             // Check the done predicate.
             if (self.done)(&output) {
-                output.effects = all_effects;
+                output.intents = all_effects;
                 return Ok(output);
             }
 
@@ -114,7 +114,7 @@ impl Operator for LoopOperator {
                 limit: LimitReason::MaxTurns,
             },
         );
-        timeout_output.effects = all_effects;
+        timeout_output.intents = all_effects;
         Ok(timeout_output)
     }
 }

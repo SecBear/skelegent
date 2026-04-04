@@ -42,7 +42,7 @@ pub(crate) fn default_reducer(outputs: Vec<OperatorOutput>) -> OperatorOutput {
         if let Some(text) = output.message.as_text() {
             parts.push(text.to_string());
         }
-        all_effects.extend(output.effects);
+        all_effects.extend(output.intents);
         // Surface the last non-complete outcome so callers notice failures.
         let is_completed = matches!(
             output.outcome,
@@ -56,7 +56,7 @@ pub(crate) fn default_reducer(outputs: Vec<OperatorOutput>) -> OperatorOutput {
     }
 
     let mut result = OperatorOutput::new(Content::text(parts.join("\n")), outcome);
-    result.effects = all_effects;
+    result.intents = all_effects;
     result
 }
 

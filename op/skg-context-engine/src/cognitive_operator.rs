@@ -251,17 +251,11 @@ pub fn map_engine_error(err: EngineError) -> ProtocolError {
             let retryable = err.is_retryable();
             ProtocolError::new(ErrorCode::Unavailable, err.to_string(), retryable)
         }
-        EngineError::Operator(op_err) => {
-            // OperatorError has a From impl to ProtocolError
-            ProtocolError::from(op_err)
-        }
         EngineError::Tool(err) => {
             let retryable = err.is_retryable();
             ProtocolError::new(ErrorCode::Internal, err.to_string(), retryable)
         }
-        EngineError::Halted { reason } => {
-            ProtocolError::new(ErrorCode::Conflict, reason, false)
-        }
+        EngineError::Halted { reason } => ProtocolError::new(ErrorCode::Conflict, reason, false),
         EngineError::Exit { outcome, detail } => {
             ProtocolError::new(ErrorCode::Conflict, format!("{outcome}: {detail}"), false)
         }
@@ -274,7 +268,7 @@ mod tests {
     use super::*;
     use layer0::content::Content;
     use layer0::id::DispatchId;
-    use layer0::operator::{LimitReason, Outcome, OperatorConfig, TerminalOutcome, TriggerType};
+    use layer0::operator::{LimitReason, OperatorConfig, Outcome, TerminalOutcome, TriggerType};
     use skg_turn::test_utils::{TestProvider, make_text_response};
 
     fn test_ctx() -> DispatchContext {
@@ -333,7 +327,10 @@ mod tests {
 
         let result = op.execute(simple_input("test"), &test_ctx()).await;
         let err = result.unwrap_err();
-        assert!(err.retryable, "rate-limited error should be retryable: {err:?}");
+        assert!(
+            err.retryable,
+            "rate-limited error should be retryable: {err:?}"
+        );
     }
 
     #[tokio::test]

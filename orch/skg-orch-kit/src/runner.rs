@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::{Effect, EffectKind};
+use layer0::{Intent, IntentKind};
 use layer0::error::ProtocolError;
 use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
@@ -14,19 +14,19 @@ use thiserror::Error;
 
 // ── Effect middleware (local definitions) ───────────────────────────────────
 
-/// Action returned by effect middleware.
+/// Action returned by intent middleware.
 pub enum EffectAction {
-    /// Continue processing with a (possibly modified) effect.
-    Continue(Box<Effect>),
-    /// Skip this effect entirely.
+    /// Continue processing with a (possibly modified) intent.
+    Continue(Box<Intent>),
+    /// Skip this intent entirely.
     Skip,
 }
 
-/// Middleware that can intercept and modify effects before execution.
+/// Middleware that can intercept and modify intents before execution.
 #[async_trait]
 pub trait EffectMiddleware: Send + Sync {
-    /// Process an effect before it reaches the handler.
-    async fn on_effect(&self, effect: Effect, ctx: &DispatchContext) -> EffectAction;
+    /// Process an intent before it reaches the handler.
+    async fn on_effect(&self, intent: Intent, ctx: &DispatchContext) -> EffectAction;
 }
 
 /// Stack of effect middleware layers.
@@ -46,8 +46,8 @@ impl EffectStack {
         self
     }
 
-    /// Process an effect through all layers. Returns `None` if any layer skips.
-    pub async fn process(&self, mut effect: Effect, ctx: &DispatchContext) -> Option<Effect> {
+    /// Process an intent through all layers. Returns `None` if any layer skips.
+    pub async fn process(&self, mut effect: Intent, ctx: &DispatchContext) -> Option<Intent> {
         for layer in &self.layers {
             match layer.on_effect(effect, ctx).await {
                 EffectAction::Continue(e) => effect = *e,
@@ -210,7 +210,7 @@ impl OrchestratedRunner {
 
             // Interpret effects into state updates + followups.
             let mut followups: Vec<(OperatorId, OperatorInput)> = vec![];
-            for raw_effect in &output.effects {
+            for raw_effect in &output.intents {
                 // Pass through middleware stack if configured.
                 // A Skip return suppresses this effect entirely — the handler
                 // never sees it and no trace event is recorded.
@@ -229,17 +229,17 @@ impl OrchestratedRunner {
                     .map_err(|e| KitError::Effect(e.to_string()))?
                 {
                     EffectOutcome::Applied => match &effect.kind {
-                        EffectKind::WriteMemory { key, .. } => {
+                        IntentKind::WriteMemory { key, .. } => {
                             trace
                                 .events
                                 .push(ExecutionEvent::MemoryWritten { key: key.clone() });
                         }
-                        EffectKind::DeleteMemory { key, .. } => {
+                        IntentKind::DeleteMemory { key, .. } => {
                             trace
                                 .events
                                 .push(ExecutionEvent::MemoryDeleted { key: key.clone() });
                         }
-                        EffectKind::Signal { target, payload } => {
+                        IntentKind::Signal { target, payload } => {
                             trace.events.push(ExecutionEvent::Signaled {
                                 target: target.clone(),
                                 signal_type: payload.signal_type.clone(),
