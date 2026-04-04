@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = op.execute(input, &ctx).await?;
 
     // Step 6: Inspect and print the output.
-    println!("Exit reason : {:?}", output.exit_reason);
+    println!("Exit reason : {:?}", output.outcome);
     println!(
         "Response    : {}",
         output.message.as_text().unwrap_or("(no text)")

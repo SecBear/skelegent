@@ -212,7 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         output.message.as_text().unwrap_or("(no text response)")
     );
     println!("\n--- Execution Summary ---");
-    println!("Exit reason : {}", output.exit_reason);
+    println!("Exit reason : {}", output.outcome);
     println!("Turns used  : {}", output.metadata.turns_used);
     println!("Tokens in   : {}", output.metadata.tokens_in);
     println!("Tokens out  : {}", output.metadata.tokens_out);

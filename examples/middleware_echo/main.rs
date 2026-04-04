@@ -13,10 +13,10 @@ use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::dispatch_context::DispatchContext;
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
-use layer0::operator::{ExitReason, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType};
 use std::sync::Arc;
 
 // ── Terminal (the "real" handler at the end of the chain) ──────────────────
@@ -29,8 +29,8 @@ impl DispatchNext for EchoTerminal {
         &self,
         _ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
-        let output = OperatorOutput::new(input.message, ExitReason::Complete);
+    ) -> Result<DispatchHandle, ProtocolError> {
+        let output = OperatorOutput::new(input.message, Outcome::Terminal { terminal: TerminalOutcome::Completed });
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("echo"));
         tokio::spawn(async move {
             let _ = sender.send(DispatchEvent::Completed { output }).await;
@@ -50,7 +50,7 @@ impl DispatchMiddleware for LogObserver {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         println!(
             "[observer] dispatch start  operator={} dispatch_id={}",
             ctx.operator_id, ctx.dispatch_id
@@ -75,11 +75,11 @@ impl DispatchMiddleware for KeywordGuard {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let text = input.message.as_text().unwrap_or("");
         if text.contains("forbidden") {
             println!("[guard]    blocked: input contains 'forbidden'");
-            return Err(OrchError::DispatchFailed("keyword blocked".into()));
+            return Err(ProtocolError::internal("keyword blocked"));
         }
         next.dispatch(ctx, input).await
     }

@@ -13,7 +13,7 @@
 //! ```rust
 //! use std::sync::Arc;
 //! use layer0::content::{Content, ContentBlock};
-//! use layer0::operator::{Operator, OperatorInput, TriggerType, ExitReason};
+//! use layer0::operator::{Operator, OperatorInput, Outcome, TerminalOutcome, TriggerType};
 //! use skg_tool::{ToolRegistry, ToolDyn, ToolError};
 //! use serde_json::{json, Value};
 //! use std::pin::Pin;
@@ -45,7 +45,7 @@
 //!
 //! let ctx = layer0::DispatchContext::new(layer0::id::DispatchId::new("example"), layer0::id::OperatorId::new("barrier"));
 //! let out = op.execute(input, &ctx).await.unwrap();
-//! assert_eq!(out.exit_reason, ExitReason::Complete);
+//! assert_eq!(out.outcome, Outcome::Terminal { terminal: TerminalOutcome::Completed });
 //! if let Content::Blocks(blocks) = out.message {
 //!     let results = blocks.iter().filter(|b| matches!(b, ContentBlock::ToolResult{..})).count();
 //!     assert_eq!(results, 2);
@@ -57,8 +57,8 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::{Content, ContentBlock};
 use layer0::duration::DurationMs;
-use layer0::error::OperatorError;
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, SubDispatchRecord};
+use layer0::error::ProtocolError;
+use layer0::operator::{Operator, OperatorInput, OperatorOutput, Outcome, SubDispatchRecord, TerminalOutcome};
 use skg_tool::ToolRegistry;
 /// A minimal operator that batches tool calls between barriers.
 pub struct BarrierOperator {
@@ -78,7 +78,7 @@ impl Operator for BarrierOperator {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let mut out_blocks: Vec<ContentBlock> = Vec::new();
         let mut batch: Vec<(String, String, serde_json::Value)> = Vec::new();
         let mut metadata = layer0::operator::OperatorMetadata::default();
@@ -172,7 +172,7 @@ impl Operator for BarrierOperator {
             _ => { /* ignore unknown content kinds */ }
         }
 
-        let mut output = OperatorOutput::new(Content::Blocks(out_blocks), ExitReason::Complete);
+        let mut output = OperatorOutput::new(Content::Blocks(out_blocks), Outcome::Terminal { terminal: TerminalOutcome::Completed });
         output.metadata = metadata;
         Ok(output)
     }
@@ -257,7 +257,7 @@ mod tests {
             }
             _ => panic!("expected blocks"),
         }
-        assert_eq!(out.exit_reason, ExitReason::Complete);
+        assert_eq!(out.outcome, Outcome::Terminal { terminal: TerminalOutcome::Completed });
         assert!(
             out.effects.is_empty(),
             "no effects expected from barrier operator"

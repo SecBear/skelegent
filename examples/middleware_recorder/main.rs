@@ -13,10 +13,10 @@ use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::dispatch_context::DispatchContext;
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::middleware::{DispatchNext, DispatchStack};
-use layer0::operator::{ExitReason, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType};
 use skg_hook_recorder::{DispatchRecorder, InMemorySink};
 use std::sync::Arc;
 
@@ -30,8 +30,8 @@ impl DispatchNext for EchoTerminal {
         &self,
         _ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
-        let output = OperatorOutput::new(input.message, ExitReason::Complete);
+    ) -> Result<DispatchHandle, ProtocolError> {
+        let output = OperatorOutput::new(input.message, Outcome::Terminal { terminal: TerminalOutcome::Completed });
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("echo"));
         tokio::spawn(async move {
             let _ = sender.send(DispatchEvent::Completed { output }).await;
@@ -50,8 +50,8 @@ impl DispatchNext for FailTerminal {
         &self,
         _ctx: &DispatchContext,
         _input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
-        Err(OrchError::DispatchFailed("simulated failure".into()))
+    ) -> Result<DispatchHandle, ProtocolError> {
+        Err(ProtocolError::internal("simulated failure"))
     }
 }
 

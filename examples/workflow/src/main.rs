@@ -26,9 +26,9 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType};
 use skg_orch_local::LocalOrch;
 use skg_orch_patterns::WorkflowBuilder;
 use std::sync::Arc;
@@ -46,12 +46,12 @@ impl Operator for ResearchOp {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let topic = input.message.as_text().unwrap_or("unknown topic");
         let result = format!("Research findings on {topic}");
         Ok(OperatorOutput::new(
             Content::text(result),
-            ExitReason::Complete,
+            Outcome::Terminal { terminal: TerminalOutcome::Completed },
         ))
     }
 }
@@ -67,12 +67,12 @@ impl Operator for AnalyzeOp {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let text = input.message.as_text().unwrap_or("");
         let result = format!("Analysis of: {text}");
         Ok(OperatorOutput::new(
             Content::text(result),
-            ExitReason::Complete,
+            Outcome::Terminal { terminal: TerminalOutcome::Completed },
         ))
     }
 }
@@ -88,12 +88,12 @@ impl Operator for SummarizeOp {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let text = input.message.as_text().unwrap_or("");
         let result = format!("Summary: {text}");
         Ok(OperatorOutput::new(
             Content::text(result),
-            ExitReason::Complete,
+            Outcome::Terminal { terminal: TerminalOutcome::Completed },
         ))
     }
 }
@@ -110,12 +110,12 @@ impl Operator for FormatOp {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let text = input.message.as_text().unwrap_or("");
         let result = format!("Formatted:\n{text}");
         Ok(OperatorOutput::new(
             Content::text(result),
-            ExitReason::Complete,
+            Outcome::Terminal { terminal: TerminalOutcome::Completed },
         ))
     }
 }
@@ -174,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    whatever FormatOp produced from the joined analyze + summarize text.
     println!("--- Final output ---");
     println!("{}", output.message.as_text().unwrap_or("(no text)"));
-    println!("\nExit reason: {:?}", output.exit_reason);
+    println!("\nOutcome: {:?}", output.outcome);
 
     Ok(())
 }

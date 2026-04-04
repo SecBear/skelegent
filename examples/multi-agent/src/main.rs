@@ -279,7 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Final response:  {}",
         output.message.as_text().unwrap_or("(no text)")
     );
-    println!("Exit reason:     {:?}", output.exit_reason);
+    println!("Exit reason:     {:?}", output.outcome);
     println!();
     println!("Effects ({} total):", output.effects.len());
     for (i, effect) in output.effects.iter().enumerate() {
