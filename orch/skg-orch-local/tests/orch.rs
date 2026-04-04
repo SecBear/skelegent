@@ -1,5 +1,6 @@
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
+use layer0::error::ProtocolError;
 use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
 use layer0::test_utils::EchoOperator;
@@ -58,8 +59,8 @@ impl layer0::operator::Operator for FailingOperator {
         &self,
         _input: OperatorInput,
         _ctx: &layer0::DispatchContext,
-    ) -> Result<OperatorOutput, layer0::error::OperatorError> {
-        Err(layer0::error::OperatorError::non_retryable("always fails"))
+    ) -> Result<OperatorOutput, ProtocolError> {
+        Err(ProtocolError::internal("always fails"))
     }
 }
 
@@ -118,7 +119,7 @@ async fn usable_as_arc_dyn_dispatcher() {
 async fn middleware_observer_fires_on_dispatch() {
     use async_trait::async_trait;
     use layer0::DispatchContext;
-    use layer0::error::OrchError;
+    use layer0::error::ProtocolError as PE;
     use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -133,7 +134,7 @@ async fn middleware_observer_fires_on_dispatch() {
             ctx: &DispatchContext,
             input: OperatorInput,
             next: &dyn DispatchNext,
-        ) -> Result<layer0::dispatch::DispatchHandle, OrchError> {
+        ) -> Result<layer0::dispatch::DispatchHandle, PE> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             next.dispatch(ctx, input).await
         }
@@ -168,7 +169,7 @@ async fn middleware_observer_fires_on_dispatch() {
 async fn middleware_guard_can_halt_dispatch() {
     use async_trait::async_trait;
     use layer0::DispatchContext;
-    use layer0::error::OrchError;
+    use layer0::error::ProtocolError as PE2;
     use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
 
     struct DenyAll;
@@ -180,8 +181,8 @@ async fn middleware_guard_can_halt_dispatch() {
             _ctx: &DispatchContext,
             _input: OperatorInput,
             _next: &dyn DispatchNext,
-        ) -> Result<layer0::dispatch::DispatchHandle, OrchError> {
-            Err(OrchError::DispatchFailed("denied by guard".into()))
+        ) -> Result<layer0::dispatch::DispatchHandle, PE2> {
+            Err(PE2::internal("denied by guard"))
         }
     }
 

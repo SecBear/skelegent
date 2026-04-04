@@ -52,9 +52,9 @@ impl OperatorRegistryBuilder {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use layer0::{
-        Content, DispatchContext, ExitReason, OperatorError, OperatorInput, OperatorOutput,
-    };
+    use layer0::error::ProtocolError;
+    use layer0::operator::{Outcome, TerminalOutcome};
+    use layer0::{Content, DispatchContext, OperatorInput, OperatorOutput};
 
     struct NoOp;
 
@@ -64,10 +64,12 @@ mod tests {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
+        ) -> Result<OperatorOutput, ProtocolError> {
             Ok(OperatorOutput::new(
                 Content::text("ok"),
-                ExitReason::Complete,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
             ))
         }
     }

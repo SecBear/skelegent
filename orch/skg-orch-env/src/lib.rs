@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::environment::{Environment, EnvironmentSpec};
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 use layer0::id::OperatorId;
 use layer0::operator::OperatorInput;
 use std::collections::HashMap;
@@ -85,13 +85,16 @@ impl Dispatcher for EnvOrch {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let (env, spec) = if let Some(binding) = self.bindings.get(ctx.operator_id.as_str()) {
             (binding.env.clone(), binding.spec.clone())
         } else if let Some(ref default) = self.default_env {
             (default.clone(), self.default_spec.clone())
         } else {
-            return Err(OrchError::OperatorNotFound(ctx.operator_id.to_string()));
+            return Err(ProtocolError::not_found(format!(
+                "operator not found: {}",
+                ctx.operator_id
+            )));
         };
 
         let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
@@ -103,7 +106,9 @@ impl Dispatcher for EnvOrch {
                 }
                 Err(err) => {
                     let _ = sender
-                        .send(DispatchEvent::Failed { error: err.into() })
+                        .send(DispatchEvent::Failed {
+                            error: ProtocolError::from(err),
+                        })
                         .await;
                 }
             }
@@ -116,8 +121,9 @@ impl Dispatcher for EnvOrch {
 mod tests {
     use super::*;
     use layer0::content::Content;
+    use layer0::error::ErrorCode;
     use layer0::id::OperatorId;
-    use layer0::operator::{ExitReason, OperatorInput, TriggerType};
+    use layer0::operator::{OperatorInput, Outcome, TerminalOutcome, TriggerType};
     use layer0::test_utils::{EchoOperator, LocalEnvironment};
     use layer0::{DispatchContext, DispatchId};
 
@@ -148,7 +154,12 @@ mod tests {
             .expect("collect should succeed");
 
         assert_eq!(result.message, Content::Text("hello".to_string()));
-        assert!(matches!(result.exit_reason, ExitReason::Complete));
+        assert_eq!(
+            result.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
     }
 
     #[tokio::test]
@@ -174,9 +185,10 @@ mod tests {
         let ctx = DispatchContext::new(DispatchId::new("missing"), OperatorId::new("missing"));
         let err = orch.dispatch(&ctx, input("nope")).await.unwrap_err();
 
+        assert_eq!(err.code, ErrorCode::NotFound);
         assert!(
-            matches!(err, OrchError::OperatorNotFound(ref name) if name == "missing"),
-            "expected OperatorNotFound, got: {err:?}"
+            err.message.contains("missing"),
+            "expected message to contain 'missing', got: {err:?}"
         );
     }
 }

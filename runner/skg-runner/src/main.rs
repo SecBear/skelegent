@@ -12,6 +12,7 @@ mod http_adapter;
 mod registry;
 
 use layer0::dispatch::{DispatchEvent, DispatchHandle};
+use layer0::error::ProtocolError;
 use layer0::{DispatchContext, DispatchId, OperatorId};
 use std::sync::Arc;
 
@@ -156,21 +157,16 @@ impl RunnerServiceImpl {
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
-                Err(op_err) => {
-                    let _ = sender
-                        .send(DispatchEvent::Failed {
-                            error: op_err.into(),
-                        })
-                        .await;
+                Err(err) => {
+                    let _ = sender.send(DispatchEvent::Failed { error: err }).await;
                 }
             }
         });
 
         let output = handle.collect().await.map_err(|e| {
             error!("operator error: {e}");
-            match &e {
-                layer0::error::OrchError::OperatorNotFound(msg) => CoreError::NotFound(msg.clone()),
-                layer0::error::OrchError::WorkflowNotFound(msg) => CoreError::NotFound(msg.clone()),
+            match e.code {
+                layer0::error::ErrorCode::NotFound => CoreError::NotFound(e.message),
                 _ => CoreError::Internal(e.to_string()),
             }
         })?;
@@ -253,12 +249,8 @@ impl Runner for RunnerServiceImpl {
                     Ok(output) => {
                         let _ = sender.send(DispatchEvent::Completed { output }).await;
                     }
-                    Err(op_err) => {
-                        let _ = sender
-                            .send(DispatchEvent::Failed {
-                                error: op_err.into(),
-                            })
-                            .await;
+                    Err(err) => {
+                        let _ = sender.send(DispatchEvent::Failed { error: err }).await;
                     }
                 }
             });
@@ -310,7 +302,7 @@ impl Runner for RunnerServiceImpl {
                     },
                     DispatchEvent::Failed { error } => {
                         error!("operator error during stream: {error}");
-                        let status = orch_error_to_grpc_status(error);
+                        let status = protocol_error_to_grpc_status(error);
                         let _ = tx.send(Err(status)).await;
                         return;
                     }
@@ -339,31 +331,27 @@ impl Runner for RunnerServiceImpl {
     }
 }
 
-/// Map an `OrchError` to the appropriate gRPC status code.
+/// Map a [`ProtocolError`] to the appropriate gRPC status code.
 ///
-/// Preserves variant-level classification: not-found errors become
-/// `NOT_FOUND`, retryable errors become `UNAVAILABLE`, halts become
-/// `ABORTED`, and everything else falls through to `INTERNAL`.
-fn orch_error_to_grpc_status(error: &layer0::error::OrchError) -> Status {
-    use layer0::error::{OperatorError, OrchError};
+/// Preserves error code classification: not-found → `NOT_FOUND`,
+/// retryable → `UNAVAILABLE`, conflict → `ABORTED`, and everything
+/// else falls through to `INTERNAL`.
+fn protocol_error_to_grpc_status(error: &ProtocolError) -> Status {
+    use layer0::error::ErrorCode;
 
-    match error {
-        OrchError::OperatorNotFound(msg) => Status::not_found(msg.clone()),
-        OrchError::WorkflowNotFound(msg) => Status::not_found(msg.clone()),
-        OrchError::DispatchFailed(msg) => Status::unavailable(msg.clone()),
-        OrchError::SignalFailed(msg) => Status::unavailable(msg.clone()),
-        OrchError::OperatorError(op_err) => match op_err {
-            OperatorError::Model {
-                retryable: true, ..
-            } => Status::unavailable(format!("model error (retryable): {op_err}")),
-            OperatorError::Retryable { message, .. } => {
-                Status::unavailable(format!("retryable: {message}"))
+    match error.code {
+        ErrorCode::NotFound => Status::not_found(&error.message),
+        ErrorCode::InvalidInput => Status::invalid_argument(&error.message),
+        ErrorCode::Unavailable => {
+            if error.retryable {
+                Status::unavailable(&error.message)
+            } else {
+                Status::internal(&error.message)
             }
-            OperatorError::Halted { reason } => Status::aborted(format!("halted: {reason}")),
-            _ => Status::internal(op_err.to_string()),
-        },
-        OrchError::EnvironmentError(env_err) => Status::failed_precondition(env_err.to_string()),
-        _ => Status::internal(error.to_string()),
+        }
+        ErrorCode::Conflict => Status::aborted(&error.message),
+        ErrorCode::Internal => Status::internal(&error.message),
+        _ => Status::internal(&error.message),
     }
 }
 

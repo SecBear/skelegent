@@ -45,11 +45,13 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use async_trait::async_trait;
+    use layer0::DispatchContext;
     use layer0::content::Content;
-    use layer0::error::OperatorError;
+    use layer0::error::ProtocolError;
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
-    use layer0::{DispatchContext, ExitReason};
+    use layer0::operator::{
+        Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType,
+    };
     use skg_orch_local::LocalOrch;
 
     use super::*;
@@ -67,8 +69,13 @@ mod tests {
             &self,
             input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
-            Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+        ) -> Result<OperatorOutput, ProtocolError> {
+            Ok(OperatorOutput::new(
+                input.message,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            ))
         }
     }
 
@@ -83,11 +90,13 @@ mod tests {
             &self,
             input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
+        ) -> Result<OperatorOutput, ProtocolError> {
             let msg = format!("{}{}", self.prefix, input.message.as_text().unwrap_or(""));
             Ok(OperatorOutput::new(
                 Content::text(msg),
-                ExitReason::Complete,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
             ))
         }
     }
@@ -103,12 +112,14 @@ mod tests {
             &self,
             input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
+        ) -> Result<OperatorOutput, ProtocolError> {
             let n = self.count.fetch_add(1, Ordering::Relaxed) + 1;
             let msg = format!("{}-iter{n}", input.message.as_text().unwrap_or(""));
             Ok(OperatorOutput::new(
                 Content::text(msg),
-                ExitReason::Complete,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
             ))
         }
     }
@@ -204,7 +215,12 @@ mod tests {
             text.contains("[C]"),
             "step C output must be present: {text}"
         );
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -290,7 +306,12 @@ mod tests {
             TARGET,
             "operator should run exactly {TARGET} times"
         );
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert!(
             output
                 .message
@@ -371,7 +392,12 @@ mod tests {
         // Parallel: left gets "[L][PRE]base", right echoes "[PRE]base".
         // Reducer concatenates both.
         assert!(text.contains("[PRE]"), "prefix step missing: {text}");
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
     }
     // ─────────────────────────────────────────────────────────────────────────
     // FanOutOperator
@@ -408,7 +434,12 @@ mod tests {
         assert!(text.contains("chunk-0"), "branch 0 missing: {text}");
         assert!(text.contains("chunk-1"), "branch 1 missing: {text}");
         assert!(text.contains("chunk-2"), "branch 2 missing: {text}");
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
     }
 
     /// Splitter returns empty vec; reducer receives empty input and produces empty text.
@@ -431,7 +462,12 @@ mod tests {
             .expect("empty fan-out should complete");
 
         // Default reducer on empty vec: parts.join("") → empty string, Complete exit.
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         let text = output.message.as_text().unwrap_or("");
         assert!(
             text.is_empty(),

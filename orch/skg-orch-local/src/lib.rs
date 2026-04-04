@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::SignalPayload;
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{DispatchNext, DispatchStack};
 use layer0::operator::{Operator, OperatorInput};
@@ -76,11 +76,13 @@ impl DispatchNext for OperatorDispatch<'_> {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let op = self
             .agents
             .get(ctx.operator_id.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
+            .ok_or_else(|| {
+                ProtocolError::not_found(format!("operator not found: {}", ctx.operator_id))
+            })?
             .clone();
         let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
         let ctx = ctx.clone();
@@ -90,11 +92,7 @@ impl DispatchNext for OperatorDispatch<'_> {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
                 Err(err) => {
-                    let _ = sender
-                        .send(DispatchEvent::Failed {
-                            error: OrchError::OperatorError(err),
-                        })
-                        .await;
+                    let _ = sender.send(DispatchEvent::Failed { error: err }).await;
                 }
             }
         });
@@ -109,7 +107,7 @@ impl Dispatcher for LocalOrch {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let terminal = OperatorDispatch {
             agents: &self.agents,
         };
@@ -126,14 +124,16 @@ impl Dispatcher for LocalOrch {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use layer0::DispatchContext;
     use layer0::content::Content;
     use layer0::dispatch::{DispatchHandle, Dispatcher};
     use layer0::effect::SignalPayload;
-    use layer0::error::{OperatorError, OrchError};
+    use layer0::error::ProtocolError;
     use layer0::id::{DispatchId, OperatorId, WorkflowId};
     use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
-    use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
-    use layer0::{DispatchContext, ExitReason};
+    use layer0::operator::{
+        Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType,
+    };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -146,8 +146,13 @@ mod tests {
             &self,
             input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
-            Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+        ) -> Result<OperatorOutput, ProtocolError> {
+            Ok(OperatorOutput::new(
+                input.message,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            ))
         }
     }
 
@@ -265,7 +270,7 @@ mod tests {
                 ctx: &DispatchContext,
                 input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 next.dispatch(ctx, input).await
             }

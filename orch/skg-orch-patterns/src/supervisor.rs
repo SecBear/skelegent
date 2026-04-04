@@ -1,15 +1,15 @@
 //! [`SupervisorOperator`] — LLM-driven routing via a pluggable [`SpeakerSelector`].
 //!
 //! The supervisor dispatches to one sub-agent at a time, chosen by the selector.
-//! After each round it checks the exit reason:
+//! After each round it checks the outcome:
 //!
-//! * [`ExitReason::Complete`] — task done, return the output.
-//! * [`ExitReason::HandedOff`] — another agent should continue; the selector picks
+//! * `Outcome::Terminal { Completed }` — task done, return the output.
+//! * `Outcome::Transfer { HandedOff }` — another agent should continue; the selector picks
 //!   the next speaker and the round proceeds.
-//! * Any other exit — propagated immediately (budget, error, timeout, …).
+//! * Any other outcome — propagated immediately (budget, error, timeout, …).
 //!
-//! If `max_rounds` is reached without a `Complete` exit the operator returns
-//! [`ExitReason::MaxTurns`]. Effects from all rounds are accumulated.
+//! If `max_rounds` is reached without a completed terminal outcome the operator returns
+//! `Outcome::Limited { MaxTurns }`. Effects from all rounds are accumulated.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,9 +19,12 @@ use layer0::DispatchContext;
 use layer0::context::{Message, Role};
 use layer0::dispatch::Dispatcher;
 use layer0::effect::{EffectKind, HandoffContext};
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{
+    LimitReason, Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome,
+    TransferOutcome, TriggerType,
+};
 
 use crate::selector::SpeakerSelector;
 
@@ -47,9 +50,9 @@ fn next_dispatch_id() -> DispatchId {
 /// selector; explicit targets in `Handoff` effects take precedence.
 ///
 /// # Termination
-/// * Returns immediately when any agent exits [`ExitReason::Complete`].
-/// * Returns [`ExitReason::MaxTurns`] if `max_rounds` is exhausted.
-/// * Propagates any other exit reason from the sub-agent unchanged.
+/// * Returns immediately when any agent exits with `Outcome::Terminal { Completed }`.
+/// * Returns `Outcome::Limited { MaxTurns }` if `max_rounds` is exhausted.
+/// * Propagates any other outcome from the sub-agent unchanged.
 pub struct SupervisorOperator {
     /// The sub-operators this supervisor can delegate to.
     agents: Vec<OperatorId>,
@@ -66,7 +69,7 @@ impl SupervisorOperator {
     /// and round cap.
     ///
     /// `max_rounds` is a hard safety cap; the operator exits with
-    /// [`ExitReason::MaxTurns`] if no agent completes within that many rounds.
+    /// `Outcome::Limited { MaxTurns }` if no agent completes within that many rounds.
     pub fn new(
         agents: Vec<OperatorId>,
         dispatcher: Arc<dyn Dispatcher>,
@@ -88,7 +91,7 @@ impl Operator for SupervisorOperator {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_input = input;
         // Accumulated effects from every round.
         let mut all_effects: Vec<layer0::Effect> = Vec::new();
@@ -109,18 +112,16 @@ impl Operator for SupervisorOperator {
                     .selector
                     .select(&self.agents, &history, ctx)
                     .await
-                    .map_err(|e| OperatorError::non_retryable(e.to_string()))?,
+                    .map_err(|e| ProtocolError::internal(e.to_string()))?,
             };
             let child_ctx = ctx.child(next_dispatch_id(), agent_id);
 
             let mut output = self
                 .dispatcher
                 .dispatch(&child_ctx, current_input)
-                .await
-                .map_err(|e| OperatorError::non_retryable(e.to_string()))?
+                .await?
                 .collect()
-                .await
-                .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
+                .await?;
 
             // Extract the target operator and structured context from the last Handoff
             // effect BEFORE draining them, so we can use context.task as next input.
@@ -139,15 +140,19 @@ impl Operator for SupervisorOperator {
             let handoff_operator = handoff.as_ref().map(|(op, _)| op.clone());
             let handoff_ctx = handoff.map(|(_, hctx)| hctx);
 
-            // Absorb effects before examining the exit reason.
+            // Absorb effects before examining the outcome.
             all_effects.append(&mut output.effects);
 
-            match output.exit_reason {
-                ExitReason::Complete => {
+            match &output.outcome {
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                } => {
                     output.effects = all_effects;
                     return Ok(output);
                 }
-                ExitReason::HandedOff => {
+                Outcome::Transfer {
+                    transfer: TransferOutcome::HandedOff,
+                } => {
                     // Use context.task as the next input — it is the task the
                     // handing-off operator wants the next speaker to act on.
                     // Fall back to output.message if no Handoff effect was emitted.
@@ -176,8 +181,12 @@ impl Operator for SupervisorOperator {
         }
 
         // Exceeded max_rounds without completing.
-        let mut timeout_output =
-            OperatorOutput::new(current_input.message.clone(), ExitReason::MaxTurns);
+        let mut timeout_output = OperatorOutput::new(
+            current_input.message.clone(),
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns,
+            },
+        );
         timeout_output.effects = all_effects;
         Ok(timeout_output)
     }
@@ -192,12 +201,15 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use layer0::DispatchContext;
     use layer0::content::Content;
     use layer0::effect::{Effect, EffectKind, HandoffContext};
-    use layer0::error::OperatorError;
+    use layer0::error::ProtocolError;
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
-    use layer0::{DispatchContext, ExitReason as ER};
+    use layer0::operator::{
+        Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TransferOutcome,
+        TriggerType,
+    };
     use skg_orch_local::LocalOrch;
 
     use super::*;
@@ -222,10 +234,12 @@ mod tests {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
+        ) -> Result<OperatorOutput, ProtocolError> {
             Ok(OperatorOutput::new(
                 Content::text(self.reply.clone()),
-                ExitReason::Complete,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
             ))
         }
     }
@@ -248,9 +262,13 @@ mod tests {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
-            let mut out =
-                OperatorOutput::new(Content::text(self.reply.clone()), ExitReason::HandedOff);
+        ) -> Result<OperatorOutput, ProtocolError> {
+            let mut out = OperatorOutput::new(
+                Content::text(self.reply.clone()),
+                Outcome::Transfer {
+                    transfer: TransferOutcome::HandedOff,
+                },
+            );
             let next_task = if self.task.is_empty() {
                 self.reply.clone()
             } else {
@@ -302,7 +320,12 @@ mod tests {
             .await
             .expect("supervisor should complete");
 
-        assert_eq!(output.exit_reason, ER::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(
             output.message.as_text().unwrap_or(""),
             "from-b",
@@ -343,8 +366,10 @@ mod tests {
             .expect("supervisor should return max turns");
 
         assert_eq!(
-            output.exit_reason,
-            ER::MaxTurns,
+            output.outcome,
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns
+            },
             "must exit with MaxTurns after 3 rounds"
         );
         // 3 rounds × 1 Handoff effect each.
@@ -364,10 +389,12 @@ mod tests {
                 &self,
                 _input: OperatorInput,
                 _ctx: &DispatchContext,
-            ) -> Result<OperatorOutput, OperatorError> {
+            ) -> Result<OperatorOutput, ProtocolError> {
                 let mut out = OperatorOutput::new(
                     Content::text("output-message-not-the-task"),
-                    ExitReason::HandedOff,
+                    Outcome::Transfer {
+                        transfer: TransferOutcome::HandedOff,
+                    },
                 );
                 out.effects.push(Effect::new(EffectKind::Handoff {
                     operator: OperatorId::new("receiver"),
@@ -392,11 +419,13 @@ mod tests {
                 &self,
                 input: OperatorInput,
                 _ctx: &DispatchContext,
-            ) -> Result<OperatorOutput, OperatorError> {
+            ) -> Result<OperatorOutput, ProtocolError> {
                 *self.received.lock().unwrap() = input.message.as_text().unwrap_or("").to_string();
                 Ok(OperatorOutput::new(
                     Content::text("done"),
-                    ExitReason::Complete,
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
                 ))
             }
         }
@@ -425,7 +454,12 @@ mod tests {
             .await
             .expect("supervisor must complete");
 
-        assert_eq!(output.exit_reason, ER::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(
             *received.lock().unwrap(),
             "explicit-task-for-receiver",
@@ -487,8 +521,10 @@ mod tests {
             .expect("supervisor should complete");
 
         assert_eq!(
-            output.exit_reason,
-            ER::Complete,
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            },
             "must complete, not exhaust rounds"
         );
         assert_eq!(
@@ -538,7 +574,12 @@ mod tests {
             .await
             .expect("supervisor should complete");
 
-        assert_eq!(output.exit_reason, ER::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(
             output.message.as_text().unwrap_or(""),
             "from-b",

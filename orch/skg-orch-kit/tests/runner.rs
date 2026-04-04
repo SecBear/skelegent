@@ -3,9 +3,11 @@ use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle, Dispatcher};
 use layer0::effect::{Effect, EffectKind, HandoffContext, MemoryScope, Scope, SignalPayload};
-use layer0::error::{OperatorError, OrchError, StateError};
+use layer0::error::{ProtocolError, StateError};
 use layer0::id::{OperatorId, WorkflowId};
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{
+    Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType,
+};
 use layer0::state::{SearchResult, StateStore};
 use serde_json::json;
 use skg_effects_core::Signalable;
@@ -43,11 +45,13 @@ impl Dispatcher for SimpleOrch {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let op = self
             .agents
             .get(ctx.operator_id.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?
+            .ok_or_else(|| {
+                ProtocolError::not_found(format!("operator not found: {}", ctx.operator_id))
+            })?
             .clone();
         let (handle, sender) = DispatchHandle::channel(ctx.dispatch_id.clone());
         let ctx = ctx.clone();
@@ -57,11 +61,7 @@ impl Dispatcher for SimpleOrch {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
                 Err(err) => {
-                    let _ = sender
-                        .send(DispatchEvent::Failed {
-                            error: OrchError::OperatorError(err),
-                        })
-                        .await;
+                    let _ = sender.send(DispatchEvent::Failed { error: err }).await;
                 }
             }
         });
@@ -71,7 +71,12 @@ impl Dispatcher for SimpleOrch {
 
 #[async_trait]
 impl Signalable for SimpleOrch {
-    async fn signal(&self, target: &WorkflowId, signal: SignalPayload) -> Result<(), OrchError> {
+    #[allow(deprecated)]
+    async fn signal(
+        &self,
+        target: &WorkflowId,
+        signal: SignalPayload,
+    ) -> Result<(), layer0::error::OrchError> {
         self.signals.lock().await.push((target.clone(), signal));
         Ok(())
     }
@@ -148,8 +153,13 @@ impl Operator for WriterOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
-        let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
+    ) -> Result<OperatorOutput, ProtocolError> {
+        let mut output = OperatorOutput::new(
+            Content::text("wrote"),
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         output.effects.push(Effect::new(EffectKind::WriteMemory {
             scope: Scope::Global,
             key: "k1".into(),
@@ -177,8 +187,13 @@ impl Operator for DelegateOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
-        let mut output = OperatorOutput::new(Content::text("delegating"), ExitReason::Complete);
+    ) -> Result<OperatorOutput, ProtocolError> {
+        let mut output = OperatorOutput::new(
+            Content::text("delegating"),
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         output.effects.push(Effect::new(EffectKind::Delegate {
             operator: OperatorId::new("child"),
             input: Box::new(OperatorInput::new(
@@ -198,11 +213,13 @@ impl Operator for ChildOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         assert_eq!(input.message.as_text().unwrap_or_default(), "child task");
         Ok(OperatorOutput::new(
             Content::text("child done"),
-            ExitReason::Complete,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }
@@ -215,8 +232,13 @@ impl Operator for HandoffOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
-        let mut output = OperatorOutput::new(Content::text("handoff"), ExitReason::Complete);
+    ) -> Result<OperatorOutput, ProtocolError> {
+        let mut output = OperatorOutput::new(
+            Content::text("handoff"),
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         output.effects.push(Effect::new(EffectKind::Handoff {
             operator: OperatorId::new("handoff_target"),
             context: HandoffContext {
@@ -237,7 +259,7 @@ impl Operator for HandoffTargetOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         // LocalEffectHandler routes context.metadata → input.metadata.
         // The ticket field must be present in the structured metadata.
         assert_eq!(
@@ -246,7 +268,9 @@ impl Operator for HandoffTargetOperator {
         );
         Ok(OperatorOutput::new(
             Content::text("accepted"),
-            ExitReason::Complete,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }
@@ -259,8 +283,13 @@ impl Operator for FullPipelineRootOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
-        let mut output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
+    ) -> Result<OperatorOutput, ProtocolError> {
+        let mut output = OperatorOutput::new(
+            Content::text("root"),
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         output.effects.push(Effect::new(EffectKind::WriteMemory {
             scope: Scope::Global,
             key: "k-pipeline".into(),
@@ -411,8 +440,11 @@ async fn unknown_agent_returns_agent_not_found() {
         .await
         .unwrap_err();
     match err {
-        KitError::Dispatch(OrchError::OperatorNotFound(name)) => assert_eq!(name, "missing"),
-        other => panic!("expected OperatorNotFound, got {other:?}"),
+        KitError::Dispatch(ref pe) => {
+            assert_eq!(pe.code, layer0::error::ErrorCode::NotFound);
+            assert!(pe.message.contains("missing"));
+        }
+        other => panic!("expected Dispatch(NotFound), got {other:?}"),
     }
 }
 
@@ -425,8 +457,13 @@ async fn runner_has_safety_bound_for_infinite_followups() {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
-            let mut output = OperatorOutput::new(Content::text("loop"), ExitReason::Complete);
+        ) -> Result<OperatorOutput, ProtocolError> {
+            let mut output = OperatorOutput::new(
+                Content::text("loop"),
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            );
             output.effects.push(Effect::new(EffectKind::Delegate {
                 operator: OperatorId::new("root"),
                 input: Box::new(OperatorInput::new(Content::text("loop"), TriggerType::Task)),
@@ -507,7 +544,7 @@ async fn runner_effect_pipeline_end_to_end() {
 
 // ── Middleware tests ─────────────────────────────────────────────────────────
 
-use layer0::{EffectAction, EffectMiddleware, EffectStack};
+use skg_orch_kit::{EffectAction, EffectMiddleware, EffectStack};
 
 /// Middleware that renames every WriteMemory key by prepending a prefix.
 /// Used to verify that an enriched (modified) effect reaches the handler.
@@ -517,8 +554,8 @@ struct PrefixKeyMiddleware {
 
 #[async_trait]
 impl EffectMiddleware for PrefixKeyMiddleware {
-    async fn on_effect(&self, mut effect: layer0::Effect, _ctx: &DispatchContext) -> EffectAction {
-        if let layer0::EffectKind::WriteMemory { ref mut key, .. } = effect.kind {
+    async fn on_effect(&self, mut effect: Effect, _ctx: &DispatchContext) -> EffectAction {
+        if let EffectKind::WriteMemory { ref mut key, .. } = effect.kind {
             *key = format!("{}{}", self.prefix, key);
         }
         EffectAction::Continue(Box::new(effect))
@@ -530,8 +567,8 @@ struct SkipWriteMemoryMiddleware;
 
 #[async_trait]
 impl EffectMiddleware for SkipWriteMemoryMiddleware {
-    async fn on_effect(&self, effect: layer0::Effect, _ctx: &DispatchContext) -> EffectAction {
-        if matches!(effect.kind, layer0::EffectKind::WriteMemory { .. }) {
+    async fn on_effect(&self, effect: Effect, _ctx: &DispatchContext) -> EffectAction {
+        if matches!(effect.kind, EffectKind::WriteMemory { .. }) {
             EffectAction::Skip
         } else {
             EffectAction::Continue(Box::new(effect))
@@ -548,8 +585,13 @@ impl Operator for MwWriterOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, layer0::error::OperatorError> {
-        let mut output = OperatorOutput::new(Content::text("wrote"), ExitReason::Complete);
+    ) -> Result<OperatorOutput, ProtocolError> {
+        let mut output = OperatorOutput::new(
+            Content::text("wrote"),
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         output.effects.push(Effect::new(EffectKind::WriteMemory {
             scope: Scope::Global,
             key: "mw-key".into(),
@@ -679,8 +721,13 @@ impl Operator for FifoRootOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
-        let mut output = OperatorOutput::new(Content::text("root"), ExitReason::Complete);
+    ) -> Result<OperatorOutput, ProtocolError> {
+        let mut output = OperatorOutput::new(
+            Content::text("root"),
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         for name in ["first", "second", "third"] {
             output.effects.push(Effect::new(EffectKind::Delegate {
                 operator: OperatorId::new(name),
@@ -701,10 +748,12 @@ impl Operator for EchoOperator {
         &self,
         _input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         Ok(OperatorOutput::new(
             Content::text(self.name),
-            ExitReason::Complete,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }

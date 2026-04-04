@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 
+use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::EffectStack;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::EffectKind;
-use layer0::error::OrchError;
+use layer0::effect::{Effect, EffectKind};
+use layer0::error::ProtocolError;
 use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::operator::{OperatorInput, OperatorOutput};
@@ -12,12 +12,58 @@ use skg_effects_core::{EffectHandler, EffectOutcome};
 use std::sync::Arc;
 use thiserror::Error;
 
+// ── Effect middleware (local definitions) ───────────────────────────────────
+
+/// Action returned by effect middleware.
+pub enum EffectAction {
+    /// Continue processing with a (possibly modified) effect.
+    Continue(Box<Effect>),
+    /// Skip this effect entirely.
+    Skip,
+}
+
+/// Middleware that can intercept and modify effects before execution.
+#[async_trait]
+pub trait EffectMiddleware: Send + Sync {
+    /// Process an effect before it reaches the handler.
+    async fn on_effect(&self, effect: Effect, ctx: &DispatchContext) -> EffectAction;
+}
+
+/// Stack of effect middleware layers.
+pub struct EffectStack {
+    layers: Vec<Box<dyn EffectMiddleware>>,
+}
+
+impl EffectStack {
+    /// Create a new empty middleware stack.
+    pub fn new() -> Self {
+        Self { layers: vec![] }
+    }
+
+    /// Push a middleware layer onto the stack.
+    pub fn push(mut self, mw: impl EffectMiddleware + 'static) -> Self {
+        self.layers.push(Box::new(mw));
+        self
+    }
+
+    /// Process an effect through all layers. Returns `None` if any layer skips.
+    pub async fn process(&self, mut effect: Effect, ctx: &DispatchContext) -> Option<Effect> {
+        for layer in &self.layers {
+            match layer.on_effect(effect, ctx).await {
+                EffectAction::Continue(e) => effect = *e,
+                EffectAction::Skip => return None,
+            }
+        }
+        Some(effect)
+    }
+}
+
 /// Errors returned by `skg-orch-kit`.
 #[derive(Debug, Error)]
 pub enum KitError {
     /// Dispatch error.
     #[error("orchestrator error: {0}")]
-    Dispatch(#[from] OrchError),
+    Dispatch(#[from] ProtocolError),
     /// Effect execution failed.
     #[error("effect execution failed: {0}")]
     Effect(String),

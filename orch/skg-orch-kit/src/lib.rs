@@ -25,7 +25,10 @@ pub use compaction::{
 pub use intervene::{ContextIntervenor, InterventionSendError};
 pub use kit::Kit;
 pub use observe::{ContextObserver, Observation, ObservationBatch, ObservationTry};
-pub use runner::{ExecutionEvent, ExecutionTrace, KitError, OrchestratedRunner};
+pub use runner::{
+    EffectAction, EffectMiddleware, EffectStack, ExecutionEvent, ExecutionTrace, KitError,
+    OrchestratedRunner,
+};
 
 pub mod effects;
 pub use skg_context_engine as context_engine;

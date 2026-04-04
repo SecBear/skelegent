@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
 use layer0::effect::Effect;
-use layer0::error::{OrchError, StateError};
+use layer0::error::{OrchError, ProtocolError, StateError};
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::OperatorInput;
 use serde::{Deserialize, Serialize};
@@ -22,8 +22,9 @@ use thiserror::Error;
 
 /// Error type for effect handling.
 #[derive(Debug, Error)]
+#[allow(deprecated)]
 pub enum Error {
-    /// Dispatch error.
+    /// Dispatch error (v1 — deprecated).
     #[error("orchestrator error: {0}")]
     Dispatch(#[from] OrchError),
     /// State backend error.
@@ -32,6 +33,15 @@ pub enum Error {
     /// An unknown/unhandled effect was encountered and policy is Error.
     #[error("unknown or unsupported effect encountered")]
     UnknownEffect,
+    /// Protocol error (v2).
+    #[error("protocol error: {0}")]
+    Protocol(ProtocolError),
+}
+
+impl From<ProtocolError> for Error {
+    fn from(e: ProtocolError) -> Self {
+        Error::Protocol(e)
+    }
 }
 
 /// Policy for handling unknown/custom effects.

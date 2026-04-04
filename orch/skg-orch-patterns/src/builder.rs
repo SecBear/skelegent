@@ -11,9 +11,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{
+    Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType,
+};
 
 use crate::loop_op::LoopOperator;
 use crate::parallel::{ParallelOperator, ReducerFn};
@@ -71,7 +73,7 @@ impl Operator for Pipeline {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_input = input;
         let mut all_effects: Vec<layer0::Effect> = Vec::new();
         let mut last_output: Option<OperatorOutput> = None;
@@ -81,7 +83,13 @@ impl Operator for Pipeline {
 
             all_effects.append(&mut output.effects);
 
-            if output.exit_reason != layer0::ExitReason::Complete {
+            let is_completed = matches!(
+                output.outcome,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed
+                }
+            );
+            if !is_completed {
                 output.effects = all_effects;
                 return Ok(output);
             }
@@ -97,7 +105,9 @@ impl Operator for Pipeline {
             }
             None => Ok(OperatorOutput::new(
                 layer0::Content::text(""),
-                layer0::ExitReason::Complete,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
             )),
         }
     }
@@ -121,15 +131,13 @@ impl Operator for SingleDispatch {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let child_ctx = ctx.child(next_dispatch_id(), self.id.clone());
         self.dispatcher
             .dispatch(&child_ctx, input)
-            .await
-            .map_err(|e| OperatorError::non_retryable(e.to_string()))?
+            .await?
             .collect()
             .await
-            .map_err(|e| OperatorError::non_retryable(e.to_string()))
     }
 }
 
@@ -247,10 +255,12 @@ impl Operator for NoOpOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         Ok(OperatorOutput::new(
             input.message,
-            layer0::ExitReason::Complete,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }

@@ -33,6 +33,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::prelude::*;
 use layer0::dispatch::{DispatchEvent, DispatchHandle};
+use layer0::error::ProtocolError;
 use layer0::{DispatchContext, DispatchId, OperatorId};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::ReceiverStream;
@@ -117,41 +118,32 @@ impl IntoResponse for CoreError {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// Classify an `OrchError` into a structured SSE error payload.
+/// Classify a [`ProtocolError`] into a structured SSE error payload.
 ///
 /// Returns a JSON value with `error` (human-readable message), `code`
 /// (machine-readable variant), and `retryable` (whether the caller can retry).
-fn classify_error(error: &layer0::error::OrchError) -> serde_json::Value {
-    use layer0::error::{OperatorError, OrchError};
+fn classify_error(error: &ProtocolError) -> serde_json::Value {
+    use layer0::error::ErrorCode;
 
-    let (code, retryable) = match error {
-        OrchError::OperatorNotFound(_) => ("operator_not_found", false),
-        OrchError::WorkflowNotFound(_) => ("workflow_not_found", false),
-        OrchError::DispatchFailed(_) => ("dispatch_failed", true),
-        OrchError::SignalFailed(_) => ("signal_failed", true),
-        OrchError::OperatorError(op_err) => match op_err {
-            OperatorError::Model { retryable, .. } => {
-                if *retryable {
-                    ("model_error_retryable", true)
-                } else {
-                    ("model_error", false)
-                }
+    let code = match error.code {
+        ErrorCode::NotFound => "not_found",
+        ErrorCode::InvalidInput => "invalid_input",
+        ErrorCode::Unavailable => {
+            if error.retryable {
+                "unavailable_retryable"
+            } else {
+                "unavailable"
             }
-            OperatorError::SubDispatch { .. } => ("tool_error", false),
-            OperatorError::ContextAssembly { .. } => ("context_error", false),
-            OperatorError::Retryable { .. } => ("retryable_error", true),
-            OperatorError::NonRetryable { .. } => ("non_retryable_error", false),
-            OperatorError::Halted { .. } => ("halted", false),
-            _ => ("operator_error", false),
-        },
-        OrchError::EnvironmentError(_) => ("environment_error", false),
-        _ => ("internal_error", false),
+        }
+        ErrorCode::Conflict => "conflict",
+        ErrorCode::Internal => "internal_error",
+        _ => "internal_error",
     };
 
     serde_json::json!({
         "error": error.to_string(),
         "code": code,
-        "retryable": retryable,
+        "retryable": error.retryable,
     })
 }
 
@@ -238,12 +230,8 @@ async fn execute_stream_handler(
                 Ok(output) => {
                     let _ = sender.send(DispatchEvent::Completed { output }).await;
                 }
-                Err(op_err) => {
-                    let _ = sender
-                        .send(DispatchEvent::Failed {
-                            error: op_err.into(),
-                        })
-                        .await;
+                Err(err) => {
+                    let _ = sender.send(DispatchEvent::Failed { error: err }).await;
                 }
             }
             // Drop sender to close the channel.
