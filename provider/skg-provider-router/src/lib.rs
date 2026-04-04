@@ -734,21 +734,19 @@ mod tests {
         struct StubProvider;
 
         impl Provider for StubProvider {
-            fn infer(
+            async fn infer(
                 &self,
                 request: InferRequest,
-            ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
-                async move {
-                    Ok(InferResponse {
-                        content: Content::text("streamed-ok"),
-                        tool_calls: vec![],
-                        stop_reason: StopReason::EndTurn,
-                        usage: TokenUsage::default(),
-                        model: request.model.unwrap_or_default(),
-                        cost: None,
-                        truncated: None,
-                    })
-                }
+            ) -> Result<InferResponse, ProviderError> {
+                Ok(InferResponse {
+                    content: Content::text("streamed-ok"),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    usage: TokenUsage::default(),
+                    model: request.model.unwrap_or_default(),
+                    cost: None,
+                    truncated: None,
+                })
             }
         }
 
@@ -814,11 +812,11 @@ mod tests {
         }
 
         impl Provider for NativeStreamingProvider {
-            fn infer(
+            async fn infer(
                 &self,
                 _request: InferRequest,
-            ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
-                async { Err(ProviderError::Other("not used".into())) }
+            ) -> Result<InferResponse, ProviderError> {
+                Err(ProviderError::Other("not used".into()))
             }
 
             fn infer_stream(

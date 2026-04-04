@@ -6,7 +6,7 @@ All crates in the skelegent workspace, organized by architectural layer.
 
 | Crate | Description |
 |-------|-------------|
-| `layer0` | Protocol traits (`Operator`, `Dispatcher`, `StateStore`, `Environment`), middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`), message types, and error types. The stability contract. |
+| `layer0` | Protocol traits (`Operator`, `Dispatcher`, `StateStore`, `Environment`), middleware traits (`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`), message types (`Intent`, `ExecutionEvent`, `Outcome`, `ProtocolError`), and wire types. The stability contract. |
 
 ## Layer 1 -- Operator Implementations
 
@@ -34,8 +34,8 @@ All crates in the skelegent workspace, organized by architectural layer.
 | `skg-orch-kit` | Shared utilities for orchestrator implementations. |
 | `skg-orch-env` | Environment-aware orchestrator. Routes operators through `Environment::run`. |
 | `skg-run-core` | Portable durable run/control primitives and kernel above Layer 0. |
-| `skg-effects-core` | Effect handler trait (`EffectHandler`), `Signalable`, `Queryable`, errors, and policy — no implementations. |
-| `skg-effects-local` | Local in-process `EffectHandler` implementation (in-order, best-effort). |
+| `skg-effects-core` | Intent handler trait (`IntentHandler`), `Signalable`, `Queryable`, errors, and policy — no implementations. |
+| `skg-effects-local` | Local in-process `IntentHandler` implementation (in-order, best-effort). |
 | `skg-runner` | Runner binary for containerized/operator-hosted execution with gRPC + healthcheck endpoints. |
 
 ## Layer 3 -- State

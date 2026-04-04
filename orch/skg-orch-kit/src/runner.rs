@@ -30,6 +30,7 @@ pub trait EffectMiddleware: Send + Sync {
 }
 
 /// Stack of effect middleware layers.
+#[derive(Default)]
 pub struct EffectStack {
     layers: Vec<Box<dyn EffectMiddleware>>,
 }
@@ -37,7 +38,7 @@ pub struct EffectStack {
 impl EffectStack {
     /// Create a new empty middleware stack.
     pub fn new() -> Self {
-        Self { layers: vec![] }
+        Self::default()
     }
 
     /// Push a middleware layer onto the stack.

@@ -201,7 +201,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         if !config.system_prompt.is_empty() {
             ctx.inject_system(&config.system_prompt)
                 .await
-                .map_err(|e| map_engine_error(e))?;
+                .map_err(map_engine_error)?;
         }
 
         // Seed context with pre-assembled messages from caller, if any.
@@ -210,13 +210,13 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         if let Some(messages) = input.context.filter(|m| !m.is_empty()) {
             ctx.inject_messages(messages)
                 .await
-                .map_err(|e| map_engine_error(e))?;
+                .map_err(map_engine_error)?;
         }
 
         // Inject user message
         ctx.inject_message(Message::new(Role::User, input.message))
             .await
-            .map_err(|e| map_engine_error(e))?;
+            .map_err(map_engine_error)?;
 
         // Apply allowed_operators from dispatch input as a tool filter.
         // When a parent sets allowed_operators, only those tools are visible

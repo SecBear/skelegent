@@ -10,7 +10,7 @@ pub trait Operator: Send + Sync {
     async fn execute(
         &self,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OperatorError>;
+    ) -> Result<OperatorOutput, ProtocolError>;
 }
 ```
 
@@ -34,7 +34,8 @@ To use the context engine as an `Operator`, create a wrapper struct that holds a
 
 ```rust,no_run
 use async_trait::async_trait;
-use layer0::operator::{Operator, OperatorInput, OperatorOutput, OperatorError};
+use layer0::operator::{Operator, OperatorInput, OperatorOutput};
+use layer0::error::ProtocolError;
 use layer0::context::{Message, Role};
 use skg_context_engine::{Context, react_loop, ReactLoopConfig};
 use skg_turn::provider::Provider;
@@ -53,7 +54,7 @@ impl<P: Provider> Operator for MyOperator<P> {
     async fn execute(
         &self,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         // Context is the conversation store — create one per invocation
         let mut ctx = Context::new();
 
@@ -63,13 +64,13 @@ impl<P: Provider> Operator for MyOperator<P> {
         // Inject the user input
         ctx.inject_message(Message::new(Role::User, input.message))
             .await
-            .map_err(OperatorError::context_assembly)?;
+            .map_err(|e| ProtocolError::internal(e.to_string()))?;
 
         // react_loop composes Context, CompileConfig, AppendResponse,
         // and ExecuteTool internally — you just hand it the primitives
         react_loop(&mut ctx, &self.provider, &self.tools, &self.tool_ctx, &self.config)
             .await
-            .map_err(|e| OperatorError::non_retryable(e.to_string()))
+            .map_err(|e| ProtocolError::internal(e.to_string()))
     }
 }
 ```
@@ -117,24 +118,19 @@ input.config = Some(OperatorConfig {
 });
 ```
 
-### Exit reasons
+### Outcomes
 
-The context engine loop stops when:
+The context engine loop produces an `Outcome` describing why it stopped:
 
-- **`Complete`** -- The model produced a final text response without requesting any tool use.
-- **`MaxTurns`** -- The `max_turns` limit was reached.
-- **`BudgetExhausted`** -- Accumulated cost exceeded `max_cost` or tool-call step limit exceeded.
-- **`Timeout`** -- Wall-clock time exceeded `max_duration`.
-- **`InterceptorHalt { reason }`** -- An interceptor (including a Rule that returns `RuleAction::Halt`) stopped execution.
-- **`CircuitBreaker`** -- Too many consecutive failures (provider errors or tool errors).
-- **`Error`** -- An unrecoverable error occurred.
-- **`SafetyStop { reason }`** -- Provider safety system stopped generation (content filter or safety mechanism triggered).
-- **`AwaitingApproval`** -- One or more tool calls require human approval before execution.
-- **`Custom(String)`** -- Operator-defined exit reason.
+- **`Outcome::Terminal`** -- The model produced a final text response (normal completion).
+- **`Outcome::Limited`** -- A resource limit was reached: `MaxTurns`, `BudgetExhausted`, or `Timeout`.
+- **`Outcome::Intercepted { reason }`** -- An interceptor (including a Rule that returns `RuleAction::Halt`) stopped execution.
+- **`Outcome::Suspended`** -- Execution paused awaiting external input (e.g., human approval).
+- **`Outcome::Transferred`** -- Control transferred to another operator (handoff).
 
-### Effects
+### Intents
 
-The context engine supports effect-producing tools. If a tool is registered in the operator's `EffectTools` configuration, calling it produces an `Effect` in the `OperatorOutput` instead of executing the tool directly. This is useful for tools that should be executed by the orchestrator or environment rather than inline (e.g., spawning a sub-agent, signaling a workflow).
+The context engine supports intent-declaring tools. If a tool is registered in the operator's intent-tool configuration, calling it produces an `Intent` in the `OperatorOutput` instead of executing the tool directly. This is useful for tools that should be executed by the outer layer rather than inline (e.g., spawning a sub-agent, signaling a workflow).
 
 ## SingleShotOperator
 

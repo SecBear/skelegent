@@ -28,8 +28,8 @@ nix develop --command cargo doc --workspace --no-deps
 
 1. [ARCHITECTURE.md](ARCHITECTURE.md)
 2. [SPECS.md](SPECS.md)
-3. [specs/00-vision-and-non-goals.md](specs/00-vision-and-non-goals.md)
-4. [specs/01-architecture-and-layering.md](specs/01-architecture-and-layering.md)
+3. [specs/v2/00-overview-and-migration.md](specs/v2/00-overview-and-migration.md)
+4. [specs/v2/01-kernel-principles-and-layers.md](specs/v2/01-kernel-principles-and-layers.md)
 5. [docs/book/src/architecture/layers.md](docs/book/src/architecture/layers.md)
 6. [docs/book/src/architecture/protocol-traits.md](docs/book/src/architecture/protocol-traits.md)
 
@@ -39,34 +39,54 @@ nix develop --command cargo doc --workspace --no-deps
 
 ## Specs
 
+`specs/v2/` is the current architecture. `specs/` top-level entries marked (retired) are superseded.
+
+### v2 Specs (current)
+
 | #  | Spec | Path |
 |----|------|------|
-| 00 | Vision and Non-Goals | [specs/00-vision-and-non-goals.md](specs/00-vision-and-non-goals.md) |
-| 01 | Architecture and Layering | [specs/01-architecture-and-layering.md](specs/01-architecture-and-layering.md) |
-| 02 | Layer 0 Protocol Contract | [specs/02-layer0-protocol-contract.md](specs/02-layer0-protocol-contract.md) |
-| 03 | Effects and Execution Semantics | [specs/03-effects-and-execution-semantics.md](specs/03-effects-and-execution-semantics.md) |
-| 04 | Operator Turn Runtime | [specs/04-operator-turn-runtime.md](specs/04-operator-turn-runtime.md) |
-| 05 | Orchestration Core | [specs/05-orchestration-core.md](specs/05-orchestration-core.md) |
-| 06 | Composition, Factory, and Glue | [specs/06-composition-factory-and-glue.md](specs/06-composition-factory-and-glue.md) |
-| 07 | State Core | [specs/07-state-core.md](specs/07-state-core.md) |
-| 08 | Environment and Credentials | [specs/08-environment-and-credentials.md](specs/08-environment-and-credentials.md) |
-| 09 | Hooks Lifecycle and Governance | [specs/09-hooks-lifecycle-and-governance.md](specs/09-hooks-lifecycle-and-governance.md) |
-| 10 | Secrets, Auth, Crypto | [specs/10-secrets-auth-crypto.md](specs/10-secrets-auth-crypto.md) |
-| 11 | Testing, Examples, and Backpressure | [specs/11-testing-examples-and-backpressure.md](specs/11-testing-examples-and-backpressure.md) |
-| 12 | Packaging, Versioning, and Umbrella Crate | [specs/12-packaging-versioning-and-umbrella-crate.md](specs/12-packaging-versioning-and-umbrella-crate.md) |
-| 13 | Documentation and DX Parity | [specs/13-documentation-and-dx-parity.md](specs/13-documentation-and-dx-parity.md) |
+| v2/00 | Overview and Migration | [specs/v2/00-overview-and-migration.md](specs/v2/00-overview-and-migration.md) |
+| v2/01 | Kernel Principles and Layers | [specs/v2/01-kernel-principles-and-layers.md](specs/v2/01-kernel-principles-and-layers.md) |
+| v2/02 | Invocation Outcomes and Waits | [specs/v2/02-invocation-outcomes-and-waits.md](specs/v2/02-invocation-outcomes-and-waits.md) |
+| v2/03 | Intents and Semantic Events | [specs/v2/03-intents-and-semantic-events.md](specs/v2/03-intents-and-semantic-events.md) |
+| v2/04 | Capability Sources and Descriptors | [specs/v2/04-capability-sources-and-descriptors.md](specs/v2/04-capability-sources-and-descriptors.md) |
+| v2/05 | Streaming Runtime and Provider Projection | [specs/v2/05-streaming-runtime-and-provider-projection.md](specs/v2/05-streaming-runtime-and-provider-projection.md) |
+| v2/10 | Errors, Versioning, and Conformance | [specs/v2/10-errors-versioning-and-conformance.md](specs/v2/10-errors-versioning-and-conformance.md) |
+
+### v1 Specs (active where noted)
+
+| #  | Spec | Status | Path |
+|----|------|--------|------|
+| 00 | Vision and Non-Goals | retired | [specs/00-vision-and-non-goals.md](specs/00-vision-and-non-goals.md) |
+| 01 | Architecture and Layering | retired | [specs/01-architecture-and-layering.md](specs/01-architecture-and-layering.md) |
+| 02 | Layer 0 Protocol Contract | retired | [specs/02-layer0-protocol-contract.md](specs/02-layer0-protocol-contract.md) |
+| 03 | Effects and Execution Semantics | retired | [specs/03-effects-and-execution-semantics.md](specs/03-effects-and-execution-semantics.md) |
+| 04 | Operator Turn Runtime | retired | [specs/04-operator-turn-runtime.md](specs/04-operator-turn-runtime.md) |
+| 05 | Orchestration Core | retired | [specs/05-orchestration-core.md](specs/05-orchestration-core.md) |
+| 06 | Composition, Factory, and Glue | active | [specs/06-composition-factory-and-glue.md](specs/06-composition-factory-and-glue.md) |
+| 07 | State Core | retired | [specs/07-state-core.md](specs/07-state-core.md) |
+| 08 | Environment and Credentials | retired | [specs/08-environment-and-credentials.md](specs/08-environment-and-credentials.md) |
+| 09 | Hooks Lifecycle and Governance | active | [specs/09-hooks-lifecycle-and-governance.md](specs/09-hooks-lifecycle-and-governance.md) |
+| 10 | Secrets, Auth, Crypto | active | [specs/10-secrets-auth-crypto.md](specs/10-secrets-auth-crypto.md) |
+| 11 | Testing, Examples, and Backpressure | active | [specs/11-testing-examples-and-backpressure.md](specs/11-testing-examples-and-backpressure.md) |
+| 12 | Packaging, Versioning, and Umbrella Crate | active | [specs/12-packaging-versioning-and-umbrella-crate.md](specs/12-packaging-versioning-and-umbrella-crate.md) |
+| 13 | Documentation and DX Parity | active | [specs/13-documentation-and-dx-parity.md](specs/13-documentation-and-dx-parity.md) |
 
 ## Key Concepts
 
 - **OperatorId** — typed identity for operators (protocol-level concept)
 - **DispatchContext** — unified execution context carrying dispatch identity, trace context, auth, and typed extensions through every dispatch boundary
-- **Operator** — object-safe trait: `async fn execute(input: OperatorInput, ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError>`
+- **Operator** — object-safe trait: `async fn execute(input: OperatorInput, ctx: &DispatchContext) -> Result<OperatorOutput, ProtocolError>`
 - **Dispatcher** — invokes operators by ID via `dispatch()`; `dispatch_many()` as a free function in skg-orch-kit
 - **StateStore** — object-safe key-value state with scopes, hints, and text search
 - **Context** — mutable conversation context with ops, rules, and metrics
 - **Rule** — reactive `ContextOp` with triggers (before/after/when) for automated behavior
 - **Provider** — NOT object-safe; generic `<P: Provider>` everywhere, erased at `Operator` boundary
-- **Effect** — declarative side-effects emitted by operators (Delegate, Handoff, Log, etc.)
+- **Intent** — executable declarations emitted by operators (Delegate, Handoff, Signal, WriteMemory, etc.); outer layers execute them
+- **ExecutionEvent** — semantic observation envelope: status changes, tool calls, intent declarations, artifacts, completion
+- **Outcome** — typed invocation result: Terminal, Suspended, Transferred, Limited, Intercepted
+- **ProtocolError** — canonical serializable failure at invocation boundaries
+- **CapabilityDescriptor** — read-only discovery type; describes what an operator accepts and provides
 - **Scope** — where state lives: Session, Workflow, Operator, Global, Custom
 
 ## Crate Map

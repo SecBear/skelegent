@@ -203,7 +203,7 @@ fn deserialize_rt(response: &ApprovalResponse) -> ApprovalResponse {
 #[test]
 fn approval_request_from_effects() {
     // Simulate what an operator would push into OperatorOutput::intents
-    let intents = vec![
+    let intents = [
         Intent::new(IntentKind::RequestApproval {
             tool_name: "delete_file".to_owned(),
             call_id: "call_001".to_owned(),

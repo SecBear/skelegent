@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = react_loop(&mut ctx, &provider, &tools, &tool_ctx, &config).await?;
 
     println!("Response: {:?}", output.message);
-    println!("Exit reason: {:?}", output.exit_reason);
+    println!("Outcome: {:?}", output.outcome);
     println!("Tokens: {} in, {} out",
         output.metadata.tokens_in,
         output.metadata.tokens_out,
@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 4. **Context and execution.** `Context` is the conversation store -- it holds messages, assembly ops, and rules. You inject a user message, then call `react_loop()` which composes the core primitives: compile context, infer with the provider, apply context ops (append response, execute tools), repeat until the model produces a final response or a limit is reached.
 
-5. **Output.** `OperatorOutput` contains the response message, exit reason (why the loop stopped), and metadata (tokens, cost, duration, sub-dispatch records).
+5. **Output.** `OperatorOutput` contains the response message, `outcome` (why the loop stopped — an `Outcome` variant), and metadata (tokens, cost, duration, sub-dispatch records).
 
 > **Tip:** To use `react_loop` behind the object-safe `Operator` trait boundary, wrap it in your own struct that implements `Operator`. See the [Operators guide](../guides/operators.md) for the pattern.
 

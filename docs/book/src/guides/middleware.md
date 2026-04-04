@@ -21,7 +21,7 @@ pub trait DispatchMiddleware: Send + Sync {
         operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError>;
+    ) -> Result<OperatorOutput, ProtocolError>;
 }
 ```
 
@@ -100,7 +100,7 @@ use async_trait::async_trait;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
 use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput};
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 
 struct LoggingMiddleware;
 
@@ -111,7 +111,7 @@ impl DispatchMiddleware for LoggingMiddleware {
         operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         tracing::info!(%operator, "dispatch start");
         let result = next.dispatch(operator, input).await;
         tracing::info!(%operator, ok = result.is_ok(), "dispatch end");
@@ -127,7 +127,7 @@ use async_trait::async_trait;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
 use layer0::id::OperatorId;
 use layer0::operator::{OperatorInput, OperatorOutput};
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 
 struct DenyToolMiddleware {
     denied: String,
@@ -140,9 +140,9 @@ impl DispatchMiddleware for DenyToolMiddleware {
         operator: &OperatorId,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<OperatorOutput, OrchError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         if operator.as_str() == self.denied {
-            return Err(OrchError::PolicyDenied {
+            return Err(ProtocolError::PolicyDenied {
                 reason: format!("tool {} is denied by policy", self.denied),
             });
         }

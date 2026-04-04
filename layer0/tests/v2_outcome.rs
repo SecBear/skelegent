@@ -239,9 +239,9 @@ fn operator_output_serializes_outcome_field() {
         json!({"type": "terminal", "terminal": "completed"})
     );
 
-    // v1 `exit_reason` is also present during migration period.
+    // v1 `exit_reason` must NOT be present in v2 surface.
     assert!(
-        json.get("exit_reason").is_some(),
-        "exit_reason should still be serialized during migration"
+        json.get("exit_reason").is_none(),
+        "exit_reason must not be serialized in v2"
     );
 }

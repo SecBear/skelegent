@@ -13,7 +13,7 @@ The `Operator` trait defines the boundary around a single agent's execution cycl
 ```rust
 #[async_trait]
 pub trait Operator: Send + Sync {
-    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, OperatorError>;
+    async fn execute(&self, input: OperatorInput) -> Result<OperatorOutput, ProtocolError>;
 }
 ```
 
@@ -33,64 +33,34 @@ These three traits decompose the orchestration boundary:
 
 **Dispatcher** defines how one agent invokes another:
 
-
-
 ```rust
-
 #[async_trait]
-
 pub trait Dispatcher: Send + Sync {
-
     async fn dispatch(&self, operator: &OperatorId, input: OperatorInput)
-
-        -> Result<OperatorOutput, OrchError>;
-
+        -> Result<OperatorOutput, ProtocolError>;
 }
-
 ```
-
-
 
 `dispatch` might be a function call (in-process) or a network hop to another continent. The caller does not know and does not care.
 
-
-
 **Signalable** provides fire-and-forget inter-workflow messaging:
 
-
-
 ```rust
-
 #[async_trait]
-
 pub trait Signalable: Send + Sync {
-
     async fn signal(&self, target: &WorkflowId, signal: SignalPayload)
-
-        -> Result<(), OrchError>;
-
+        -> Result<(), ProtocolError>;
 }
-
 ```
-
-
 
 **Queryable** enables read-only inspection of workflow state:
 
-
-
 ```rust
-
 #[async_trait]
-
 pub trait Queryable: Send + Sync {
-
     async fn query(&self, target: &WorkflowId, query: QueryPayload)
-
-        -> Result<serde_json::Value, OrchError>;
-
+        -> Result<serde_json::Value, ProtocolError>;
 }
-
 ```
 
 
@@ -118,7 +88,7 @@ pub trait StateStore: Send + Sync {
 
 Values are `serde_json::Value`, which provides schema flexibility without sacrificing serializability. Scopes partition data (per-agent, per-session, per-workflow). Implementations include `MemoryStore` (in-memory `HashMap`, good for tests) and `FsStore` (filesystem-backed, durable).
 
-A read-only projection, `StateReader`, is provided to operators during context assembly. Operators can read state but must declare writes as effects -- they never write directly.
+A read-only projection, `StateReader`, is provided to operators during context assembly. Operators can read state but must declare writes as intents (`Intent::WriteMemory`) -- they never write directly.
 
 ### Protocol 4: Environment -- "Where does the agent run?"
 

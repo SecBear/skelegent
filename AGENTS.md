@@ -17,16 +17,20 @@ separated from execution, slim defaults with opt-in complexity. See
 
 ## Key Abstractions
 
-You must understand these 6 types to work in this codebase:
+You must understand these types to work in this codebase:
 
-| Type              | Crate              | Role                                                                                                                                                                                                                                        |
-| ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Operator`        | layer0             | Object-safe trait. `execute(input, ctx) -> Result<OperatorOutput, OperatorError>`. The unit of agent behavior.                                                                                                                              |
-| `DispatchContext` | layer0             | Execution metadata threaded through every boundary: dispatch ID, trace context, auth, typed extensions. Every operator, tool, and middleware receives this.                                                                                 |
-| `Context`         | skg-context-engine | Mutable conversation substrate: messages, rules, metrics, effects. All mutations go through `ctx.run(op)` which fires rules. Effects are declared here via `push_effect()` / `extend_effects()` and drained into `OperatorOutput::effects`. |
-| `Effect`          | layer0             | Declarative side-effects (Delegate, Handoff, Signal, WriteMemory, etc.). Operators declare intent; orchestrators and environments execute.                                                                                                     |
-| `Provider`        | skg-turn           | NOT object-safe. Generic `<P: Provider>` everywhere, erased at the `Operator` boundary. Wraps LLM inference (Anthropic, OpenAI, Ollama, etc.).                                                                                              |
-| `Dispatcher`      | layer0             | Invokes operators by ID. The orchestration boundary.                                                                                                                                                                                        |
+| Type                                      | Crate              | Role                                                                                                                                                                                                                                          |
+| ----------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Operator`                                | layer0             | Object-safe trait. `execute(input, ctx) -> Result<OperatorOutput, ProtocolError>`. The unit of agent behavior.                                                                                                                                |
+| `DispatchContext`                         | layer0             | Execution metadata threaded through every boundary: dispatch ID, trace context, auth, typed extensions. Every operator, tool, and middleware receives this.                                                                                   |
+| `Context`                                 | skg-context-engine | Mutable conversation substrate: messages, rules, metrics, intents. All mutations go through `ctx.run(op)` which fires rules. Intents are declared here via `push_intent()` and drained into `OperatorOutput::intents`.                        |
+| `Intent`                                  | layer0             | Executable declarations (Delegate, Handoff, Signal, WriteMemory, etc.). Operators declare intent; outer layers execute.                                                                                                                        |
+| `ExecutionEvent`                          | layer0             | Semantic observation envelope: status changes, tool calls, intent declarations, artifacts, completion. Stream-first.                                                                                                                           |
+| `CapabilitySource` / `CapabilityDescriptor` | layer0           | Read-only discovery. Sibling to `Dispatcher`. Describes what operators are available and what they accept.                                                                                                                                    |
+| `Outcome`                                 | layer0             | Typed invocation result: Terminal, Suspended, Transferred, Limited, Intercepted.                                                                                                                                                              |
+| `ProtocolError`                           | layer0             | Canonical serializable failure at invocation boundaries.                                                                                                                                                                                      |
+| `Provider`                                | skg-turn           | NOT object-safe. Generic `<P: Provider>` everywhere, erased at the `Operator` boundary. Wraps LLM inference (Anthropic, OpenAI, Ollama, etc.).                                                                                               |
+| `Dispatcher`                              | layer0             | Invokes operators by ID. The orchestration boundary.                                                                                                                                                                                          |
 
 ### How they connect
 
@@ -36,11 +40,11 @@ User message
     → Operator.execute(input, &DispatchContext)
       → react_loop(Context, Provider, Tools, &DispatchContext, config)
         → Context.run(ops) fires Rules
-        → Provider.infer(request) → response
+        → Provider.infer(request) → response (projected into ExecutionEvents)
         → Tools execute with DispatchContext
-        → Context.push_effect(Effect) declares side-effects
-      → OperatorOutput { content, exit_reason, effects, metadata }
-    → EffectHandler processes declared effects
+        → Context.push_intent(Intent) declares executable intent
+      → OperatorOutput { content, outcome: Outcome, intents, metadata }
+    → Outer layer executes declared intents
 ```
 
 ## Where to Make Changes
@@ -51,7 +55,7 @@ User message
 | Change operator behavior (react loop, boundaries, rules) | `op/skg-context-engine/`                                                |
 | New simple operator                                      | `op/skg-op-single-shot/` or new `op/` crate                             |
 | New LLM provider                                         | new `provider/skg-provider-*` crate implementing `Provider`             |
-| New effect variant                                       | `layer0/src/effect.rs` (enum) + `effects/skg-effects-local/` (handler)  |
+| New intent variant                                       | `layer0/src/intent.rs` (enum) + `effects/skg-effects-local/` (handler)  |
 | New middleware                                           | layer0 defines the trait; impl goes in the relevant crate               |
 | New state backend                                        | new `state/` crate implementing `StateStore`                            |
 | New environment                                          | new `env/` crate implementing `Environment`                             |
@@ -64,13 +68,13 @@ User message
 
 ## Where Truth Lives
 
-| What                       | Where                            |
-| -------------------------- | -------------------------------- |
-| Architectural positions    | `ARCHITECTURE.md`                |
-| Behavioral requirements    | `specs/` (indexed by `SPECS.md`) |
-| Operational constraints    | `rules/`                         |
-| Deep rationale             | `docs/`                          |
-| Crate map and key concepts | `llms.txt`                       |
+| What                       | Where                                                  |
+| -------------------------- | ------------------------------------------------------ |
+| Architectural positions    | `ARCHITECTURE.md`                                      |
+| Behavioral requirements    | `specs/v2/` (current); `specs/` (indexed by `SPECS.md`) |
+| Operational constraints    | `rules/`                                               |
+| Deep rationale             | `docs/`                                                |
+| Crate map and key concepts | `llms.txt`                                             |
 
 Authority: ARCHITECTURE.md > specs > rules > agent judgment. If specs are
 ambiguous, update the specs (do not invent behavior).
@@ -81,7 +85,7 @@ Before implementation work, load in order:
 
 1. This file
 2. `ARCHITECTURE.md`
-3. `SPECS.md` then the specific spec(s) for your task
+3. `SPECS.md` then the specific spec(s) for your task — prefer `specs/v2/` for implemented domains
 4. The relevant `rules/`
 
 ## Verification
@@ -108,12 +112,10 @@ Do not claim "done" without fresh evidence from the relevant commands.
 
 ## Patterns to Know
 
-**Effects are on Context, not a separate parameter.** Operators declare effects
-via `ctx.push_effect(effect)` during execution. These are drained into
-`OperatorOutput::effects` by `make_output()`. There is no `EffectEmitter`
-parameter on `Operator::execute`. (`EffectEmitter` still exists for
-dispatch-channel wiring of progress/artifact events, but operators never receive
-it.)
+**Intents are on Context, not a separate parameter.** Operators declare intents
+via `ctx.push_intent(intent)` during execution. These are drained into
+`OperatorOutput::intents` by `make_output()`. There is no `EffectEmitter`
+parameter on `Operator::execute`.
 
 **CognitiveOperator is a thin adapter.** It wraps `react_loop()` as a
 `dyn Operator`. It forwards the `DispatchContext` it receives — it does not
@@ -122,6 +124,8 @@ fabricate one. Its config is `ReactLoopConfig`.
 **Context mutations fire rules.** Every `ctx.run(op)` call checks registered
 rules (Before, After, When triggers). BudgetGuard, compaction, and overwatch
 agents are all implemented as rules.
+
+**ExecutionEvent is the semantic observation plane.** Provider chunks are projected into semantic events at meaningful boundaries — status changes, tool calls, intent declarations, artifacts, completion. Observers subscribe to these events rather than raw provider chunks.
 
 **Provider is generic, Operator is object-safe.** `react_loop<P: Provider>` is
 generic over the provider. The object-safe boundary is `Operator`, which erases

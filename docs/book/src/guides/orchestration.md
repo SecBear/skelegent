@@ -6,60 +6,31 @@ Orchestration is how multiple agents compose and how execution survives failures
 
 ```rust
 #[async_trait]
-```rust
-
-#[async_trait]
-
 pub trait Dispatcher: Send + Sync {
-
     async fn dispatch(
-
         &self,
-
         operator: &OperatorId,
-
         input: OperatorInput,
-
-    ) -> Result<OperatorOutput, OrchError>;
-
+    ) -> Result<OperatorOutput, ProtocolError>;
 }
 
-
-
 #[async_trait]
-
 pub trait Signalable: Send + Sync {
-
     async fn signal(
-
         &self,
-
         target: &WorkflowId,
-
         signal: SignalPayload,
-
-    ) -> Result<(), OrchError>;
-
+    ) -> Result<(), ProtocolError>;
 }
-
-
 
 #[async_trait]
-
 pub trait Queryable: Send + Sync {
-
     async fn query(
-
         &self,
-
         target: &WorkflowId,
-
         query: QueryPayload,
-
-    ) -> Result<serde_json::Value, OrchError>;
-
+    ) -> Result<serde_json::Value, ProtocolError>;
 }
-
 ```
 
 
@@ -136,7 +107,7 @@ let tasks = vec![
 let results = dispatcher.dispatch_many(tasks).await;
 for result in results {
     match result {
-        Ok(output) => println!("Success: {:?}", output.exit_reason),
+        Ok(output) => println!("Success: {:?}", output.outcome),
         Err(e) => println!("Failed: {}", e),
     }
 }
@@ -194,18 +165,20 @@ The `skg-orch-kit` crate provides shared utilities for orchestrator implementati
 
 ## Error handling
 
+All dispatch, signal, and query operations return `ProtocolError`:
+
 ```rust
-pub enum OrchError {
-    OperatorNotFound(String),    // No agent registered with that ID
-    WorkflowNotFound(String), // No workflow with that ID
-    DispatchFailed(String),   // Dispatch failed for other reasons
-    SignalFailed(String),     // Signal delivery failed
-    OperatorError(OperatorError), // Propagated from the operator
-    Other(Box<dyn Error>),    // Catch-all
+pub enum ProtocolError {
+    NotFound { operator: OperatorId },   // No agent registered with that ID
+    PolicyDenied { reason: String },     // Middleware/policy short-circuit
+    Transient { message: String },       // Retryable failure
+    Permanent { message: String },       // Non-retryable failure
+    Internal { message: String },        // Unexpected runtime error
+    Other(Box<dyn Error>),               // Catch-all
 }
 ```
 
-`OperatorError` propagates through `OrchError` via `From`. If an operator fails during dispatch, the error is wrapped as `OrchError::OperatorError`.
+`ProtocolError::is_retryable()` lets retry middleware determine whether to attempt the dispatch again.
 
 ## Future orchestrators
 
@@ -218,10 +191,10 @@ The `Dispatcher`, `Signalable`, and `Queryable` traits are designed to support o
 The traits are transport-agnostic by design. All protocol types (`OperatorInput`, `OperatorOutput`, `SignalPayload`, `QueryPayload`) implement `Serialize + Deserialize`, so they can cross any boundary.
 
 
-## Effects, signals, and custom operators
+## Intents, signals, and custom operators
 
-Skelegent draws a hard boundary: operators declare `effects`; orchestrators execute them. This separation lets you reuse the same operator across transports (in-process, Temporal, Restate) without leaking execution mechanics.
+Skelegent draws a hard boundary: operators declare `intents`; orchestrators execute them. This separation lets you reuse the same operator across transports (in-process, Temporal, Restate) without leaking execution mechanics.
 
-Custom operators (e.g., barrier-scheduled loops) can freely declare effects like `Effect::Custom`, `Effect::Delegate`, or `Effect::Signal`. The orchestrator decides when to execute them relative to dispatch lifecycles, and exposes `signal()`/`query()` for out-of-band communication.
+Custom operators (e.g., barrier-scheduled loops) can freely declare intents like `Intent::Delegate` or `Intent::Signal`. The orchestrator decides when to execute them relative to dispatch lifecycles, and exposes `signal()`/`query()` for out-of-band communication.
 
 Defaults stay slim: if you do nothing, wrap `react_loop` in a simple operator or use `SingleShotOperator`. If you need custom control (barriers and steering), implement a custom operator and keep effects at the boundary. See `examples/custom_operator_barrier`.
