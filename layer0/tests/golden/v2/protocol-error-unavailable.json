@@ -1,0 +1,8 @@
+{
+  "code": "unavailable",
+  "message": "service temporarily unavailable",
+  "retryable": true,
+  "details": {
+    "provider": "anthropic"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "type": "failed",
+  "error": {
+    "code": "internal",
+    "message": "operator crashed",
+    "retryable": false
+  }
+}

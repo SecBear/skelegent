@@ -1,0 +1,8 @@
+{
+  "kind": "failed",
+  "error": {
+    "code": "unavailable",
+    "message": "provider timeout",
+    "retryable": true
+  }
+}

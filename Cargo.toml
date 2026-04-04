@@ -1,13 +1,3 @@
-[package]
-name = "skg-workspace"
-version = "0.4.1"
-edition = "2024"
-rust-version = "1.85"
-publish = false
-
-# Prevent Cargo from discovering examples/hello-claude as an example of this virtual package
-autoexamples = false
-
 [workspace]
 resolver = "3"
 members = [
@@ -67,29 +57,3 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/secbear/skelegent"
 homepage = "https://github.com/secbear/skelegent"
 
-# Dependencies for workspace-level integration tests
-[dev-dependencies]
-layer0 = { path = "layer0", features = ["test-utils"], version = "0.4.1" }
-skelegent = { path = "skelegent", version = "0.4.1" }
-skg-turn = { path = "turn/skg-turn", features = [
-  "test-utils",
-], version = "0.4.1" }
-skg-context-engine = { path = "op/skg-context-engine", version = "0.4.1" }
-skg-op-single-shot = { path = "op/skg-op-single-shot", version = "0.4.1" }
-skg-context = { path = "turn/skg-context", version = "0.4.1" }
-skg-tool = { path = "turn/skg-tool", version = "0.4.1" }
-skg-state-memory = { path = "state/skg-state-memory", version = "0.4.1" }
-skg-state-fs = { path = "state/skg-state-fs", version = "0.4.1" }
-skg-provider-anthropic = { path = "provider/skg-provider-anthropic", version = "0.4.1" }
-skg-provider-openai = { path = "provider/skg-provider-openai", version = "0.4.1" }
-skg-provider-ollama = { path = "provider/skg-provider-ollama", version = "0.4.1" }
-skg-provider-codex = { path = "provider/skg-provider-codex", version = "0.4.1" }
-skg-secret = { path = "secret/skg-secret", version = "0.4.1" }
-skg-orch-local = { path = "orch/skg-orch-local", version = "0.4.1" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-futures-util = "0.3"
-async-trait = "0.1"
-serde_json = "1"
-rust_decimal = { version = "1", features = ["serde-str"] }
-tempfile = "3"
-reqwest = { version = "0.12", features = ["json"] }

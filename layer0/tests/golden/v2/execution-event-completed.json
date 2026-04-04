@@ -11,11 +11,10 @@
     "output": {
       "message": "ok",
       "outcome": {
-        "kind": "terminal",
-        "terminal": {
-          "kind": "completed"
-        }
+        "type": "terminal",
+        "terminal": "completed"
       },
+      "exit_reason": "complete",
       "metadata": {
         "tokens_in": 0,
         "tokens_out": 0,
