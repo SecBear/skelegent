@@ -19,7 +19,7 @@
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::effect::EffectKind;
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
 use skg_context_engine::ToolFilter;
@@ -168,10 +168,10 @@ impl AgentBuilder {
     /// Creates a minimal [`DispatchContext`] internally. For full control over
     /// dispatch context or to reuse the operator across multiple calls, use
     /// [`build()`](Self::build) and call `.execute()` directly.
-    pub async fn run(self, message: &str) -> Result<OperatorOutput, OperatorError> {
+    pub async fn run(self, message: &str) -> Result<OperatorOutput, ProtocolError> {
         let op = self
             .build()
-            .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
+            .map_err(|e| ProtocolError::internal(e.to_string()))?;
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
         let output = op.execute(input, &ctx).await?;
@@ -188,7 +188,7 @@ impl AgentBuilder {
 /// output. The caller must use [`OrchestratedRunner`] to handle them.
 /// Observational effects (`Log`, `Signal`, `Observation`, etc.) are advisory
 /// and safe to drop.
-fn reject_operational_effects(effects: &[layer0::Effect]) -> Result<(), OperatorError> {
+fn reject_operational_effects(effects: &[layer0::Effect]) -> Result<(), ProtocolError> {
     let operational = effects.iter().any(|e| {
         matches!(
             &e.kind,
@@ -199,7 +199,7 @@ fn reject_operational_effects(effects: &[layer0::Effect]) -> Result<(), Operator
         )
     });
     if operational {
-        return Err(OperatorError::non_retryable(
+        return Err(ProtocolError::internal(
             "AgentBuilder::run() cannot execute operational effects \
              (WriteMemory, DeleteMemory, Delegate, Handoff). \
              Use OrchestratedRunner instead.",
@@ -375,7 +375,7 @@ fn resolve_model(builder: AgentBuilder) -> Result<Box<dyn Operator>, AgentBuildE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer0::operator::ExitReason;
+    use layer0::operator::{Outcome, TerminalOutcome};
     use skg_context_engine::{
         CognitiveBuilder, CognitiveOperator, ReactLoopConfig,
         rules::{BudgetGuard, BudgetGuardConfig},
@@ -450,7 +450,12 @@ mod tests {
         let input = OperatorInput::new(Content::text("Hello!"), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let output = op.execute(input, &ctx).await.unwrap();
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
 
@@ -615,7 +620,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
     // ── Effect classification tests ────────────────────────────────────────────────

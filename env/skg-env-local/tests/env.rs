@@ -3,7 +3,7 @@ use layer0::dispatch_context::DispatchContext;
 use layer0::environment::{CredentialInjection, CredentialRef, Environment, EnvironmentSpec};
 use layer0::error::EnvError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType};
 use layer0::secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 use layer0::test_utils::EchoOperator;
 use skg_env_local::{EnvironmentEventSink, LocalEnv};
@@ -53,8 +53,8 @@ impl layer0::operator::Operator for FailingOperator {
         &self,
         _input: OperatorInput,
         _ctx: &layer0::DispatchContext,
-    ) -> Result<OperatorOutput, layer0::error::OperatorError> {
-        Err(layer0::error::OperatorError::non_retryable("always fails"))
+    ) -> Result<OperatorOutput, layer0::error::ProtocolError> {
+        Err(layer0::error::ProtocolError::internal("always fails"))
     }
 }
 
@@ -66,12 +66,12 @@ async fn propagates_operator_error() {
 
     let result = env.run(&make_ctx(), input, &spec).await;
     assert!(result.is_err());
-    match result.unwrap_err() {
-        EnvError::OperatorError(e) => {
-            assert_eq!(e.to_string(), "non-retryable: always fails");
-        }
-        other => panic!("expected OperatorError, got: {other}"),
-    }
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("always fails"),
+        "error message must include the original message; got: {msg}"
+    );
 }
 
 // --- Object safety ---
@@ -119,12 +119,14 @@ impl layer0::operator::Operator for ReadEnvVarOperator {
         &self,
         _input: OperatorInput,
         _ctx: &layer0::DispatchContext,
-    ) -> Result<OperatorOutput, layer0::error::OperatorError> {
+    ) -> Result<OperatorOutput, layer0::error::ProtocolError> {
         let value = std::env::var(&self.var_name)
-            .map_err(|e| layer0::error::OperatorError::non_retryable(e.to_string()))?;
+            .map_err(|e| layer0::error::ProtocolError::internal(e.to_string()))?;
         Ok(OperatorOutput::new(
             Content::text(value),
-            layer0::operator::ExitReason::Complete,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }
