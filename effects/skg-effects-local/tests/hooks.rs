@@ -3,7 +3,7 @@ use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Artifact;
 use layer0::effect::{Effect, EffectKind, HandoffContext, MemoryScope, Scope, SignalPayload};
-use layer0::error::{OrchError, StateError};
+use layer0::error::{ProtocolError, StateError};
 use layer0::id::DispatchId;
 use layer0::id::{OperatorId, WorkflowId};
 use layer0::middleware::{StoreMiddleware, StoreStack, StoreWriteNext};
@@ -26,7 +26,11 @@ struct NoOpOrch;
 
 #[async_trait]
 impl Signalable for NoOpOrch {
-    async fn signal(&self, _target: &WorkflowId, _signal: SignalPayload) -> Result<(), OrchError> {
+    async fn signal(
+        &self,
+        _target: &WorkflowId,
+        _signal: SignalPayload,
+    ) -> Result<(), ProtocolError> {
         Ok(())
     }
 }

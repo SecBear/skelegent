@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::effect::{Effect, EffectKind, Scope};
-use layer0::error::{OrchError, StateError};
+use layer0::error::{ProtocolError, StateError};
 use layer0::middleware::{StoreStack, StoreWriteNext};
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::reducer::ReducerRegistry;
@@ -181,8 +181,8 @@ where
                     s.signal(target, payload.clone()).await?;
                     Ok(EffectOutcome::Applied)
                 }
-                None => Err(Error::Dispatch(OrchError::DispatchFailed(
-                    "signal requires a Signalable implementation".into(),
+                None => Err(Error::Protocol(ProtocolError::internal(
+                    "signal requires a Signalable implementation",
                 ))),
             },
             EffectKind::Delegate { operator, input } => Ok(EffectOutcome::Delegate {

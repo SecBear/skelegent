@@ -91,9 +91,8 @@ impl ExecMiddleware for ExecRecorder {
 mod tests {
     use super::*;
     use crate::{Boundary, InMemorySink, Phase};
-    use layer0::ExitReason;
     use layer0::content::Content;
-    use layer0::operator::TriggerType;
+    use layer0::operator::{Outcome, TerminalOutcome, TriggerType};
 
     struct EchoExec;
 
@@ -105,7 +104,12 @@ mod tests {
             input: OperatorInput,
             _spec: &EnvironmentSpec,
         ) -> Result<OperatorOutput, EnvError> {
-            Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+            Ok(OperatorOutput::new(
+                input.message,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            ))
         }
     }
 
@@ -147,8 +151,9 @@ mod tests {
         // Post payload should contain the serialized OperatorOutput.
         assert!(!post.payload_json.is_null());
         assert!(
-            post.payload_json["exit_reason"].is_string()
-                || post.payload_json["exit_reason"].is_object()
+            post.payload_json.get("outcome").is_some()
+                || post.payload_json.get("exit_reason").is_some(),
+            "post payload should contain outcome or exit_reason field"
         );
     }
 

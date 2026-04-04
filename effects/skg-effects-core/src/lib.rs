@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
 use layer0::effect::Effect;
-use layer0::error::{OrchError, ProtocolError, StateError};
+use layer0::error::{ProtocolError, StateError};
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::OperatorInput;
 use serde::{Deserialize, Serialize};
@@ -22,26 +22,16 @@ use thiserror::Error;
 
 /// Error type for effect handling.
 #[derive(Debug, Error)]
-#[allow(deprecated)]
 pub enum Error {
-    /// Dispatch error (v1 — deprecated).
-    #[error("orchestrator error: {0}")]
-    Dispatch(#[from] OrchError),
+    /// Protocol error.
+    #[error("protocol error: {0}")]
+    Protocol(#[from] ProtocolError),
     /// State backend error.
     #[error("state error: {0}")]
     State(#[from] StateError),
     /// An unknown/unhandled effect was encountered and policy is Error.
     #[error("unknown or unsupported effect encountered")]
     UnknownEffect,
-    /// Protocol error (v2).
-    #[error("protocol error: {0}")]
-    Protocol(ProtocolError),
-}
-
-impl From<ProtocolError> for Error {
-    fn from(e: ProtocolError) -> Self {
-        Error::Protocol(e)
-    }
 }
 
 /// Policy for handling unknown/custom effects.
@@ -128,9 +118,11 @@ pub async fn execute_effects(
                 let child_ctx = ctx.child(DispatchId::new(operator.as_str()), operator);
                 dispatcher
                     .dispatch(&child_ctx, input)
-                    .await?
+                    .await
+                    .map_err(Error::Protocol)?
                     .collect()
-                    .await?;
+                    .await
+                    .map_err(Error::Protocol)?;
             }
         }
     }
@@ -153,7 +145,7 @@ pub trait Signalable: Send + Sync {
         &self,
         target: &WorkflowId,
         signal: layer0::effect::SignalPayload,
-    ) -> Result<(), OrchError>;
+    ) -> Result<(), ProtocolError>;
 }
 
 /// Read-only query of a running workflow's state.
@@ -169,7 +161,7 @@ pub trait Queryable: Send + Sync {
         &self,
         target: &WorkflowId,
         query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError>;
+    ) -> Result<serde_json::Value, ProtocolError>;
 }
 
 /// Payload for querying a running workflow.
