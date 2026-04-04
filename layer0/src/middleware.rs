@@ -10,9 +10,9 @@
 
 use crate::dispatch::DispatchHandle;
 use crate::dispatch_context::DispatchContext;
-use crate::effect::Scope;
+use crate::intent::Scope;
 use crate::environment::EnvironmentSpec;
-use crate::error::{EnvError, OrchError, StateError};
+use crate::error::{EnvError, ProtocolError, StateError};
 use crate::operator::{OperatorInput, OperatorOutput};
 use crate::state::StoreOptions;
 use async_trait::async_trait;
@@ -33,7 +33,7 @@ pub trait DispatchNext: Send + Sync {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError>;
+    ) -> Result<DispatchHandle, ProtocolError>;
 }
 
 /// Middleware wrapping `Dispatcher::dispatch`.
@@ -52,7 +52,7 @@ pub trait DispatchMiddleware: Send + Sync {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError>;
+    ) -> Result<DispatchHandle, ProtocolError>;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -183,7 +183,7 @@ impl DispatchStack {
         ctx: &DispatchContext,
         input: OperatorInput,
         terminal: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         if self.layers.is_empty() {
             return terminal.dispatch(ctx, input).await;
         }
@@ -237,7 +237,7 @@ impl DispatchNext for DispatchChain<'_> {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         if self.index >= self.layers.len() {
             return self.terminal.dispatch(ctx, input).await;
         }
@@ -546,7 +546,7 @@ mod tests {
                 _ctx: &DispatchContext,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 input.metadata = serde_json::json!({"tagged": true});
                 next.dispatch(_ctx, input).await
             }
@@ -611,7 +611,7 @@ mod tests {
                 ctx: &DispatchContext,
                 input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 next.dispatch(ctx, input).await
             }
@@ -626,8 +626,8 @@ mod tests {
                 _ctx: &DispatchContext,
                 _input: OperatorInput,
                 _next: &dyn DispatchNext,
-            ) -> Result<DispatchHandle, OrchError> {
-                Err(OrchError::DispatchFailed("budget exceeded".into()))
+            ) -> Result<DispatchHandle, ProtocolError> {
+                Err(ProtocolError::unavailable("budget exceeded"))
             }
         }
 
@@ -644,10 +644,12 @@ mod tests {
                 &self,
                 _ctx: &DispatchContext,
                 input: OperatorInput,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 Ok(immediate_handle(OperatorOutput::new(
                     input.message,
-                    crate::ExitReason::Complete,
+                    crate::Outcome::Terminal {
+                        terminal: crate::TerminalOutcome::Completed,
+                    },
                 )))
             }
         }
@@ -673,7 +675,7 @@ mod tests {
                 ctx: &DispatchContext,
                 mut input: OperatorInput,
                 next: &dyn DispatchNext,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 input.metadata = serde_json::json!({"transformed": true});
                 next.dispatch(ctx, input).await
             }
@@ -687,10 +689,12 @@ mod tests {
                 &self,
                 _ctx: &DispatchContext,
                 input: OperatorInput,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 Ok(immediate_handle(OperatorOutput::new(
                     input.message,
-                    crate::ExitReason::Complete,
+                    crate::Outcome::Terminal {
+                        terminal: crate::TerminalOutcome::Completed,
+                    },
                 )))
             }
         }
@@ -790,7 +794,9 @@ mod tests {
             ) -> Result<OperatorOutput, EnvError> {
                 Ok(OperatorOutput::new(
                     input.message,
-                    crate::ExitReason::Complete,
+                    crate::Outcome::Terminal {
+                        terminal: crate::TerminalOutcome::Completed,
+                    },
                 ))
             }
         }

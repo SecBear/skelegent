@@ -114,7 +114,11 @@ pub fn simplify_unions(schema: &Value) -> Value {
                     // Variant collapsed to a non-object (edge case: `$ref` string,
                     // boolean schema). Return it directly if there are no siblings;
                     // otherwise preserve the sibling object and discard the degenerate variant.
-                    if out.is_empty() { other } else { Value::Object(out) }
+                    if out.is_empty() {
+                        other
+                    } else {
+                        Value::Object(out)
+                    }
                 }
                 None => Value::Object(out),
             }

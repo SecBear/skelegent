@@ -79,9 +79,9 @@
 //! }
 //! ```
 
-pub mod builder;
 pub mod assembly;
 pub mod boundary;
+pub mod builder;
 pub mod cognitive_operator;
 pub mod compile;
 pub mod context;

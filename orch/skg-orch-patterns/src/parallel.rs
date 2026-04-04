@@ -12,9 +12,9 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput};
+use layer0::operator::{Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome};
 
 static PAR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -34,21 +34,29 @@ pub type ReducerFn = Box<dyn Fn(Vec<OperatorOutput>) -> OperatorOutput + Send + 
 pub(crate) fn default_reducer(outputs: Vec<OperatorOutput>) -> OperatorOutput {
     let mut parts: Vec<String> = Vec::with_capacity(outputs.len());
     let mut all_effects = Vec::new();
-    let mut exit_reason = ExitReason::Complete;
+    let mut outcome = Outcome::Terminal {
+        terminal: TerminalOutcome::Completed,
+    };
 
     for output in outputs {
         if let Some(text) = output.message.as_text() {
             parts.push(text.to_string());
         }
-        all_effects.extend(output.effects);
-        // Surface the last non-complete exit reason so callers notice failures.
-        if output.exit_reason != ExitReason::Complete {
-            exit_reason = output.exit_reason;
+        all_effects.extend(output.intents);
+        // Surface the last non-complete outcome so callers notice failures.
+        let is_completed = matches!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
+        if !is_completed {
+            outcome = output.outcome;
         }
     }
 
-    let mut result = OperatorOutput::new(Content::text(parts.join("\n")), exit_reason);
-    result.effects = all_effects;
+    let mut result = OperatorOutput::new(Content::text(parts.join("\n")), outcome);
+    result.intents = all_effects;
     result
 }
 
@@ -95,8 +103,8 @@ impl Operator for ParallelOperator {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
-        let mut join_set: tokio::task::JoinSet<Result<OperatorOutput, OperatorError>> =
+    ) -> Result<OperatorOutput, ProtocolError> {
+        let mut join_set: tokio::task::JoinSet<Result<OperatorOutput, ProtocolError>> =
             tokio::task::JoinSet::new();
 
         for branch_id in &self.branches {
@@ -108,11 +116,9 @@ impl Operator for ParallelOperator {
             join_set.spawn(async move {
                 dispatcher
                     .dispatch(&child_ctx, branch_input)
-                    .await
-                    .map_err(|e| OperatorError::non_retryable(e.to_string()))?
+                    .await?
                     .collect()
                     .await
-                    .map_err(|e| OperatorError::non_retryable(e.to_string()))
             });
         }
 
@@ -123,7 +129,7 @@ impl Operator for ParallelOperator {
                 Ok(Ok(output)) => outputs.push(output),
                 Ok(Err(e)) => return Err(e),
                 Err(join_err) => {
-                    return Err(OperatorError::non_retryable(format!(
+                    return Err(ProtocolError::internal(format!(
                         "branch task panicked: {join_err}"
                     )));
                 }
@@ -133,7 +139,6 @@ impl Operator for ParallelOperator {
         Ok((self.reducer)(outputs))
     }
 }
-
 
 /// Splitter function: given one input, produces N inputs to fan out to the same operator.
 ///
@@ -194,11 +199,11 @@ impl Operator for FanOutOperator {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let split_inputs = (self.splitter)(&input);
         let capacity = split_inputs.len();
 
-        let mut join_set: tokio::task::JoinSet<Result<OperatorOutput, OperatorError>> =
+        let mut join_set: tokio::task::JoinSet<Result<OperatorOutput, ProtocolError>> =
             tokio::task::JoinSet::new();
 
         for branch_input in split_inputs {
@@ -208,11 +213,9 @@ impl Operator for FanOutOperator {
             join_set.spawn(async move {
                 dispatcher
                     .dispatch(&child_ctx, branch_input)
-                    .await
-                    .map_err(|e| OperatorError::non_retryable(e.to_string()))?
+                    .await?
                     .collect()
                     .await
-                    .map_err(|e| OperatorError::non_retryable(e.to_string()))
             });
         }
 
@@ -222,7 +225,7 @@ impl Operator for FanOutOperator {
                 Ok(Ok(output)) => outputs.push(output),
                 Ok(Err(e)) => return Err(e),
                 Err(join_err) => {
-                    return Err(OperatorError::non_retryable(format!(
+                    return Err(ProtocolError::internal(format!(
                         "fan-out branch task panicked: {join_err}"
                     )));
                 }

@@ -1,0 +1,35 @@
+{
+  "id": "memory_store",
+  "kind": "tool",
+  "name": "memory_store",
+  "description": "Store a value in memory with a key and optional scope.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "key": { "type": "string" }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "stored": { "type": "boolean" }
+    }
+  },
+  "accepts": ["json"],
+  "produces": ["json"],
+  "streaming": "none",
+  "scheduling": {
+    "execution_class": "shared",
+    "ordering_sensitive": false,
+    "idempotent": false,
+    "interruptible": false
+  },
+  "approval": "none",
+  "auth": {
+    "mode": "caller"
+  },
+  "tags": ["memory", "state"],
+  "extensions": {
+    "bridge": "local"
+  }
+}

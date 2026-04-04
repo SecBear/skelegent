@@ -1,8 +1,13 @@
+use layer0::{ErrorCode, ProtocolError, WaitReason};
 use serde_json::json;
 use skg_run_core::{
     DispatchPayload, KernelError, OrchestrationCommand, PortableWakeDeadline, ResumeAction,
-    ResumeInput, RunEvent, RunId, RunKernel, RunView, WaitPointId, WaitReason,
+    ResumeInput, RunEvent, RunId, RunKernel, RunView, WaitPointId,
 };
+
+fn protocol_error(msg: &str) -> ProtocolError {
+    ProtocolError::new(ErrorCode::Internal, msg, false)
+}
 
 #[test]
 fn start_moves_into_running_and_dispatches_operator() {
@@ -388,7 +393,7 @@ fn terminal_states_reject_cancel_complete_and_fail() {
         RunKernel::apply(
             Some(&completed),
             RunEvent::Fail {
-                error: "boom".to_owned(),
+                error: protocol_error("boom"),
             },
         )
         .unwrap_err(),
@@ -424,7 +429,7 @@ fn waiting_rejects_direct_complete_and_fail() {
         RunKernel::apply(
             Some(&waiting),
             RunEvent::Fail {
-                error: "denied".to_owned(),
+                error: protocol_error("denied"),
             },
         )
         .unwrap_err(),
@@ -449,5 +454,27 @@ fn timer_wait_without_deadline_is_rejected() {
     assert!(matches!(
         result,
         Err(KernelError::TimerWithoutDeadline { .. })
+    ));
+}
+
+#[test]
+fn fail_event_produces_protocol_error_in_run_view() {
+    let run_id = RunId::new("run-1");
+    let error = protocol_error("something went wrong");
+
+    let transition = RunKernel::apply(
+        Some(&RunView::running(run_id.clone())),
+        RunEvent::Fail {
+            error: error.clone(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(transition.next.status(), skg_run_core::RunStatus::Failed,);
+    // The FailRun command carries the same error.
+    assert!(matches!(
+        transition.commands.as_slice(),
+        [OrchestrationCommand::FailRun { run_id: cmd_run_id, error: cmd_error }]
+        if cmd_run_id == &run_id && cmd_error == &error
     ));
 }

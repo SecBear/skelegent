@@ -1,7 +1,7 @@
 //! Tests for ReducerRegistry wiring inside LocalEffectHandler.
 
 use layer0::DispatchContext;
-use layer0::effect::{Effect, EffectKind, MemoryScope, Scope};
+use layer0::{Intent, IntentKind, MemoryScope, Scope};
 use layer0::id::{DispatchId, OperatorId};
 use layer0::reducer::{AppendList, ReducerRegistry};
 use layer0::state::StateStore;
@@ -15,8 +15,8 @@ fn test_ctx() -> DispatchContext {
     DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"))
 }
 
-fn write_effect(key: &str, value: serde_json::Value) -> Effect {
-    Effect::new(EffectKind::WriteMemory {
+fn write_effect(key: &str, value: serde_json::Value) -> Intent {
+    Intent::new(IntentKind::WriteMemory {
         scope: Scope::Global,
         key: key.to_string(),
         value,
@@ -61,7 +61,11 @@ async fn reducer_applied_on_write() {
         .await
         .expect("read failed")
         .expect("key missing");
-    assert_eq!(stored, json!([1, 2]), "AppendList should have produced [1,2]");
+    assert_eq!(
+        stored,
+        json!([1, 2]),
+        "AppendList should have produced [1,2]"
+    );
 }
 
 /// Without a registry, successive writes are last-writer-wins (Overwrite default).
@@ -88,7 +92,11 @@ async fn no_registry_is_overwrite() {
         .await
         .expect("read failed")
         .expect("key missing");
-    assert_eq!(stored, json!(2), "last-writer-wins Overwrite should yield 2");
+    assert_eq!(
+        stored,
+        json!(2),
+        "last-writer-wins Overwrite should yield 2"
+    );
 }
 
 /// A registry with no key-specific entries behaves identically to Overwrite.

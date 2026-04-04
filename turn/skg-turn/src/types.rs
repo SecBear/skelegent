@@ -83,7 +83,6 @@ pub struct TokenUsage {
     pub reasoning_tokens: Option<u64>,
 }
 
-
 /// Controls which tools the model can use.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -177,13 +176,10 @@ mod tests {
     #[test]
     fn tool_schema_extra_serde_round_trip() {
         let extra = serde_json::json!({ "strict": true });
-        let schema = ToolSchema::new("my_tool", "does a thing", serde_json::json!({}))
-            .with_extra(extra);
+        let schema =
+            ToolSchema::new("my_tool", "does a thing", serde_json::json!({})).with_extra(extra);
         let json = serde_json::to_value(&schema).unwrap();
         let back: ToolSchema = serde_json::from_value(json).unwrap();
-        assert_eq!(
-            back.extra.unwrap(),
-            serde_json::json!({ "strict": true })
-        );
+        assert_eq!(back.extra.unwrap(), serde_json::json!({ "strict": true }));
     }
 }

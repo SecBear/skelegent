@@ -12,7 +12,7 @@
 use crate::rules::compaction::strip_json_fences;
 use layer0::content::Content;
 use layer0::context::{Message, Role};
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use layer0::error::StateError;
 use layer0::state::StateStore;
 use serde::{Deserialize, Serialize};

@@ -46,25 +46,25 @@ stop. Introduce an interface.
 ### 2. Declaration Separated From Execution
 
 Operators reason and declare intent. Orchestrators and environments execute.
-No component should both decide what to do and carry it out. This is the effects
+No component should both decide what to do and carry it out. This is the intent
 boundary.
 
 An operator that directly writes to a state store has coupled reasoning to
-infrastructure. An operator that emits a `WriteMemory` effect has declared
+infrastructure. An operator that emits a `WriteMemory` intent has declared
 intent while preserving the freedom to execute that write against git,
-PostgreSQL, or an in-memory store. If operators execute their own effects,
-swapping a backend requires rewriting every operator. If they declare effects,
+PostgreSQL, or an in-memory store. If operators execute their own intents,
+swapping a backend requires rewriting every operator. If they declare intents,
 it's a configuration change.
 
 When you see an operator importing a concrete state store, database client, or
 filesystem API — that's a violation.
 
-Two narrow exceptions to the effects boundary are permitted by design.
+Two narrow exceptions to the intent boundary are permitted by design.
 
 **Scoped state**: Operators may read and write their own state partition
 via `FlushToStore`/`InjectFromStore` ops or by holding an `Arc<dyn StateStore>`
 directly. This is internal state — not a cross-boundary side-effect.
-Cross-scope writes remain as `Effect::WriteMemory`.
+Cross-scope writes remain as `Intent::WriteMemory`.
 
 **Composition dispatch**: Operators may directly dispatch to other operators via
 an injected `Arc<dyn Dispatcher>` capability. The dispatched operator's I/O
@@ -168,9 +168,9 @@ security-sensitive content before backfill.
 Layer multiple independent stop conditions. "Model signals done" alone risks
 infinite loops. "Max turns" alone cuts off hard tasks.
 
-Exit can be triggered from multiple sources. See `specs/04-operator-turn-runtime.md
-§Exit Priority Ordering` for the authoritative priority table. In summary:
-safety halt > turn/step limits > cost budget > completion. The `ExitReason` enum is
+Exit can be triggered from multiple sources. See `specs/v2/02-invocation-outcomes-and-waits.md`
+for the authoritative outcome table. In summary:
+safety halt > turn/step limits > cost budget > completion. The `Outcome` type is
 explicit — every exit path has a named variant.
 
 ---
@@ -211,12 +211,12 @@ Conversation-scoped handoff (child inherits the conversation, parent terminates)
 is a distinct pattern from delegation.
 
 **Communication**: Synchronous call/return is the default (`Dispatcher::dispatch`).
-Signals for distributed orchestration (`Effect::Signal`). Context streams for
-real-time observation. Intervention channels for cross-agent context modification.
+Signals for distributed orchestration (`Intent::Signal`). Context streams for
+real-time observation (via `ExecutionEvent`). Intervention channels for cross-agent context modification.
 Shared state via `StateStore` scopes for persistent coordination.
 
 **Observation and intervention**: Streaming-first. The context engine's `Context`
-emits every mutation as it happens — messages pushed/removed, effects declared,
+emits `ExecutionEvent`s as they happen — messages pushed/removed, intents declared,
 inference tokens, metrics updates. No snapshots, no intervals. An observer
 subscribes to the broadcast channel and sees the full context lifecycle in
 real-time. Intervention is the reverse direction — an external agent sends
@@ -255,7 +255,7 @@ compose with any StateStore backend.
 **Crash recovery**: Entangled with orchestration by design, but not with a single universal substrate. Local orchestration provides no recovery — acceptable for short tasks. Durable orchestration adds a run/control layer above Layer 0 and may recover through backend-specific replay, checkpoints, journals, leases, or platform-native history. Public contracts should describe run lifecycle and control semantics; backend recovery internals stay below that boundary. The same operator works in both deployments.
 
 **Budget governance**: Single authority, but current enforcement is runtime-local.
-The turn/runtime currently enforces local cost, turn, duration, and tool-call limits via `BudgetGuard` at governed runtime boundaries. Budget-triggered stops surface as structured exits (`MaxTurns`, `BudgetExhausted`, `Timeout`) in the plain ReAct loops, while broader halt/continue/downgrade policy belongs to orchestration above Layer 0 unless/until it becomes a real cross-boundary contract.
+The turn/runtime currently enforces local cost, turn, duration, and tool-call limits via `BudgetGuard` at governed runtime boundaries. Budget-triggered stops surface as `Outcome::Limited` variants in the ReAct loops, while broader halt/continue/downgrade policy belongs to orchestration above Layer 0 unless/until it becomes a real cross-boundary contract.
 Planners observe remaining budget (read-only).
 
 **Observability**: Cross-cutting. Within an operator, the context stream
@@ -287,8 +287,8 @@ without conflating architecturally distinct primitives.
 
 Middleware composition varies by boundary: dispatch middleware wraps sub-operator
 dispatch, store middleware wraps state access, exec middleware wraps operator
-execution. For exit priority ordering,
-see `specs/04-operator-turn-runtime.md §Exit Priority Ordering`.
+execution. For invocation outcome ordering,
+see `specs/v2/02-invocation-outcomes-and-waits.md`.
 
 The planner primitive is `DispatchPlanner` (renamed from `ToolExecutionPlanner`).
 It plans sub-operator dispatches — not just tool calls — and is the canonical

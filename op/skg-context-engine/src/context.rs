@@ -9,7 +9,7 @@ use crate::rule::Rule;
 use crate::stream::{ContextEvent, ContextMutation};
 
 use layer0::context::Message;
-use layer0::effect::Effect;
+use layer0::intent::Intent;
 use rust_decimal::Decimal;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -142,9 +142,9 @@ pub struct Context {
     pub metrics: TurnMetrics,
     /// Reactive rules. Sorted by priority (highest first).
     rules: Vec<Rule>,
-    /// Effects declared during this operator invocation.
-    /// Drained into `OperatorOutput::effects` by the caller.
-    effects: Vec<Effect>,
+    /// Intents declared during this operator invocation.
+    /// Drained into `OperatorOutput::intents` by the caller.
+    intents: Vec<Intent>,
     /// True when executing a rule — prevents recursive rule firing.
     in_rule: bool,
     /// Observation stream sender. When present, every mutation emits a
@@ -166,7 +166,7 @@ impl Context {
             in_rule: false,
             stream_tx: None,
             intervention_rx: None,
-            effects: Vec::new(),
+            intents: Vec::new(),
         }
     }
 
@@ -293,29 +293,29 @@ impl Context {
         }
     }
 
-    // ── Effects ─────────────────────────────────────────────────────
+    // ── Intents ─────────────────────────────────────────────────────
 
-    /// Declare an effect. Stored until drained into OperatorOutput.
-    pub fn push_effect(&mut self, effect: Effect) {
-        self.emit(ContextMutation::EffectDeclared(effect.clone()));
-        self.effects.push(effect);
+    /// Declare an intent. Stored until drained into OperatorOutput.
+    pub fn push_intent(&mut self, intent: Intent) {
+        self.emit(ContextMutation::IntentDeclared(intent.clone()));
+        self.intents.push(intent);
     }
 
-    /// Declare multiple effects.
-    pub fn extend_effects(&mut self, effects: impl IntoIterator<Item = Effect>) {
-        for effect in effects {
-            self.push_effect(effect);
+    /// Declare multiple intents.
+    pub fn extend_intents(&mut self, intents: impl IntoIterator<Item = Intent>) {
+        for intent in intents {
+            self.push_intent(intent);
         }
     }
 
-    /// Read current effects without draining.
-    pub fn effects(&self) -> &[Effect] {
-        &self.effects
+    /// Read current intents without draining.
+    pub fn intents(&self) -> &[Intent] {
+        &self.intents
     }
 
-    /// Drain all effects (transfers ownership to caller).
-    pub fn drain_effects(&mut self) -> Vec<Effect> {
-        std::mem::take(&mut self.effects)
+    /// Drain all intents (transfers ownership to caller).
+    pub fn drain_intents(&mut self) -> Vec<Intent> {
+        std::mem::take(&mut self.intents)
     }
 
     // ── Rules and structure ──────────────────────────────────────────
@@ -905,33 +905,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn push_effect_stores_and_drains() {
-        use layer0::effect::{Effect, EffectKind};
+    async fn push_intent_stores_and_drains() {
+        use layer0::intent::{Intent, IntentKind};
         let mut ctx = Context::new();
-        let effect = Effect::new(EffectKind::DeleteMemory {
-            scope: layer0::effect::Scope::Global,
+        let intent = Intent::new(IntentKind::DeleteMemory {
+            scope: layer0::Scope::Global,
             key: "test_key".into(),
         });
-        ctx.push_effect(effect.clone());
-        assert_eq!(ctx.effects().len(), 1);
-        let drained = ctx.drain_effects();
+        ctx.push_intent(intent.clone());
+        assert_eq!(ctx.intents().len(), 1);
+        let drained = ctx.drain_intents();
         assert_eq!(drained.len(), 1);
-        assert!(ctx.effects().is_empty());
+        assert!(ctx.intents().is_empty());
     }
 
     #[tokio::test]
-    async fn extend_effects_stores_multiple() {
-        use layer0::effect::{Effect, EffectKind};
+    async fn extend_intents_stores_multiple() {
+        use layer0::intent::{Intent, IntentKind};
         let mut ctx = Context::new();
-        let e1 = Effect::new(EffectKind::DeleteMemory {
-            scope: layer0::effect::Scope::Global,
+        let i1 = Intent::new(IntentKind::DeleteMemory {
+            scope: layer0::Scope::Global,
             key: "a".into(),
         });
-        let e2 = Effect::new(EffectKind::DeleteMemory {
-            scope: layer0::effect::Scope::Global,
+        let i2 = Intent::new(IntentKind::DeleteMemory {
+            scope: layer0::Scope::Global,
             key: "b".into(),
         });
-        ctx.extend_effects(vec![e1, e2]);
-        assert_eq!(ctx.effects().len(), 2);
+        ctx.extend_intents(vec![i1, i2]);
+        assert_eq!(ctx.intents().len(), 2);
     }
 }

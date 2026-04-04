@@ -1,7 +1,7 @@
 //! Integration tests for context assembly using a real MemoryStore.
 
 use layer0::CompactionPolicy;
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use layer0::state::StateStore;
 use skg_context::context_assembly::{ContextAssembler, ContextAssemblyConfig};
 use skg_state_memory::MemoryStore;

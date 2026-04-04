@@ -11,9 +11,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{
+    Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType,
+};
 
 use crate::loop_op::LoopOperator;
 use crate::parallel::{ParallelOperator, ReducerFn};
@@ -71,18 +73,24 @@ impl Operator for Pipeline {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_input = input;
-        let mut all_effects: Vec<layer0::Effect> = Vec::new();
+        let mut all_effects: Vec<layer0::Intent> = Vec::new();
         let mut last_output: Option<OperatorOutput> = None;
 
         for step in &self.steps {
             let mut output = step.execute(current_input, ctx).await?;
 
-            all_effects.append(&mut output.effects);
+            all_effects.append(&mut output.intents);
 
-            if output.exit_reason != layer0::ExitReason::Complete {
-                output.effects = all_effects;
+            let is_completed = matches!(
+                output.outcome,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed
+                }
+            );
+            if !is_completed {
+                output.intents = all_effects;
                 return Ok(output);
             }
 
@@ -92,12 +100,14 @@ impl Operator for Pipeline {
 
         match last_output {
             Some(mut out) => {
-                out.effects = all_effects;
+                out.intents = all_effects;
                 Ok(out)
             }
             None => Ok(OperatorOutput::new(
                 layer0::Content::text(""),
-                layer0::ExitReason::Complete,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
             )),
         }
     }
@@ -121,15 +131,13 @@ impl Operator for SingleDispatch {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let child_ctx = ctx.child(next_dispatch_id(), self.id.clone());
         self.dispatcher
             .dispatch(&child_ctx, input)
-            .await
-            .map_err(|e| OperatorError::non_retryable(e.to_string()))?
+            .await?
             .collect()
             .await
-            .map_err(|e| OperatorError::non_retryable(e.to_string()))
     }
 }
 
@@ -177,11 +185,7 @@ impl WorkflowBuilder {
     }
 
     /// Append a parallel fan-out step with a custom reducer.
-    pub fn parallel_with_reducer(
-        mut self,
-        operators: Vec<OperatorId>,
-        reducer: ReducerFn,
-    ) -> Self {
+    pub fn parallel_with_reducer(mut self, operators: Vec<OperatorId>, reducer: ReducerFn) -> Self {
         self.steps.push(StepDesc::Parallel { operators, reducer });
         self
     }
@@ -211,27 +215,24 @@ impl WorkflowBuilder {
         let dispatcher = self.dispatcher;
 
         // Convert each StepDesc into Arc<dyn Operator>.
-        let mut ops: Vec<Arc<dyn Operator>> = self
-            .steps
-            .into_iter()
-            .map(|desc| -> Arc<dyn Operator> {
-                match desc {
-                    StepDesc::Single(id) => Arc::new(SingleDispatch {
-                        id,
-                        dispatcher: Arc::clone(&dispatcher),
-                    }),
-                    StepDesc::Parallel { operators, reducer } => Arc::new(
-                        ParallelOperator::new(operators, Arc::clone(&dispatcher), reducer),
-                    ),
-                    StepDesc::Loop { body, max, done } => Arc::new(LoopOperator::new(
-                        body,
-                        Arc::clone(&dispatcher),
-                        max,
-                        done,
-                    )),
-                }
-            })
-            .collect();
+        let mut ops: Vec<Arc<dyn Operator>> =
+            self.steps
+                .into_iter()
+                .map(|desc| -> Arc<dyn Operator> {
+                    match desc {
+                        StepDesc::Single(id) => Arc::new(SingleDispatch {
+                            id,
+                            dispatcher: Arc::clone(&dispatcher),
+                        }),
+                        StepDesc::Parallel { operators, reducer } => Arc::new(
+                            ParallelOperator::new(operators, Arc::clone(&dispatcher), reducer),
+                        ),
+                        StepDesc::Loop { body, max, done } => {
+                            Arc::new(LoopOperator::new(body, Arc::clone(&dispatcher), max, done))
+                        }
+                    }
+                })
+                .collect();
 
         match ops.len() {
             0 => Arc::new(NoOpOperator),
@@ -254,8 +255,12 @@ impl Operator for NoOpOperator {
         &self,
         input: OperatorInput,
         _ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
-        Ok(OperatorOutput::new(input.message, layer0::ExitReason::Complete))
+    ) -> Result<OperatorOutput, ProtocolError> {
+        Ok(OperatorOutput::new(
+            input.message,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        ))
     }
 }
-

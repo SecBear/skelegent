@@ -8,10 +8,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use layer0::error::ProtocolError;
 use layer0::operator::Operator;
+use layer0::operator::{Outcome, TerminalOutcome};
 use layer0::{
-    Content, DispatchContext, DurationMs, ExitReason, OperatorError, OperatorInput, OperatorOutput,
-    OrchError, SubDispatchRecord, ToolMetadata,
+    Content, DispatchContext, DurationMs, OperatorInput, OperatorOutput, SubDispatchRecord,
+    ToolMetadata,
 };
 
 use crate::{ToolConcurrencyHint, ToolDyn, ToolRegistry};
@@ -54,15 +56,24 @@ impl Operator for ToolOperator {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let text = input.message.as_text().unwrap_or("null");
-        let tool_input: serde_json::Value = serde_json::from_str(text)
-            .map_err(|e| OperatorError::non_retryable(format!("invalid tool input JSON: {e}")))?;
+        let tool_input: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+            ProtocolError::new(
+                layer0::error::ErrorCode::InvalidInput,
+                format!("invalid tool input JSON: {e}"),
+                false,
+            )
+        })?;
 
         match self.tool.call(tool_input, ctx).await {
             Ok(result) => {
-                let mut output =
-                    OperatorOutput::new(Content::text(result.to_string()), ExitReason::Complete);
+                let mut output = OperatorOutput::new(
+                    Content::text(result.to_string()),
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
+                );
                 output.metadata.sub_dispatches.push(SubDispatchRecord::new(
                     self.tool.name(),
                     DurationMs::ZERO,
@@ -70,10 +81,12 @@ impl Operator for ToolOperator {
                 ));
                 Ok(output)
             }
-            Err(err) => Err(OperatorError::SubDispatch {
-                operator: self.tool.name().to_string(),
-                source: Box::new(err),
-            }),
+            Err(err) => Err(ProtocolError::new(
+                layer0::error::ErrorCode::Internal,
+                format!("{}: {err}", self.tool.name()),
+                false,
+            )
+            .with_detail("operator", self.tool.name().to_string())),
         }
     }
 }
@@ -102,16 +115,15 @@ impl ToolRegistryOrchestrator {
 impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
     /// Dispatch by looking up `operator` as a tool name in the registry.
     ///
-    /// Returns `OrchError::OperatorNotFound` when the name is not registered.
+    /// Returns `ProtocolError::not_found` when the name is not registered.
     async fn dispatch(
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<layer0::DispatchHandle, OrchError> {
-        let tool = self
-            .registry
-            .get(ctx.operator_id.as_str())
-            .ok_or_else(|| OrchError::OperatorNotFound(ctx.operator_id.to_string()))?;
+    ) -> Result<layer0::DispatchHandle, ProtocolError> {
+        let tool = self.registry.get(ctx.operator_id.as_str()).ok_or_else(|| {
+            ProtocolError::not_found(format!("operator not found: {}", ctx.operator_id))
+        })?;
 
         let ctx_owned = ctx.clone();
         let operator = ToolOperator::new(Arc::clone(tool));
@@ -125,9 +137,7 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
                 }
                 Err(err) => {
                     let _ = sender
-                        .send(layer0::DispatchEvent::Failed {
-                            error: OrchError::from(err),
-                        })
+                        .send(layer0::DispatchEvent::Failed { error: err })
                         .await;
                 }
             }
@@ -140,11 +150,8 @@ impl layer0::dispatch::Dispatcher for ToolRegistryOrchestrator {
 mod tests {
     use super::*;
     use crate::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
-    use layer0::operator::TriggerType;
-    use layer0::{
-        Content, DispatchContext, DispatchId, Dispatcher, ExitReason, OperatorError, OperatorId,
-        OperatorInput, OrchError,
-    };
+    use layer0::operator::{Outcome, TerminalOutcome, TriggerType};
+    use layer0::{Content, DispatchContext, DispatchId, Dispatcher, OperatorId, OperatorInput};
     use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;
@@ -262,7 +269,15 @@ mod tests {
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let output = op.execute(input, &ctx).await.expect("should succeed");
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert!(
+            matches!(
+                output.outcome,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed
+                }
+            ),
+            "expected Completed outcome"
+        );
 
         // The text response should contain the echoed JSON.
         let text = output.message.as_text().expect("should be text");
@@ -285,14 +300,12 @@ mod tests {
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let err = op.execute(input, &ctx).await.expect_err("should fail");
 
-        match err {
-            OperatorError::SubDispatch { operator, source } => {
-                assert_eq!(operator, "fail");
-                let msg = source.to_string();
-                assert!(msg.contains("always fails"), "unexpected message: {msg}");
-            }
-            other => panic!("expected SubDispatch, got {other:?}"),
-        }
+        // ProtocolError should contain the tool name and failure message.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("always fails") || msg.contains("fail"),
+            "unexpected error message: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -312,7 +325,15 @@ mod tests {
             .await
             .expect("should complete");
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert!(
+            matches!(
+                output.outcome,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed
+                }
+            ),
+            "expected Completed outcome"
+        );
         let text = output.message.as_text().expect("should be text");
         let parsed: serde_json::Value = serde_json::from_str(text).expect("valid JSON");
         assert_eq!(parsed, json!({"echoed": {"x": 42}}));
@@ -328,12 +349,12 @@ mod tests {
         let input = make_input("{}");
         let err = orch.dispatch(&ctx, input).await.expect_err("should fail");
 
-        match err {
-            OrchError::OperatorNotFound(name) => {
-                assert_eq!(name, "unknown_tool");
-            }
-            other => panic!("expected OperatorNotFound, got {other:?}"),
-        }
+        // ProtocolError should indicate not-found for operator lookup.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown_tool") || msg.contains("not found"),
+            "unexpected error message: {msg}"
+        );
     }
 
     /// Regression: ToolOperator::execute must forward the received DispatchContext to

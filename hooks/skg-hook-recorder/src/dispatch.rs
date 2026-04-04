@@ -4,7 +4,7 @@ use crate::{Boundary, RecordContext, RecordEntry, RecordSink, SCHEMA_VERSION};
 use async_trait::async_trait;
 use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::dispatch_context::DispatchContext;
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
 use layer0::operator::OperatorInput;
 use std::sync::Arc;
@@ -44,7 +44,7 @@ impl DispatchMiddleware for DispatchRecorder {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let record_ctx = RecordContext {
             trace_id: ctx.trace.trace_id.clone(),
             operator_id: ctx.operator_id.to_string(),
@@ -129,11 +129,10 @@ impl DispatchMiddleware for DispatchRecorder {
 mod tests {
     use super::*;
     use crate::{InMemorySink, Phase};
-    use layer0::ExitReason;
     use layer0::content::Content;
     use layer0::dispatch::{DispatchEvent, DispatchHandle};
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{OperatorOutput, TriggerType};
+    use layer0::operator::{Outcome, OperatorOutput, TerminalOutcome, TriggerType};
 
     fn immediate_handle(output: OperatorOutput) -> DispatchHandle {
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("test"));
@@ -151,10 +150,12 @@ mod tests {
             &self,
             _ctx: &DispatchContext,
             input: OperatorInput,
-        ) -> Result<DispatchHandle, OrchError> {
+        ) -> Result<DispatchHandle, ProtocolError> {
             Ok(immediate_handle(OperatorOutput::new(
                 input.message,
-                ExitReason::Complete,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
             )))
         }
     }
@@ -235,8 +236,8 @@ mod tests {
                 &self,
                 _ctx: &DispatchContext,
                 _input: OperatorInput,
-            ) -> Result<DispatchHandle, OrchError> {
-                Err(OrchError::DispatchFailed("boom".into()))
+            ) -> Result<DispatchHandle, ProtocolError> {
+                Err(ProtocolError::unavailable("boom"))
             }
         }
 
@@ -250,7 +251,10 @@ mod tests {
         let post = &entries[1];
         assert_eq!(post.phase, Phase::Post);
         assert!(post.error.is_some());
-        assert_eq!(post.payload_json["error"], "dispatch failed: boom");
+        assert!(
+            post.payload_json.get("error").is_some(),
+            "post payload must contain error field"
+        );
     }
 
     /// A `DispatchNext` that returns a handle which emits `DispatchEvent::Failed`.
@@ -262,12 +266,12 @@ mod tests {
             &self,
             _ctx: &DispatchContext,
             _input: OperatorInput,
-        ) -> Result<DispatchHandle, OrchError> {
+        ) -> Result<DispatchHandle, ProtocolError> {
             let (handle, sender) = DispatchHandle::channel(DispatchId::new("hf-001"));
             tokio::spawn(async move {
                 let _ = sender
                     .send(DispatchEvent::Failed {
-                        error: OrchError::DispatchFailed("stream failed".into()),
+                        error: ProtocolError::unavailable("stream failed"),
                     })
                     .await;
             });

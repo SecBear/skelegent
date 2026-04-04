@@ -33,7 +33,7 @@ skelegent organizes its crates into six layers plus an umbrella crate. Each laye
 
 **Crate:** `layer0`
 
-Layer 0 is the stability contract. It defines four protocol traits (`Operator`, `Dispatcher`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (per-boundary middleware traits, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Effect`, `Scope`, typed IDs). `Signalable` and `Queryable` are defined in Layer 2 (`skg-effects-core`), not Layer 0.
+Layer 0 is the stability contract. It defines four protocol traits (`Operator`, `Dispatcher`, `StateStore`/`StateReader`, `Environment`), two cross-cutting interfaces (per-boundary middleware traits, lifecycle events), and all the message types that cross protocol boundaries (`OperatorInput`, `OperatorOutput`, `Content`, `Intent`, `ExecutionEvent`, `Outcome`, `ProtocolError`, `Scope`, typed IDs). `Signalable` and `Queryable` are defined in Layer 2 (`skg-effects-core`), not Layer 0.
 
 **Dependencies:** `serde`, `async-trait`, `thiserror`, `rust_decimal`, `serde_json`. Nothing else. No runtime, no HTTP, no provider-specific types.
 
@@ -63,7 +63,7 @@ Layer 1 is where the core agentic loop lives. The `Provider` trait (defined in `
 - `skg-effects-core` -- `EffectHandler` trait, `Signalable`, `Queryable`, and shared effect execution types
 - `skg-effects-local` -- `LocalEffectHandler`: in-process effect handler (in-order, best-effort)
 
-Layer 2 implements `layer0::Dispatcher` and the `skg-effects-core` traits `Signalable` and `Queryable`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `OperatorId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Effect` payloads declared by operators — they live at Layer 2 because effect execution is an orchestration concern, not a protocol concern.
+Layer 2 implements `layer0::Dispatcher` and the `skg-effects-core` traits `Signalable` and `Queryable`. The `LocalOrch` dispatches operator invocations in-process using tokio. It maps `OperatorId` to `Arc<dyn Operator>` and handles parallel dispatch via `tokio::spawn`. The effects crates execute `Intent` payloads declared by operators — they live at Layer 2 because intent execution is an orchestration concern, not a protocol concern.
 
 Future implementations could include Temporal workflows (durable, replayable) or Restate (durable execution with virtual objects).
 

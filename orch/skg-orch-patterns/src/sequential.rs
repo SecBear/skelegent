@@ -12,9 +12,11 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{
+    Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType,
+};
 
 static SEQ_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -25,10 +27,11 @@ fn next_dispatch_id() -> DispatchId {
 
 /// A pipeline of operators executed in order, each output feeding the next input.
 ///
-/// All effects are accumulated across steps. The `ExitReason` of the last step
-/// that ran is used as the pipeline's exit reason. If any step exits with
-/// something other than [`ExitReason::Complete`] the pipeline halts immediately
-/// and returns that step's output (with all prior + current effects attached).
+/// All effects are accumulated across steps. The `Outcome` of the last step
+/// that ran is used as the pipeline's outcome. If any step exits with
+/// something other than `Outcome::Terminal { terminal: TerminalOutcome::Completed }`
+/// the pipeline halts immediately and returns that step's output (with all
+/// prior + current effects attached).
 pub struct SequentialOperator {
     /// Ordered operator IDs forming the pipeline.
     steps: Vec<OperatorId>,
@@ -49,10 +52,10 @@ impl Operator for SequentialOperator {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_input = input;
         // Accumulate effects from all steps as we go.
-        let mut all_effects: Vec<layer0::Effect> = Vec::new();
+        let mut all_effects: Vec<layer0::Intent> = Vec::new();
         let mut last_output: Option<OperatorOutput> = None;
 
         for step_id in &self.steps {
@@ -61,18 +64,22 @@ impl Operator for SequentialOperator {
             let mut output = self
                 .dispatcher
                 .dispatch(&child_ctx, current_input)
-                .await
-                .map_err(|e| OperatorError::non_retryable(e.to_string()))?
+                .await?
                 .collect()
-                .await
-                .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
+                .await?;
 
             // Absorb this step's effects into the running total.
-            all_effects.append(&mut output.effects);
+            all_effects.append(&mut output.intents);
 
-            if output.exit_reason != ExitReason::Complete {
+            let is_completed = matches!(
+                output.outcome,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed
+                }
+            );
+            if !is_completed {
                 // Stop and surface the failure; attach all accumulated effects.
-                output.effects = all_effects;
+                output.intents = all_effects;
                 return Ok(output);
             }
 
@@ -84,11 +91,16 @@ impl Operator for SequentialOperator {
         // All steps completed normally.
         match last_output {
             Some(mut output) => {
-                output.effects = all_effects;
+                output.intents = all_effects;
                 Ok(output)
             }
             // Empty pipeline: return a no-op completion.
-            None => Ok(OperatorOutput::new(Content::text(""), ExitReason::Complete)),
+            None => Ok(OperatorOutput::new(
+                Content::text(""),
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            )),
         }
     }
 }

@@ -64,7 +64,10 @@ mod tests {
         deny_real_requests();
         let result = std::panic::catch_unwind(assert_real_requests_allowed);
         allow_real_requests(); // always restore before assertions so later tests aren't poisoned
-        assert!(result.is_err(), "expected panic when real requests are denied");
+        assert!(
+            result.is_err(),
+            "expected panic when real requests are denied"
+        );
     }
 
     #[test]

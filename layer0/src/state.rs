@@ -1,6 +1,6 @@
 //! The State protocol — how data persists and is retrieved across turns.
 
-use crate::{duration::DurationMs, effect::Scope, error::StateError};
+use crate::{duration::DurationMs, error::StateError, intent::Scope};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 

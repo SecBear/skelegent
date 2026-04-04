@@ -16,10 +16,10 @@ use async_trait::async_trait;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle};
 use layer0::dispatch_context::DispatchContext;
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::middleware::{DispatchMiddleware, DispatchNext, DispatchStack};
-use layer0::operator::{ExitReason, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType};
 use std::collections::HashSet;
 use std::sync::{
     Arc,
@@ -65,12 +65,12 @@ impl DispatchMiddleware for DenylistGuard {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         match self.check(ctx) {
             PolicyDecision::Approve => next.dispatch(ctx, input).await,
             PolicyDecision::Deny { reason } => {
                 println!("[denylist-guard] DENIED: {reason}");
-                Err(OrchError::DispatchFailed(reason))
+                Err(ProtocolError::internal(reason))
             }
         }
     }
@@ -113,12 +113,12 @@ impl DispatchMiddleware for BudgetGuard {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         match self.check() {
             PolicyDecision::Approve => next.dispatch(ctx, input).await,
             PolicyDecision::Deny { reason } => {
                 println!("[budget-guard]   DENIED: {reason}");
-                Err(OrchError::DispatchFailed(reason))
+                Err(ProtocolError::internal(reason))
             }
         }
     }
@@ -134,9 +134,9 @@ impl DispatchNext for EchoTerminal {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         println!("[terminal]       ALLOWED: operator={}", ctx.operator_id);
-        let output = OperatorOutput::new(input.message, ExitReason::Complete);
+        let output = OperatorOutput::new(input.message, Outcome::Terminal { terminal: TerminalOutcome::Completed });
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("echo"));
         tokio::spawn(async move {
             let _ = sender.send(DispatchEvent::Completed { output }).await;

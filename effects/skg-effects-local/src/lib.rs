@@ -8,8 +8,8 @@
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::effect::{Effect, EffectKind, Scope};
-use layer0::error::{OrchError, StateError};
+use layer0::{Intent, IntentKind, Scope};
+use layer0::error::{ProtocolError, StateError};
 use layer0::middleware::{StoreStack, StoreWriteNext};
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::reducer::ReducerRegistry;
@@ -114,11 +114,11 @@ where
 {
     async fn handle(
         &self,
-        effect: &Effect,
+        intent: &Intent,
         _ctx: &DispatchContext,
     ) -> Result<EffectOutcome, Error> {
-        match &effect.kind {
-            EffectKind::WriteMemory {
+        match &intent.kind {
+            IntentKind::WriteMemory {
                 scope,
                 key,
                 value,
@@ -171,25 +171,25 @@ where
                     Ok(EffectOutcome::Applied)
                 }
             }
-            EffectKind::DeleteMemory { scope, key } => {
+            IntentKind::DeleteMemory { scope, key } => {
                 // StateStore::delete is idempotent by contract — missing key is Ok.
                 self.state.delete(scope, key).await?;
                 Ok(EffectOutcome::Applied)
             }
-            EffectKind::Signal { target, payload } => match &self.signaler {
+            IntentKind::Signal { target, payload } => match &self.signaler {
                 Some(s) => {
                     s.signal(target, payload.clone()).await?;
                     Ok(EffectOutcome::Applied)
                 }
-                None => Err(Error::Dispatch(OrchError::DispatchFailed(
-                    "signal requires a Signalable implementation".into(),
+                None => Err(Error::Protocol(ProtocolError::internal(
+                    "signal requires a Signalable implementation",
                 ))),
             },
-            EffectKind::Delegate { operator, input } => Ok(EffectOutcome::Delegate {
+            IntentKind::Delegate { operator, input } => Ok(EffectOutcome::Delegate {
                 operator: operator.clone(),
                 input: (*input.clone()).clone(),
             }),
-            EffectKind::Handoff { operator, context } => {
+            IntentKind::Handoff { operator, context } => {
                 // Build the operator input from the structured HandoffContext.
                 // context.task is the primary input; context.history seeds the
                 // pre-assembled context; context.metadata becomes OperatorInput.metadata.
@@ -205,11 +205,11 @@ where
                     input,
                 })
             }
-            EffectKind::LinkMemory { scope, link } => {
+            IntentKind::LinkMemory { scope, link } => {
                 self.state.link(scope, link).await?;
                 Ok(EffectOutcome::Applied)
             }
-            EffectKind::UnlinkMemory {
+            IntentKind::UnlinkMemory {
                 scope,
                 from_key,
                 to_key,
@@ -218,21 +218,28 @@ where
                 self.state.unlink(scope, from_key, to_key, relation).await?;
                 Ok(EffectOutcome::Applied)
             }
-            // Custom effects: treat as unknown for policy handling.
-            EffectKind::Custom { .. } => match self.unknown_policy {
+            IntentKind::RequestApproval { .. } => {
+                // Approval intents are caller-interpreted — not handled by EffectHandler.
+                match self.unknown_policy {
+                    UnknownEffectPolicy::IgnoreAndWarn => {
+                        tracing::warn!("ignoring approval intent (caller must handle): {:?}", intent);
+                        Ok(EffectOutcome::Skipped)
+                    }
+                    UnknownEffectPolicy::Error => Err(Error::UnknownEffect),
+                }
+            }
+            // Custom intents: treat as unknown for policy handling.
+            IntentKind::Custom { .. } => match self.unknown_policy {
                 UnknownEffectPolicy::IgnoreAndWarn => {
-                    tracing::warn!("ignoring unsupported effect: {:?}", effect);
+                    tracing::warn!("ignoring unsupported intent: {:?}", intent);
                     Ok(EffectOutcome::Skipped)
                 }
                 UnknownEffectPolicy::Error => Err(Error::UnknownEffect),
             },
-            // Forward-compat: Effect is #[non_exhaustive].
-            // Progress, Artifact, and ToolApprovalRequired are caller-interpreted
-            // effects routed via EffectEmitter → DispatchHandle (dispatch-channel
-            // wiring, not EffectHandler). They intentionally fall through here.
+            // Forward-compat: IntentKind is #[non_exhaustive].
             _ => match self.unknown_policy {
                 UnknownEffectPolicy::IgnoreAndWarn => {
-                    tracing::warn!("ignoring forward-compatible effect variant: {:?}", effect);
+                    tracing::warn!("ignoring forward-compatible intent variant: {:?}", intent);
                     Ok(EffectOutcome::Skipped)
                 }
                 UnknownEffectPolicy::Error => Err(Error::UnknownEffect),

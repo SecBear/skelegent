@@ -59,8 +59,7 @@
 
 use crate::content::Content;
 use crate::dispatch_context::DispatchContext;
-use crate::effect::Effect;
-use crate::error::OrchError;
+use crate::error::ProtocolError;
 use crate::id::DispatchId;
 use crate::operator::{OperatorInput, OperatorOutput};
 use async_trait::async_trait;
@@ -91,7 +90,7 @@ pub trait Dispatcher: Send + Sync {
         &self,
         ctx: &DispatchContext,
         input: OperatorInput,
-    ) -> Result<DispatchHandle, OrchError>;
+    ) -> Result<DispatchHandle, ProtocolError>;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -109,31 +108,15 @@ pub trait Dispatcher: Send + Sync {
 #[non_exhaustive]
 pub enum DispatchEvent {
     /// Intermediate progress (reasoning step, partial output, status update).
-    ///
-    /// The dispatch layer emits this when an operator produces an
-    /// [`Effect::Progress`](crate::effect::Effect::Progress).
     Progress {
         /// Progress content.
         content: Content,
     },
 
     /// An intermediate deliverable produced during execution.
-    ///
-    /// Emitted when an operator produces an
-    /// [`Effect::Artifact`](crate::effect::Effect::Artifact).
     ArtifactProduced {
         /// The artifact produced.
         artifact: Artifact,
-    },
-
-    /// An effect was emitted during operator execution.
-    ///
-    /// Emitted when [`EffectEmitter::effect`] is called by the dispatch layer.
-    /// The [`DispatchHandle::collect`] method gathers these into
-    /// [`OperatorOutput::effects`].
-    EffectEmitted {
-        /// The effect that was emitted.
-        effect: Effect,
     },
 
     /// Dispatch completed with final output.
@@ -149,8 +132,7 @@ pub enum DispatchEvent {
     /// Terminal event. No further events follow.
     Failed {
         /// The error.
-        #[serde(with = "orch_error_serde")]
-        error: OrchError,
+        error: ProtocolError,
     },
 
     /// Operator is awaiting human approval for pending tool calls.
@@ -172,7 +154,6 @@ impl DispatchEvent {
         match self {
             Self::Progress { .. } => "dispatch.progress",
             Self::ArtifactProduced { .. } => "dispatch.artifact_produced",
-            Self::EffectEmitted { .. } => "dispatch.effect_emitted",
             Self::Completed { .. } => "dispatch.completed",
             Self::Failed { .. } => "dispatch.failed",
             Self::AwaitingApproval(_) => "dispatch.awaiting_approval",
@@ -192,7 +173,7 @@ impl DispatchEvent {
     /// Serialization errors produce a JSON error object rather than panicking.
     pub fn to_sse_line(&self) -> String {
         let json = serde_json::to_string(self)
-            .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {e}\"}}" ));
+            .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {e}\"}}"));
         format!("event: {}\ndata: {}\n\n", self.event_type(), json)
     }
 }
@@ -378,16 +359,12 @@ impl DispatchHandle {
     ///
     /// This is the migration path for callers that don't need streaming.
     /// Equivalent to the old blocking `Dispatcher::dispatch` behavior.
-    pub async fn collect(mut self) -> Result<OperatorOutput, OrchError> {
+    pub async fn collect(mut self) -> Result<OperatorOutput, ProtocolError> {
         let mut terminal_output = None;
         let mut terminal_error = None;
-        let mut collected_effects = Vec::new();
 
         while let Some(event) = self.rx.recv().await {
             match event {
-                DispatchEvent::EffectEmitted { effect } => {
-                    collected_effects.push(effect);
-                }
                 DispatchEvent::Completed { output } => {
                     terminal_output = Some(output);
                 }
@@ -402,17 +379,11 @@ impl DispatchHandle {
 
         if let Some(error) = terminal_error {
             Err(error)
-        } else if let Some(mut output) = terminal_output {
-            // Effects from the channel are merged with any effects already set
-            // on the output (e.g. by make_output()). extend() rather than
-            // replace() ensures neither source is silently discarded.
-            if !collected_effects.is_empty() {
-                output.effects.extend(collected_effects);
-            }
+        } else if let Some(output) = terminal_output {
             Ok(output)
         } else {
-            Err(OrchError::DispatchFailed(
-                "dispatch ended without terminal event".into(),
+            Err(ProtocolError::unavailable(
+                "dispatch ended without terminal event",
             ))
         }
     }
@@ -473,7 +444,7 @@ impl DispatchHandle {
     ///
     /// `EffectEmitted` events appear in both the `events` vec and `output.effects`,
     /// consistent with how [`collect`](Self::collect) populates `output.effects`.
-    pub async fn collect_all(mut self) -> Result<CollectedDispatch, OrchError> {
+    pub async fn collect_all(mut self) -> Result<CollectedDispatch, ProtocolError> {
         let mut events = Vec::new();
         let mut terminal_output = None;
         let mut terminal_error = None;
@@ -497,24 +468,11 @@ impl DispatchHandle {
             return Err(error);
         }
 
-        let Some(mut output) = terminal_output else {
-            return Err(OrchError::DispatchFailed(
-                "dispatch ended without terminal event".into(),
+        let Some(output) = terminal_output else {
+            return Err(ProtocolError::unavailable(
+                "dispatch ended without terminal event",
             ));
         };
-
-        // Populate output.effects from EffectEmitted events, same as collect().
-        let collected_effects: Vec<Effect> = events
-            .iter()
-            .filter_map(|e| match e {
-                DispatchEvent::EffectEmitted { effect } => Some(effect.clone()),
-                _ => None,
-            })
-            .collect();
-
-        if !collected_effects.is_empty() {
-            output.effects.extend(collected_effects);
-        }
 
         Ok(CollectedDispatch { output, events })
     }
@@ -594,13 +552,6 @@ impl DispatchSender {
         }
     }
 
-    /// Clone the cancellation receiver.
-    ///
-    /// Used by [`EffectEmitter`] to observe cancellation without
-    /// requiring `&mut self`.
-    pub(crate) fn cancel_rx_clone(&self) -> watch::Receiver<bool> {
-        self.cancel_rx.clone()
-    }
 }
 
 // Manual Debug impl.
@@ -612,154 +563,18 @@ impl std::fmt::Debug for DispatchSender {
     }
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// EFFECT EMITTER
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ── Type aliases ─────────────────────────────────────────────────────────────
 
-/// Channel for streaming observable events during operator execution.
+/// Alias for `DispatchHandle` — the v2 name for invocation handles.
 ///
-/// Used by the dispatch layer to wire a channel for streaming progress updates,
-/// artifacts, and other observable events to the dispatch caller's [`DispatchHandle`]
-/// in real-time. It is NOT passed to operators — operators declare effects via
-/// `Context::push_effect()` / `Context::extend_effects()` instead.
+/// `InvocationHandle` is the preferred name going forward. `DispatchHandle`
+/// remains available as a deprecated alias.
+pub type InvocationHandle = DispatchHandle;
+
+/// Alias for `CollectedDispatch` — the v2 name for collected invocation results.
 ///
-/// # Design
-///
-/// This is the Rust equivalent of Python's `StreamWriter` (LangGraph)
-/// or `yield` in an async generator (ADK, Autogen). The dispatch layer
-/// streams intermediate observable events via the emitter; the
-/// terminal result comes from the function return value. These are
-/// genuinely different categories — intermediate observations vs.
-/// final output — so two mechanisms is correct modeling.
-///
-/// The emitter wraps an `Option<DispatchSender>`: `None` when no
-/// consumer is listening (tests, batch callers). Emission methods
-/// become no-ops in that case — zero overhead.
-pub struct EffectEmitter {
-    sender: Option<DispatchSender>,
-}
-
-impl EffectEmitter {
-    /// Create an emitter that forwards events to a dispatch handle.
-    pub fn new(sender: DispatchSender) -> Self {
-        Self {
-            sender: Some(sender),
-        }
-    }
-
-    /// Create a no-op emitter that discards all events.
-    ///
-    /// Use in tests or when no streaming consumer exists.
-    pub fn noop() -> Self {
-        Self { sender: None }
-    }
-
-    /// Emit an intermediate progress event (reasoning step, partial output).
-    ///
-    /// No-op if no consumer is listening.
-    pub async fn progress(&self, content: Content) {
-        if let Some(ref sender) = self.sender {
-            let _ = sender.send(DispatchEvent::Progress { content }).await;
-        }
-    }
-
-    /// Emit an intermediate artifact produced during execution.
-    ///
-    /// No-op if no consumer is listening.
-    pub async fn artifact(&self, artifact: Artifact) {
-        let _ = self
-            .emit(DispatchEvent::ArtifactProduced { artifact })
-            .await;
-    }
-
-    /// Emit an effect through the dispatch channel.
-    ///
-    /// Used by the dispatch layer to stream effects through the dispatch
-    /// channel. The dispatch handle's [`collect`](DispatchHandle::collect)
-    /// method gathers emitted effects into [`OperatorOutput::effects`].
-    ///
-    /// No-op if no consumer is listening.
-    pub async fn effect(&self, effect: Effect) {
-        if let Some(ref sender) = self.sender {
-            let _ = sender.send(DispatchEvent::EffectEmitted { effect }).await;
-        }
-    }
-
-    /// Emit a raw [`DispatchEvent`].
-    ///
-    /// Prefer the typed methods ([`progress`](Self::progress),
-    /// [`artifact`](Self::artifact)) for common cases. Use this for
-    /// custom or future event types.
-    ///
-    /// Returns `Ok(())` if sent or no consumer, `Err` if the
-    /// consumer dropped the handle.
-    pub async fn emit(&self, event: DispatchEvent) -> Result<(), ()> {
-        if let Some(ref sender) = self.sender {
-            sender.send(event).await.map_err(|_| ())
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Check whether the dispatch caller has requested cancellation.
-    ///
-    /// Used by the dispatch layer to observe caller-side cancellation.
-    /// `EffectEmitter` is not passed to operators — they use
-    /// [`DispatchContext`](crate::dispatch_context::DispatchContext).
-    pub fn is_cancelled(&self) -> bool {
-        self.sender.as_ref().is_some_and(|s| s.is_cancelled())
-    }
-
-    /// Wait until the dispatch caller requests cancellation.
-    ///
-    /// Used by the dispatch layer to race cancellation against ongoing work via
-    /// `tokio::select!`. Returns immediately when no consumer exists (no-op emitter).
-    /// `EffectEmitter` is not passed to operators — they use
-    /// [`DispatchContext`](crate::dispatch_context::DispatchContext).
-    pub async fn cancelled(&self) {
-        if let Some(ref sender) = self.sender {
-            // Clone the cancel_rx to get a mutable receiver without
-            // requiring &mut self.
-            let mut rx = sender.cancel_rx_clone();
-            if *rx.borrow() {
-                return;
-            }
-            loop {
-                if rx.changed().await.is_err() {
-                    return;
-                }
-                if *rx.borrow() {
-                    return;
-                }
-            }
-        }
-    }
-}
-
-impl std::fmt::Debug for EffectEmitter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EffectEmitter")
-            .field("active", &self.sender.is_some())
-            .finish_non_exhaustive()
-    }
-}
-
-// Serde adapter for OrchError: serializes as Display string, deserializes as DispatchFailed.
-// OrchError cannot derive Serialize/Deserialize because several variants hold Box<dyn Error>.
-// For SSE consumers the error message is sufficient.
-mod orch_error_serde {
-    use crate::error::OrchError;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(error: &OrchError, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&error.to_string())
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<OrchError, D::Error> {
-        let msg = String::deserialize(d)?;
-        Ok(OrchError::DispatchFailed(msg))
-    }
-}
+/// `CollectedInvocation` is the preferred name going forward.
+pub type CollectedInvocation = CollectedDispatch;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // TESTS
@@ -770,11 +585,17 @@ mod tests {
     use super::*;
     use crate::content::Content;
     use crate::id::DispatchId;
-    use crate::operator::OperatorOutput;
+    use crate::operator::{OperatorOutput, Outcome, TerminalOutcome};
     use std::sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
     };
+
+    fn completed_outcome() -> Outcome {
+        Outcome::Terminal {
+            terminal: TerminalOutcome::Completed,
+        }
+    }
 
     /// Helper: create a handle that immediately emits the given events then completes.
     fn make_handle_with_events(events: Vec<DispatchEvent>) -> DispatchHandle {
@@ -797,10 +618,7 @@ mod tests {
 
     fn completed_event() -> DispatchEvent {
         DispatchEvent::Completed {
-            output: OperatorOutput::new(
-                Content::text("done"),
-                crate::operator::ExitReason::Complete,
-            ),
+            output: OperatorOutput::new(Content::text("done"), completed_outcome()),
         }
     }
 
@@ -880,7 +698,7 @@ mod tests {
                 .send(DispatchEvent::Completed {
                     output: OperatorOutput::new(
                         Content::text("should not reach"),
-                        crate::operator::ExitReason::Complete,
+                        completed_outcome(),
                     ),
                 })
                 .await;
@@ -923,94 +741,33 @@ mod tests {
         );
     }
 
-    /// collect() must extend output.effects rather than replace them.
-    ///
-    /// Scenario: the operator sets output.effects in make_output() (e.g. WriteMemory),
-    /// and ALSO emits effects via the EffectEmitted channel (e.g. a Signal). Both
-    /// must appear in the final output — neither should shadow the other.
-    #[tokio::test]
-    async fn collect_extends_output_effects_not_replaces() {
-        use crate::effect::{Effect, EffectKind};
-
-        let channel_effect = Effect::new(EffectKind::Custom {
-            name: "channel-effect".into(),
-            payload: serde_json::json!({}),
-        });
-        let output_effect = Effect::new(EffectKind::Custom {
-            name: "output-effect".into(),
-            payload: serde_json::json!({}),
-        });
-
-        let (handle, sender) = DispatchHandle::channel(DispatchId::new("extend-test"));
-        tokio::spawn(async move {
-            // Emit an effect via the channel.
-            let _ = sender
-                .send(DispatchEvent::EffectEmitted {
-                    effect: channel_effect,
-                })
-                .await;
-            // Complete with an output that already carries its own effect.
-            let mut output =
-                OperatorOutput::new(Content::text("done"), crate::operator::ExitReason::Complete);
-            output.effects.push(output_effect);
-            let _ = sender.send(DispatchEvent::Completed { output }).await;
-        });
-
-        let result = handle.collect().await.unwrap();
-
-        // Both effects must survive — channel effects extend, not replace.
-        assert_eq!(
-            result.effects.len(),
-            2,
-            "expected both effects; got {:?}",
-            result.effects
-        );
-        let types: Vec<&str> = result
-            .effects
-            .iter()
-            .filter_map(|e| match &e.kind {
-                EffectKind::Custom { name, .. } => Some(name.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert!(types.contains(&"output-effect"), "output-effect missing");
-        assert!(types.contains(&"channel-effect"), "channel-effect missing");
-    }
-
     #[test]
     fn dispatch_event_serde_round_trip() {
         use crate::approval::ApprovalRequest;
         use crate::content::Content;
-        use crate::effect::{Effect, EffectKind};
-        use crate::error::OrchError;
-        use crate::operator::{ExitReason, OperatorOutput};
 
-        // Helper: serialize then deserialize and assert no panic.
         fn round_trip(ev: DispatchEvent) {
             let json = serde_json::to_string(&ev).expect("serialize");
             assert!(!json.is_empty());
             let _: DispatchEvent = serde_json::from_str(&json).expect("deserialize");
         }
 
-        round_trip(DispatchEvent::Progress { content: Content::text("thinking") });
+        round_trip(DispatchEvent::Progress {
+            content: Content::text("thinking"),
+        });
         round_trip(DispatchEvent::ArtifactProduced {
             artifact: Artifact::new("a1", vec![Content::text("output")]),
         });
-        round_trip(DispatchEvent::EffectEmitted {
-            effect: Effect::new(EffectKind::Custom {
-                name: "ping".into(),
-                payload: serde_json::json!({}),
-            }),
-        });
         round_trip(DispatchEvent::Completed {
-            output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+            output: OperatorOutput::new(Content::text("done"), completed_outcome()),
         });
-        // Failed: error serialized as string, deserializes as DispatchFailed.
         round_trip(DispatchEvent::Failed {
-            error: OrchError::DispatchFailed("something went wrong".into()),
+            error: ProtocolError::unavailable("something went wrong"),
         });
         round_trip(DispatchEvent::AwaitingApproval(ApprovalRequest::new(
-            "run-1", "wp-1", vec![],
+            "run-1",
+            "wp-1",
+            vec![],
         )));
     }
 
@@ -1018,46 +775,37 @@ mod tests {
     fn event_type_names() {
         use crate::approval::ApprovalRequest;
         use crate::content::Content;
-        use crate::effect::{Effect, EffectKind};
-        use crate::error::OrchError;
-        use crate::operator::{ExitReason, OperatorOutput};
 
         assert_eq!(
-            DispatchEvent::Progress { content: Content::text("x") }.event_type(),
+            DispatchEvent::Progress {
+                content: Content::text("x")
+            }
+            .event_type(),
             "dispatch.progress"
         );
         assert_eq!(
-            DispatchEvent::ArtifactProduced { artifact: Artifact::new("a", vec![]) }
-                .event_type(),
+            DispatchEvent::ArtifactProduced {
+                artifact: Artifact::new("a", vec![])
+            }
+            .event_type(),
             "dispatch.artifact_produced"
         );
         assert_eq!(
-            DispatchEvent::EffectEmitted {
-                effect: Effect::new(EffectKind::Custom {
-                    name: "x".into(),
-                    payload: serde_json::json!({}),
-                }),
-            }
-            .event_type(),
-            "dispatch.effect_emitted"
-        );
-        assert_eq!(
             DispatchEvent::Completed {
-                output: OperatorOutput::new(Content::text("done"), ExitReason::Complete),
+                output: OperatorOutput::new(Content::text("done"), completed_outcome()),
             }
             .event_type(),
             "dispatch.completed"
         );
         assert_eq!(
             DispatchEvent::Failed {
-                error: OrchError::DispatchFailed("x".into()),
+                error: ProtocolError::unavailable("x"),
             }
             .event_type(),
             "dispatch.failed"
         );
         assert_eq!(
-            DispatchEvent::AwaitingApproval(ApprovalRequest::new("r", "w", vec![]))
-                .event_type(),
+            DispatchEvent::AwaitingApproval(ApprovalRequest::new("r", "w", vec![])).event_type(),
             "dispatch.awaiting_approval"
         );
     }
@@ -1066,19 +814,19 @@ mod tests {
     fn sse_format() {
         use crate::content::Content;
 
-        let ev = DispatchEvent::Progress { content: Content::text("step 1") };
+        let ev = DispatchEvent::Progress {
+            content: Content::text("step 1"),
+        };
         let line = ev.to_sse_line();
         assert!(
             line.starts_with("event: dispatch.progress\ndata: "),
             "unexpected prefix: {line:?}"
         );
         assert!(line.ends_with("\n\n"), "missing trailing blank: {line:?}");
-        // Extract and validate the JSON payload.
         let data_start = line.find("data: ").unwrap() + 6;
-        let data_end = line.len() - 2; // strip trailing \n\n
+        let data_end = line.len() - 2;
         let data = &line[data_start..data_end];
         let v: serde_json::Value = serde_json::from_str(data).expect("valid JSON");
         assert_eq!(v["type"], "progress");
     }
-
 }

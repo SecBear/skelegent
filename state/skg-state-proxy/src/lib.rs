@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use layer0::error::StateError;
 use layer0::state::{SearchResult, StateStore};
 use tonic::transport::Channel;

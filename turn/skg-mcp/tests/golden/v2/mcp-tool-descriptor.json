@@ -1,0 +1,40 @@
+{
+  "id": "mcp-tool:web_search",
+  "kind": "tool",
+  "name": "web_search",
+  "description": "Search the web",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string" }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "result": { "type": "string" }
+    }
+  },
+  "accepts": ["json"],
+  "produces": ["json"],
+  "streaming": "none",
+  "scheduling": {
+    "execution_class": "exclusive",
+    "ordering_sensitive": false,
+    "idempotent": false,
+    "interruptible": false
+  },
+  "approval": "runtime_policy",
+  "auth": {
+    "mode": "service",
+    "scopes": []
+  },
+  "tags": [],
+  "extensions": {
+    "mcp": {
+      "kind": "tool",
+      "name": "web_search",
+      "title": null
+    }
+  }
+}

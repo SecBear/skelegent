@@ -1,0 +1,29 @@
+{
+  "id": "mcp-resource:state://global/config",
+  "kind": "resource",
+  "name": "config",
+  "description": "Server configuration",
+  "accepts": [],
+  "produces": ["text"],
+  "streaming": "none",
+  "scheduling": {
+    "execution_class": "shared",
+    "ordering_sensitive": false,
+    "idempotent": true,
+    "interruptible": true
+  },
+  "approval": "none",
+  "auth": {
+    "mode": "service",
+    "scopes": []
+  },
+  "tags": [],
+  "extensions": {
+    "mcp": {
+      "kind": "resource",
+      "uri": "state://global/config",
+      "mime_type": "application/json",
+      "title": null
+    }
+  }
+}

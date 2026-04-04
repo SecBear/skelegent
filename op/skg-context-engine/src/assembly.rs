@@ -10,7 +10,7 @@ use crate::ops::compact::Compact;
 use crate::ops::inject::{InjectMessage, InjectMessages, InjectSystem};
 use crate::ops::store::{LoadConversation, SaveConversation};
 use layer0::context::Message;
-use layer0::effect::Scope;
+use layer0::intent::Scope;
 use layer0::state::StateStore;
 use std::sync::Arc;
 

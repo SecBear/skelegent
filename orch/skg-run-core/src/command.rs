@@ -3,6 +3,7 @@
 use crate::deadline::PortableWakeDeadline;
 use crate::id::{RunId, WaitPointId};
 use crate::wait::{ResumeInput, WaitReason};
+use layer0::ProtocolError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -74,8 +75,8 @@ pub enum OrchestrationCommand {
     FailRun {
         /// Durable run that failed.
         run_id: RunId,
-        /// Human-readable portable failure summary.
-        error: String,
+        /// Structured failure description.
+        error: ProtocolError,
     },
     /// Commit terminal cancellation for the run.
     CancelRun {

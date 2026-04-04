@@ -37,7 +37,10 @@ use skg_turn::test_utils::{FunctionProvider, make_text_response, make_tool_call_
 ///
 /// In a real agent this would call a weather API; here it returns static data
 /// so the example runs without network access.
-#[skg_tool(name = "get_weather", description = "Get the current weather for a city")]
+#[skg_tool(
+    name = "get_weather",
+    description = "Get the current weather for a city"
+)]
 async fn get_weather(city: String) -> Result<Value, ToolError> {
     // Mock weather data — real implementation would call an external API.
     Ok(json!({
@@ -53,10 +56,10 @@ async fn get_weather(city: String) -> Result<Value, ToolError> {
 async fn get_time(timezone: String) -> Result<Value, ToolError> {
     // Mock time data keyed by timezone abbreviation.
     let time = match timezone.to_uppercase().as_str() {
-        "EST" | "ET"  => "14:32:07",
-        "PST" | "PT"  => "11:32:07",
+        "EST" | "ET" => "14:32:07",
+        "PST" | "PT" => "11:32:07",
         "UTC" | "GMT" => "19:32:07",
-        _             => "12:00:00",
+        _ => "12:00:00",
     };
     Ok(json!({ "timezone": timezone, "time": time, "format": "HH:MM:SS" }))
 }
@@ -90,17 +93,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Turn 2 → model calls get_time(timezone="EST")
     // Turn 3 → model returns a text summary using both results
 
-    let responses: Arc<Mutex<VecDeque<InferResponse>>> = Arc::new(Mutex::new(
-        VecDeque::from([
-            make_tool_call_response("get_weather", "call-weather-1", json!({"city": "NYC"})),
-            make_tool_call_response("get_time",    "call-time-1",    json!({"timezone": "EST"})),
-            make_text_response(
-                "Based on my research: New York City is currently 72°F and partly cloudy. \
+    let responses: Arc<Mutex<VecDeque<InferResponse>>> = Arc::new(Mutex::new(VecDeque::from([
+        make_tool_call_response("get_weather", "call-weather-1", json!({"city": "NYC"})),
+        make_tool_call_response("get_time", "call-time-1", json!({"timezone": "EST"})),
+        make_text_response(
+            "Based on my research: New York City is currently 72°F and partly cloudy. \
                  The local time in the Eastern timezone is 14:32. \
                  Great weather for an afternoon in the city!",
-            ),
-        ]),
-    ));
+        ),
+    ])));
 
     let turn_counter = Arc::new(AtomicUsize::new(0));
 
@@ -118,14 +119,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 req.tools.len(),
             );
 
-            let resp = responses
-                .lock()
-                .unwrap()
-                .pop_front()
-                .ok_or_else(|| ProviderError::TransientError {
+            let resp = responses.lock().unwrap().pop_front().ok_or_else(|| {
+                ProviderError::TransientError {
                     message: "FunctionProvider: response queue exhausted".into(),
                     status: None,
-                })?;
+                }
+            })?;
 
             // Print what the model is "deciding" this turn.
             if resp.tool_calls.is_empty() {
@@ -166,7 +165,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("Building CognitiveOperator with 3 tools and scripted FunctionProvider...");
-    println!("Config: max_tool_retries={}, temperature={:?}", config.max_tool_retries, config.temperature);
+    println!(
+        "Config: max_tool_retries={}, temperature={:?}",
+        config.max_tool_retries, config.temperature
+    );
 
     let op = CognitiveBuilder::new()
         .system_prompt(
@@ -210,7 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         output.message.as_text().unwrap_or("(no text response)")
     );
     println!("\n--- Execution Summary ---");
-    println!("Exit reason : {}", output.exit_reason);
+    println!("Exit reason : {}", output.outcome);
     println!("Turns used  : {}", output.metadata.turns_used);
     println!("Tokens in   : {}", output.metadata.tokens_in);
     println!("Tokens out  : {}", output.metadata.tokens_out);
@@ -225,7 +227,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("Sub-dispatches:");
         for sd in &output.metadata.sub_dispatches {
-            println!("  - {} ({}ms, success={})", sd.name, sd.duration.as_millis(), sd.success);
+            println!(
+                "  - {} ({}ms, success={})",
+                sd.name,
+                sd.duration.as_millis(),
+                sd.success
+            );
         }
     }
 

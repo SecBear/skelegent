@@ -31,8 +31,8 @@ use layer0::DispatchContext;
 use openapiv3::{
     OpenAPI, Parameter, ParameterSchemaOrContent, PathItem, ReferenceOr, RequestBody, Schema,
 };
-use serde_json::{json, Value};
-use skg_tool::{schema as skg_schema, ToolDyn, ToolError};
+use serde_json::{Value, json};
+use skg_tool::{ToolDyn, ToolError, schema as skg_schema};
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -131,9 +131,10 @@ pub fn from_openapi(
     for (path, path_item_ref) in &openapi.paths.paths {
         // Path prefix filter.
         if let Some(prefix) = &config.path_prefix
-            && !path.starts_with(prefix.as_str()) {
-                continue;
-            }
+            && !path.starts_with(prefix.as_str())
+        {
+            continue;
+        }
 
         let path_item = match path_item_ref {
             ReferenceOr::Item(item) => item,
@@ -153,13 +154,13 @@ pub fn from_openapi(
 
             // Tag filter.
             if let Some(tag_filter) = &config.tag_filter
-                && !op.tags.iter().any(|t| tag_filter.contains(t)) {
-                    continue;
-                }
+                && !op.tags.iter().any(|t| tag_filter.contains(t))
+            {
+                continue;
+            }
 
             // Operation-level params override path-level params with the same name.
-            let op_params: Vec<&Parameter> =
-                op.parameters.iter().filter_map(ref_or_item).collect();
+            let op_params: Vec<&Parameter> = op.parameters.iter().filter_map(ref_or_item).collect();
 
             let mut merged_params: Vec<&Parameter> = path_level_params.clone();
             for op_param in &op_params {
@@ -318,8 +319,7 @@ impl ToolDyn for OpenApiTool {
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
             // Return parsed JSON when possible, raw string otherwise.
-            let value: Value =
-                serde_json::from_str(&text).unwrap_or(Value::String(text));
+            let value: Value = serde_json::from_str(&text).unwrap_or(Value::String(text));
             Ok(value)
         })
     }
@@ -378,10 +378,11 @@ fn build_input_schema(
 
         // Inject description if the schema object doesn't already have one.
         if let Some(desc) = &data.description
-            && let Some(obj) = prop.as_object_mut() {
-                obj.entry("description")
-                    .or_insert_with(|| Value::String(desc.clone()));
-            }
+            && let Some(obj) = prop.as_object_mut()
+        {
+            obj.entry("description")
+                .or_insert_with(|| Value::String(desc.clone()));
+        }
 
         properties.insert(data.name.clone(), prop);
         if data.required {
@@ -392,14 +393,15 @@ fn build_input_schema(
     // Attach request body as a `"body"` property (application/json preferred).
     if let Some(body_ref) = request_body
         && let Some(body) = ref_or_item(body_ref)
-            && let Some(media) = body.content.get("application/json")
-                && let Some(schema_ref) = &media.schema {
-                    let schema_val = schema_ref_to_json(schema_ref, spec);
-                    properties.insert("body".to_string(), schema_val);
-                    if body.required {
-                        required.push(Value::String("body".to_string()));
-                    }
-                }
+        && let Some(media) = body.content.get("application/json")
+        && let Some(schema_ref) = &media.schema
+    {
+        let schema_val = schema_ref_to_json(schema_ref, spec);
+        properties.insert("body".to_string(), schema_val);
+        if body.required {
+            required.push(Value::String("body".to_string()));
+        }
+    }
 
     let mut schema = json!({
         "type": "object",
@@ -433,9 +435,7 @@ fn param_schema_to_json(psc: &ParameterSchemaOrContent, spec: &OpenAPI) -> Value
 /// `$ref` references are resolved one level from `#/components/schemas/…`.
 fn schema_ref_to_json(ref_or: &ReferenceOr<Schema>, spec: &OpenAPI) -> Value {
     match ref_or {
-        ReferenceOr::Item(schema) => {
-            serde_json::to_value(schema).unwrap_or_else(|_| json!({}))
-        }
+        ReferenceOr::Item(schema) => serde_json::to_value(schema).unwrap_or_else(|_| json!({})),
         ReferenceOr::Reference { reference } => resolve_component_schema(reference, spec),
     }
 }
@@ -807,7 +807,9 @@ paths:
         );
 
         // A space in the value must appear as `%20` in the request path.
-        let _ = tool.call(serde_json::json!({"id": "hello world"}), &ctx).await;
+        let _ = tool
+            .call(serde_json::json!({"id": "hello world"}), &ctx)
+            .await;
 
         let raw_request = server.await.expect("server task panicked");
         assert!(

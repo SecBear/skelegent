@@ -734,21 +734,19 @@ mod tests {
         struct StubProvider;
 
         impl Provider for StubProvider {
-            fn infer(
+            async fn infer(
                 &self,
                 request: InferRequest,
-            ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
-                async move {
-                    Ok(InferResponse {
-                        content: Content::text("streamed-ok"),
-                        tool_calls: vec![],
-                        stop_reason: StopReason::EndTurn,
-                        usage: TokenUsage::default(),
-                        model: request.model.unwrap_or_default(),
-                        cost: None,
-                        truncated: None,
-                    })
-                }
+            ) -> Result<InferResponse, ProviderError> {
+                Ok(InferResponse {
+                    content: Content::text("streamed-ok"),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    usage: TokenUsage::default(),
+                    model: request.model.unwrap_or_default(),
+                    cost: None,
+                    truncated: None,
+                })
             }
         }
 
@@ -780,7 +778,11 @@ mod tests {
         let mut stream = mp.infer_stream(infer_req).await.unwrap();
 
         // The stream yields exactly one Done event wrapping the full response.
-        let event = stream.next().await.expect("stream must yield Done").unwrap();
+        let event = stream
+            .next()
+            .await
+            .expect("stream must yield Done")
+            .unwrap();
         let StreamEvent::Done(response) = event else {
             panic!("expected Done event, got {event:?}");
         };
@@ -810,11 +812,11 @@ mod tests {
         }
 
         impl Provider for NativeStreamingProvider {
-            fn infer(
+            async fn infer(
                 &self,
                 _request: InferRequest,
-            ) -> impl Future<Output = Result<InferResponse, ProviderError>> + Send {
-                async { Err(ProviderError::Other("not used".into())) }
+            ) -> Result<InferResponse, ProviderError> {
+                Err(ProviderError::Other("not used".into()))
             }
 
             fn infer_stream(
@@ -855,13 +857,21 @@ mod tests {
         let mut stream = router.infer_stream(req).await.unwrap();
 
         // First event must be TextDelta (proving native streaming, not single-Done).
-        let event1 = stream.next().await.expect("stream must yield TextDelta").unwrap();
+        let event1 = stream
+            .next()
+            .await
+            .expect("stream must yield TextDelta")
+            .unwrap();
         let StreamEvent::TextDelta(chunk) = event1 else {
             panic!("expected TextDelta, got {event1:?}");
         };
         assert_eq!(chunk, "backend-1:chunk1");
 
-        let event2 = stream.next().await.expect("stream must yield Done").unwrap();
+        let event2 = stream
+            .next()
+            .await
+            .expect("stream must yield Done")
+            .unwrap();
         let StreamEvent::Done(response) = event2 else {
             panic!("expected Done, got {event2:?}");
         };

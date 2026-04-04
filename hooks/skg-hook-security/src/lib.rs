@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::dispatch::{DispatchEvent, DispatchHandle};
-use layer0::error::OrchError;
+use layer0::error::ProtocolError;
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
 use layer0::operator::OperatorInput;
 use regex::Regex;
@@ -86,7 +86,7 @@ impl DispatchMiddleware for RedactionMiddleware {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let mut inner_handle = next.dispatch(ctx, input).await?;
         let (handle, sender) = DispatchHandle::channel(inner_handle.id.clone());
         let patterns = self.patterns.clone();
@@ -211,23 +211,28 @@ impl DispatchMiddleware for ExfilGuardMiddleware {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
+    ) -> Result<DispatchHandle, ProtocolError> {
         let input_str = serde_json::to_string(&input.message).unwrap_or_default();
 
         if self.detect_generic_exfil(&input_str) {
-            return Err(OrchError::DispatchFailed(
-                "Potential exfiltration: tool input contains URL and sensitive data".into(),
+            return Err(ProtocolError::new(
+                layer0::error::ErrorCode::InvalidInput,
+                "Potential exfiltration: tool input contains URL and sensitive data",
+                false,
             ));
         }
         if self.detect_shell_exfil(&input_str) {
-            return Err(OrchError::DispatchFailed(
-                "Potential exfiltration: shell command pipes secret/env data to network tool"
-                    .into(),
+            return Err(ProtocolError::new(
+                layer0::error::ErrorCode::InvalidInput,
+                "Potential exfiltration: shell command pipes secret/env data to network tool",
+                false,
             ));
         }
         if self.detect_base64_exfil(&input_str) {
-            return Err(OrchError::DispatchFailed(
-                "Potential exfiltration: large base64 blob sent alongside URL".into(),
+            return Err(ProtocolError::new(
+                layer0::error::ErrorCode::InvalidInput,
+                "Potential exfiltration: large base64 blob sent alongside URL",
+                false,
             ));
         }
 
@@ -240,7 +245,7 @@ mod tests {
     use super::*;
     use layer0::dispatch::Artifact;
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{ExitReason, OperatorOutput, TriggerType};
+    use layer0::operator::{Outcome, OperatorOutput, TerminalOutcome, TriggerType};
 
     struct MockDispatchNext {
         output_text: String,
@@ -252,9 +257,14 @@ mod tests {
             &self,
             _ctx: &DispatchContext,
             _input: OperatorInput,
-        ) -> Result<DispatchHandle, OrchError> {
+        ) -> Result<DispatchHandle, ProtocolError> {
             let output =
-                OperatorOutput::new(Content::text(&self.output_text), ExitReason::Complete);
+                OperatorOutput::new(
+                Content::text(&self.output_text),
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            );
             let (handle, sender) = DispatchHandle::channel(DispatchId::new("mock"));
             tokio::spawn(async move {
                 let _ = sender.send(DispatchEvent::Completed { output }).await;
@@ -274,10 +284,15 @@ mod tests {
             &self,
             _ctx: &DispatchContext,
             _input: OperatorInput,
-        ) -> Result<DispatchHandle, OrchError> {
+        ) -> Result<DispatchHandle, ProtocolError> {
             let progress = Content::text(&self.progress_text);
             let output =
-                OperatorOutput::new(Content::text(&self.output_text), ExitReason::Complete);
+                OperatorOutput::new(
+                Content::text(&self.output_text),
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            );
             let (handle, sender) = DispatchHandle::channel(DispatchId::new("mock"));
             tokio::spawn(async move {
                 let _ = sender
@@ -299,9 +314,14 @@ mod tests {
             &self,
             _ctx: &DispatchContext,
             _input: OperatorInput,
-        ) -> Result<DispatchHandle, OrchError> {
+        ) -> Result<DispatchHandle, ProtocolError> {
             let artifact = Artifact::new("a1", vec![Content::text(&self.artifact_text)]);
-            let output = OperatorOutput::new(Content::text("done"), ExitReason::Complete);
+            let output = OperatorOutput::new(
+                Content::text("done"),
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            );
             let (handle, sender) = DispatchHandle::channel(DispatchId::new("mock"));
             tokio::spawn(async move {
                 let _ = sender

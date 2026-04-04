@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use layer0::dispatch::DispatchHandle;
 use layer0::dispatch_context::DispatchContext;
-use layer0::error::{EnvError, OrchError};
+use layer0::error::{ErrorCode, ProtocolError};
 use layer0::middleware::{DispatchMiddleware, DispatchNext};
 use layer0::operator::OperatorInput;
 use rand::Rng;
@@ -77,27 +77,15 @@ impl BackoffStrategy {
 // RETRYABILITY
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Default classification: transient dispatch failures are retryable;
-/// operator-not-found errors are not. Operator errors delegate to
-/// [`OperatorError::is_retryable`] for fine-grained classification.
-fn is_retryable_default(err: &OrchError) -> bool {
-    match err {
-        // Transient failures worth retrying.
-        OrchError::DispatchFailed(_) | OrchError::SignalFailed(_) => true,
-        // Permanent failures — retrying won't help.
-        OrchError::OperatorNotFound(_) | OrchError::WorkflowNotFound(_) => false,
-        // Environment errors: provisioning is transient; operator errors delegate;
-        // isolation/credential/resource violations are permanent.
-        OrchError::EnvironmentError(env_err) => match env_err {
-            EnvError::ProvisionFailed(_) => true,
-            EnvError::OperatorError(inner) => inner.is_retryable(),
-            _ => false,
-        },
-        // Operator errors: delegate to inner retryability.
-        OrchError::OperatorError(op_err) => op_err.is_retryable(),
-        // Unknown variants (non_exhaustive): default to not retrying.
-        _ => false,
+/// Default classification: delegates to [`ProtocolError::retryable`].
+///
+/// `NotFound` errors are never retried regardless of the `retryable` flag —
+/// retrying a missing operator won't make it appear.
+fn is_retryable_default(err: &ProtocolError) -> bool {
+    if err.code == ErrorCode::NotFound {
+        return false;
     }
+    err.retryable
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -105,7 +93,7 @@ fn is_retryable_default(err: &OrchError) -> bool {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Predicate that decides whether a failed dispatch should be retried.
-pub type RetryPredicate = dyn Fn(&OrchError) -> bool + Send + Sync;
+pub type RetryPredicate = dyn Fn(&ProtocolError) -> bool + Send + Sync;
 
 /// Dispatch middleware that retries failed calls with configurable backoff.
 ///
@@ -131,7 +119,7 @@ impl RetryMiddleware {
     /// Override the retryability predicate.
     pub fn with_predicate<F>(mut self, predicate: F) -> Self
     where
-        F: Fn(&OrchError) -> bool + Send + Sync + 'static,
+        F: Fn(&ProtocolError) -> bool + Send + Sync + 'static,
     {
         self.is_retryable = Box::new(predicate);
         self
@@ -146,8 +134,8 @@ impl DispatchMiddleware for RetryMiddleware {
         ctx: &DispatchContext,
         input: OperatorInput,
         next: &dyn DispatchNext,
-    ) -> Result<DispatchHandle, OrchError> {
-        let mut last_err: Option<OrchError> = None;
+    ) -> Result<DispatchHandle, ProtocolError> {
+        let mut last_err: Option<ProtocolError> = None;
 
         for attempt in 0..=self.config.max_retries {
             // Don't start a new attempt if the deadline has passed.
@@ -204,8 +192,8 @@ impl DispatchMiddleware for RetryMiddleware {
 
         // All retries exhausted or deadline expired — return the last error.
         Err(last_err.unwrap_or_else(|| {
-            OrchError::DispatchFailed(
-                "retry loop exited without an error (deadline expired before first attempt)".into(),
+            ProtocolError::unavailable(
+                "retry loop exited without an error (deadline expired before first attempt)",
             )
         }))
     }
@@ -218,12 +206,10 @@ impl DispatchMiddleware for RetryMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layer0::ExitReason;
     use layer0::content::Content;
     use layer0::dispatch::{DispatchEvent, DispatchHandle};
-    use layer0::error::OperatorError;
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{OperatorOutput, TriggerType};
+    use layer0::operator::{Outcome, OperatorOutput, TerminalOutcome, TriggerType};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -234,6 +220,15 @@ mod tests {
             let _ = sender.send(DispatchEvent::Completed { output }).await;
         });
         handle
+    }
+
+    fn ok_output() -> OperatorOutput {
+        OperatorOutput::new(
+            Content::text("ok"),
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        )
     }
 
     fn test_input() -> OperatorInput {
@@ -265,15 +260,12 @@ mod tests {
             &self,
             _ctx: &DispatchContext,
             _input: OperatorInput,
-        ) -> Result<DispatchHandle, OrchError> {
+        ) -> Result<DispatchHandle, ProtocolError> {
             let prev = self.remaining_failures.fetch_sub(1, Ordering::SeqCst);
             if prev > 0 {
-                Err(OrchError::DispatchFailed("transient".into()))
+                Err(ProtocolError::unavailable("transient"))
             } else {
-                Ok(immediate_handle(OperatorOutput::new(
-                    Content::text("ok"),
-                    ExitReason::Complete,
-                )))
+                Ok(immediate_handle(ok_output()))
             }
         }
     }
@@ -305,9 +297,9 @@ mod tests {
                 &self,
                 _ctx: &DispatchContext,
                 _input: OperatorInput,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Err(OrchError::OperatorNotFound("missing".into()))
+                Err(ProtocolError::not_found("missing"))
             }
         }
 
@@ -337,9 +329,9 @@ mod tests {
                 &self,
                 _ctx: &DispatchContext,
                 _input: OperatorInput,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Err(OrchError::DispatchFailed("always fails".into()))
+                Err(ProtocolError::unavailable("always fails"))
             }
         }
 
@@ -369,9 +361,9 @@ mod tests {
                 &self,
                 _ctx: &DispatchContext,
                 _input: OperatorInput,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Err(OrchError::DispatchFailed("always fails".into()))
+                Err(ProtocolError::unavailable("always fails"))
             }
         }
 
@@ -394,14 +386,14 @@ mod tests {
         );
     }
 
-    // ── Operator-error retryability propagation ─────────────
+    // ── Retryability propagation ─────────────────────────────
 
-    /// Mock that fails once with a retryable OperatorError, then succeeds.
-    struct RetryableOperatorErrorThenSucceed {
+    /// Mock that fails once with a retryable ProtocolError, then succeeds.
+    struct RetryableErrorThenSucceed {
         remaining: AtomicU32,
     }
 
-    impl RetryableOperatorErrorThenSucceed {
+    impl RetryableErrorThenSucceed {
         fn new() -> Self {
             Self {
                 remaining: AtomicU32::new(1),
@@ -410,58 +402,53 @@ mod tests {
     }
 
     #[async_trait]
-    impl DispatchNext for RetryableOperatorErrorThenSucceed {
+    impl DispatchNext for RetryableErrorThenSucceed {
         async fn dispatch(
             &self,
             _ctx: &DispatchContext,
             _input: OperatorInput,
-        ) -> Result<DispatchHandle, OrchError> {
+        ) -> Result<DispatchHandle, ProtocolError> {
             let prev = self.remaining.fetch_sub(1, Ordering::SeqCst);
             if prev > 0 {
-                Err(OrchError::OperatorError(OperatorError::model_retryable(
-                    std::io::Error::other("rate limited"),
-                )))
+                Err(ProtocolError::unavailable("rate limited"))
             } else {
-                Ok(immediate_handle(OperatorOutput::new(
-                    Content::text("ok"),
-                    ExitReason::Complete,
-                )))
+                Ok(immediate_handle(ok_output()))
             }
         }
     }
 
     #[tokio::test]
-    async fn retries_retryable_operator_error() {
+    async fn retries_retryable_protocol_error() {
         let mw = RetryMiddleware::new(RetryConfig {
             max_retries: 3,
             base_delay: Duration::from_millis(1),
             backoff: BackoffStrategy::Fixed,
         });
 
-        let mock = RetryableOperatorErrorThenSucceed::new();
+        let mock = RetryableErrorThenSucceed::new();
         let result = mw.dispatch(&test_ctx(), test_input(), &mock).await;
         assert!(
             result.is_ok(),
-            "should succeed after retrying retryable operator error"
+            "should succeed after retrying retryable protocol error"
         );
     }
 
     #[tokio::test]
-    async fn no_retry_on_permanent_operator_error() {
+    async fn no_retry_on_permanent_error() {
         let call_count = Arc::new(AtomicU32::new(0));
         let count = call_count.clone();
 
-        struct PermanentOperatorError(Arc<AtomicU32>);
+        struct PermanentError(Arc<AtomicU32>);
 
         #[async_trait]
-        impl DispatchNext for PermanentOperatorError {
+        impl DispatchNext for PermanentError {
             async fn dispatch(
                 &self,
                 _ctx: &DispatchContext,
                 _input: OperatorInput,
-            ) -> Result<DispatchHandle, OrchError> {
+            ) -> Result<DispatchHandle, ProtocolError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                Err(OrchError::OperatorError(OperatorError::model("permanent")))
+                Err(ProtocolError::internal("permanent"))
             }
         }
 
@@ -471,7 +458,7 @@ mod tests {
             backoff: BackoffStrategy::Fixed,
         });
 
-        let mock = PermanentOperatorError(count);
+        let mock = PermanentError(count);
         let result = mw.dispatch(&test_ctx(), test_input(), &mock).await;
         assert!(result.is_err());
         // Should have been called exactly once — no retries for permanent errors.
@@ -517,42 +504,26 @@ mod tests {
         }
     }
 
-    // ── EnvironmentError retryability ────────────────────────────
+    // ── ProtocolError retryability ────────────────────────────
 
     #[test]
-    fn provision_failed_is_retryable() {
-        use layer0::error::EnvError;
-        assert!(is_retryable_default(&OrchError::EnvironmentError(
-            EnvError::ProvisionFailed("spawn timeout".into()),
+    fn unavailable_is_retryable() {
+        assert!(is_retryable_default(&ProtocolError::unavailable(
+            "spawn timeout"
         )));
     }
 
     #[test]
-    fn isolation_violation_is_not_retryable() {
-        use layer0::error::EnvError;
-        assert!(!is_retryable_default(&OrchError::EnvironmentError(
-            EnvError::IsolationViolation("sandbox breach".into()),
+    fn internal_is_not_retryable() {
+        assert!(!is_retryable_default(&ProtocolError::internal(
+            "internal error"
         )));
     }
 
     #[test]
-    fn credential_failed_is_not_retryable() {
-        use layer0::error::EnvError;
-        assert!(!is_retryable_default(&OrchError::EnvironmentError(
-            EnvError::CredentialFailed("missing token".into()),
-        )));
-    }
-
-    #[test]
-    fn env_operator_error_delegates_to_inner() {
-        use layer0::error::EnvError;
-        // Retryable inner.
-        assert!(is_retryable_default(&OrchError::EnvironmentError(
-            EnvError::OperatorError(OperatorError::retryable("transient")),
-        )));
-        // Non-retryable inner.
-        assert!(!is_retryable_default(&OrchError::EnvironmentError(
-            EnvError::OperatorError(OperatorError::non_retryable("permanent")),
+    fn not_found_is_not_retryable() {
+        assert!(!is_retryable_default(&ProtocolError::not_found(
+            "missing operator"
         )));
     }
 }

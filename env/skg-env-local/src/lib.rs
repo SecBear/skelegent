@@ -218,7 +218,7 @@ impl Environment for LocalEnv {
             .op
             .execute(input, ctx)
             .await
-            .map_err(EnvError::OperatorError);
+            .map_err(|e| EnvError::Other(Box::new(e)));
         drop(cleanup);
         result
     }
@@ -394,8 +394,8 @@ impl CorrelationContext {
 mod tests {
     use super::*;
     use layer0::content::Content;
-    use layer0::error::OperatorError;
-    use layer0::operator::{ExitReason, OperatorOutput, TriggerType};
+    use layer0::error::ProtocolError;
+    use layer0::operator::{Outcome, OperatorOutput, TerminalOutcome, TriggerType};
 
     struct EchoOperator;
 
@@ -405,8 +405,13 @@ mod tests {
             &self,
             input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
-            Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+        ) -> Result<OperatorOutput, ProtocolError> {
+            Ok(OperatorOutput::new(
+                input.message,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
+            ))
         }
     }
 
@@ -418,8 +423,8 @@ mod tests {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
-            Err(OperatorError::model("deliberate failure"))
+        ) -> Result<OperatorOutput, ProtocolError> {
+            Err(ProtocolError::internal("deliberate failure"))
         }
     }
 
@@ -442,7 +447,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(output.message.as_text().unwrap(), "hello");
     }
 

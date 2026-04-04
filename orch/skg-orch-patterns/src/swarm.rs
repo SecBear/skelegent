@@ -1,15 +1,15 @@
 //! [`SwarmOperator`] — peer-to-peer handoff with explicit transition constraints.
 //!
 //! Unlike [`SupervisorOperator`] which uses a central selector, a swarm lets
-//! each operator declare its own successor via [`EffectKind::Handoff`]. The swarm
+//! each operator declare its own successor via [`IntentKind::Handoff`]. The swarm
 //! validates every transition against a pre-declared adjacency map and errors
 //! hard if an undeclared transition is attempted.
 //!
 //! # Flow
 //! 1. Dispatch the entry operator.
-//! 2. If it exits [`ExitReason::HandedOff`], find the [`EffectKind::Handoff`] target.
+//! 2. If it exits [`Outcome::Transfer { transfer: TransferOutcome::HandedOff }`], find the [`IntentKind::Handoff`] target.
 //! 3. Verify the transition `current → target` is allowed.
-//! 4. Dispatch the target; repeat until [`ExitReason::Complete`] or `max_handoffs`.
+//! 4. Dispatch the target; repeat until [`Outcome::Terminal { terminal: TerminalOutcome::Completed }`] or `max_handoffs`.
 //!
 //! Effects from every hop are accumulated into the final output.
 //!
@@ -31,10 +31,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::{EffectKind, HandoffContext};
-use layer0::error::OperatorError;
+use layer0::{HandoffContext, IntentKind};
+use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
+use layer0::operator::{
+    LimitReason, Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome,
+    TransferOutcome, TriggerType,
+};
 
 static SWARM_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -46,16 +49,16 @@ fn next_dispatch_id() -> DispatchId {
 /// A peer-to-peer handoff operator with explicit transition constraints.
 ///
 /// Each operator in the swarm may hand off to another by emitting
-/// [`EffectKind::Handoff`] and returning [`ExitReason::HandedOff`]. The swarm
+/// [`IntentKind::Handoff`] and returning [`Outcome::Transfer { transfer: TransferOutcome::HandedOff }`]. The swarm
 /// validates the transition against the declared adjacency map before
 /// dispatching the next operator.
 ///
 /// # Invariants
-/// * A `HandedOff` exit **must** have an accompanying `Effect::Handoff` in the
+/// * A `HandedOff` exit **must** have an accompanying `Intent::Handoff` in the
 ///   output effects, otherwise execution is an error.
 /// * A transition not present in the adjacency map is an error; the swarm does
 ///   not silently allow unlisted routes.
-/// * `max_handoffs` is a hard cap; reaching it returns [`ExitReason::MaxTurns`].
+/// * `max_handoffs` is a hard cap; reaching it returns `Outcome::Limited { MaxTurns }`.
 pub struct SwarmOperator {
     /// Allowed transitions: operator → set of valid targets.
     transitions: HashMap<OperatorId, Vec<OperatorId>>,
@@ -97,10 +100,10 @@ impl Operator for SwarmOperator {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let mut current_id = self.entry.clone();
         let mut current_input = input;
-        let mut all_effects: Vec<layer0::Effect> = Vec::new();
+        let mut all_effects: Vec<layer0::Intent> = Vec::new();
         let mut handoffs: u32 = 0;
 
         loop {
@@ -109,17 +112,19 @@ impl Operator for SwarmOperator {
             let mut output = self
                 .dispatcher
                 .dispatch(&child_ctx, current_input)
-                .await
-                .map_err(|e| OperatorError::non_retryable(e.to_string()))?
+                .await?
                 .collect()
-                .await
-                .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
+                .await?;
 
             // Extract the handoff target AND context from this round's effects
             // before moving them into the accumulator.
             let handoff: Option<(OperatorId, HandoffContext)> =
-                output.effects.iter().rev().find_map(|e| {
-                    if let EffectKind::Handoff { ref operator, ref context } = e.kind {
+                output.intents.iter().rev().find_map(|e| {
+                    if let IntentKind::Handoff {
+                        ref operator,
+                        ref context,
+                    } = e.kind
+                    {
                         Some((operator.clone(), context.clone()))
                     } else {
                         None
@@ -127,27 +132,33 @@ impl Operator for SwarmOperator {
                 });
 
             // Absorb this round's effects into the running total.
-            all_effects.append(&mut output.effects);
+            all_effects.append(&mut output.intents);
 
-            match output.exit_reason {
-                ExitReason::Complete => {
-                    output.effects = all_effects;
+            match &output.outcome {
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                } => {
+                    output.intents = all_effects;
                     return Ok(output);
                 }
-                ExitReason::HandedOff => {
+                Outcome::Transfer {
+                    transfer: TransferOutcome::HandedOff,
+                } => {
                     // Handoff cap enforced before any routing work.
                     if handoffs >= self.max_handoffs {
                         let mut out = OperatorOutput::new(
                             output.message.clone(),
-                            ExitReason::MaxTurns,
+                            Outcome::Limited {
+                                limit: LimitReason::MaxTurns,
+                            },
                         );
-                        out.effects = all_effects;
+                        out.intents = all_effects;
                         return Ok(out);
                     }
 
                     let (target, context) = handoff.ok_or_else(|| {
-                        OperatorError::non_retryable(format!(
-                            "operator '{}' exited HandedOff but emitted no EffectKind::Handoff",
+                        ProtocolError::internal(format!(
+                            "operator '{}' exited HandedOff but emitted no IntentKind::Handoff",
                             current_id.as_str()
                         ))
                     })?;
@@ -160,7 +171,7 @@ impl Operator for SwarmOperator {
                         .unwrap_or(false);
 
                     if !allowed {
-                        return Err(OperatorError::non_retryable(format!(
+                        return Err(ProtocolError::internal(format!(
                             "swarm: transition '{}' → '{}' is not allowed",
                             current_id.as_str(),
                             target.as_str()
@@ -177,9 +188,9 @@ impl Operator for SwarmOperator {
                     current_input = next_input;
                     current_id = target;
                 }
-                // Unexpected exit — surface immediately with accumulated effects.
+                // Unexpected exit — surface immediately with accumulated intents.
                 _ => {
-                    output.effects = all_effects;
+                    output.intents = all_effects;
                     return Ok(output);
                 }
             }
@@ -244,7 +255,9 @@ impl SwarmBuilder {
     /// Panics if [`entry`](Self::entry) was never called.
     pub fn build(self) -> SwarmOperator {
         SwarmOperator {
-            entry: self.entry.expect("SwarmBuilder: entry operator is required"),
+            entry: self
+                .entry
+                .expect("SwarmBuilder: entry operator is required"),
             transitions: self.transitions,
             dispatcher: self.dispatcher,
             max_handoffs: self.max_handoffs,
@@ -261,12 +274,15 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use layer0::DispatchContext;
     use layer0::content::Content;
-    use layer0::effect::{Effect, EffectKind, HandoffContext};
-    use layer0::error::OperatorError;
+    use layer0::{HandoffContext, Intent, IntentKind};
+    use layer0::error::ProtocolError;
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{ExitReason, Operator, OperatorInput, OperatorOutput, TriggerType};
-    use layer0::{DispatchContext, ExitReason as ER};
+    use layer0::operator::{
+        Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TransferOutcome,
+        TriggerType,
+    };
     use skg_orch_local::LocalOrch;
 
     use super::*;
@@ -290,15 +306,17 @@ mod tests {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
+        ) -> Result<OperatorOutput, ProtocolError> {
             Ok(OperatorOutput::new(
                 Content::text(self.reply.clone()),
-                ExitReason::Complete,
+                Outcome::Terminal {
+                    terminal: TerminalOutcome::Completed,
+                },
             ))
         }
     }
 
-    /// Operator that emits `Effect::Handoff` with a structured `HandoffContext`.
+    /// Operator that emits `Intent::Handoff` with a structured `HandoffContext`.
     struct HandoffOp {
         target: OperatorId,
         reply: String,
@@ -310,12 +328,14 @@ mod tests {
             &self,
             _input: OperatorInput,
             _ctx: &DispatchContext,
-        ) -> Result<OperatorOutput, OperatorError> {
+        ) -> Result<OperatorOutput, ProtocolError> {
             let mut out = OperatorOutput::new(
                 Content::text(self.reply.clone()),
-                ExitReason::HandedOff,
+                Outcome::Transfer {
+                    transfer: TransferOutcome::HandedOff,
+                },
             );
-            out.effects.push(Effect::new(EffectKind::Handoff {
+            out.intents.push(Intent::new(IntentKind::Handoff {
                 operator: self.target.clone(),
                 context: HandoffContext {
                     task: Content::text(self.reply.clone()),
@@ -346,27 +366,31 @@ mod tests {
         );
         let orch = Arc::new(orch);
 
-        let swarm = SwarmOperator::builder(
-            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
-        )
-        .entry(OperatorId::new("op-a"))
-        .transition(OperatorId::new("op-a"), OperatorId::new("op-b"))
-        .max_handoffs(5)
-        .build();
+        let swarm =
+            SwarmOperator::builder(Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>)
+                .entry(OperatorId::new("op-a"))
+                .transition(OperatorId::new("op-a"), OperatorId::new("op-b"))
+                .max_handoffs(5)
+                .build();
 
         let output = swarm
             .execute(simple_input("task"), &test_ctx("swarm"))
             .await
             .expect("swarm should complete");
 
-        assert_eq!(output.exit_reason, ER::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(
             output.message.as_text().unwrap_or(""),
             "from-b",
             "final message must come from op-b"
         );
-        // One Effect::Handoff from op-a.
-        assert_eq!(output.effects.len(), 1);
+        // One Intent::Handoff from op-a.
+        assert_eq!(output.intents.len(), 1);
     }
 
     /// A tries to hand off to C, but only A→B is declared. Must error.
@@ -390,13 +414,12 @@ mod tests {
         );
         let orch = Arc::new(orch);
 
-        let swarm = SwarmOperator::builder(
-            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
-        )
-        .entry(OperatorId::new("op-a"))
-        .transition(OperatorId::new("op-a"), OperatorId::new("op-b")) // B, not C
-        .max_handoffs(5)
-        .build();
+        let swarm =
+            SwarmOperator::builder(Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>)
+                .entry(OperatorId::new("op-a"))
+                .transition(OperatorId::new("op-a"), OperatorId::new("op-b")) // B, not C
+                .max_handoffs(5)
+                .build();
 
         let result = swarm
             .execute(simple_input("task"), &test_ctx("swarm-reject"))
@@ -427,12 +450,14 @@ mod tests {
                 &self,
                 _input: OperatorInput,
                 _ctx: &DispatchContext,
-            ) -> Result<OperatorOutput, OperatorError> {
+            ) -> Result<OperatorOutput, ProtocolError> {
                 let mut out = OperatorOutput::new(
                     Content::text("output-message-ignored"),
-                    ExitReason::HandedOff,
+                    Outcome::Transfer {
+                        transfer: TransferOutcome::HandedOff,
+                    },
                 );
-                out.effects.push(Effect::new(EffectKind::Handoff {
+                out.intents.push(Intent::new(IntentKind::Handoff {
                     operator: OperatorId::new("receiver"),
                     context: HandoffContext {
                         task: Content::text("context-task-for-receiver"),
@@ -455,10 +480,14 @@ mod tests {
                 &self,
                 input: OperatorInput,
                 _ctx: &DispatchContext,
-            ) -> Result<OperatorOutput, OperatorError> {
-                *self.received.lock().unwrap() =
-                    input.message.as_text().unwrap_or("").to_string();
-                Ok(OperatorOutput::new(Content::text("done"), ExitReason::Complete))
+            ) -> Result<OperatorOutput, ProtocolError> {
+                *self.received.lock().unwrap() = input.message.as_text().unwrap_or("").to_string();
+                Ok(OperatorOutput::new(
+                    Content::text("done"),
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
+                ))
             }
         }
 
@@ -467,24 +496,30 @@ mod tests {
         orch.register(OperatorId::new("sender"), Arc::new(DistinctTaskOp));
         orch.register(
             OperatorId::new("receiver"),
-            Arc::new(RecordingOp { received: received.clone() }),
+            Arc::new(RecordingOp {
+                received: received.clone(),
+            }),
         );
         let orch = Arc::new(orch);
 
-        let swarm = SwarmOperator::builder(
-            Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>,
-        )
-        .entry(OperatorId::new("sender"))
-        .transition(OperatorId::new("sender"), OperatorId::new("receiver"))
-        .max_handoffs(5)
-        .build();
+        let swarm =
+            SwarmOperator::builder(Arc::clone(&orch) as Arc<dyn layer0::dispatch::Dispatcher>)
+                .entry(OperatorId::new("sender"))
+                .transition(OperatorId::new("sender"), OperatorId::new("receiver"))
+                .max_handoffs(5)
+                .build();
 
         let output = swarm
             .execute(simple_input("start"), &test_ctx("swarm-task"))
             .await
             .expect("swarm must complete");
 
-        assert_eq!(output.exit_reason, ER::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(
             *received.lock().unwrap(),
             "context-task-for-receiver",

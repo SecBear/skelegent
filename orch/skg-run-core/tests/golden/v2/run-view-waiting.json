@@ -1,0 +1,6 @@
+{
+  "status": "waiting",
+  "run_id": "run-42",
+  "wait_point": "wp-1",
+  "wait_reason": "approval"
+}

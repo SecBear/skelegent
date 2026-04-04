@@ -19,6 +19,7 @@
 //! subscriber, not rely on the broadcast channel.
 
 use layer0::context::Message;
+use layer0::intent::Intent;
 use skg_turn::stream::StreamEvent;
 use std::sync::Arc;
 use std::time::Instant;
@@ -71,8 +72,8 @@ pub enum ContextMutation {
     /// A streaming inference token/chunk arrived.
     InferenceDelta(StreamEvent),
 
-    /// An effect was declared on the context.
-    EffectDeclared(layer0::effect::Effect),
+    /// An intent was declared on the context.
+    IntentDeclared(Intent),
 }
 
 /// A timestamped context mutation event.

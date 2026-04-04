@@ -11,7 +11,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use layer0::ToolMetadata;
+use layer0::{
+    ApprovalFacts, AuthFacts, CapabilityDescriptor, CapabilityId, CapabilityKind,
+    CapabilityModality, ExecutionClass, SchedulingFacts, StreamingSupport, ToolMetadata,
+};
 use rmcp::ServiceExt;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams, PromptMessage,
@@ -380,6 +383,119 @@ impl McpPromptWrapper {
     }
 }
 
+/// Project an MCP [`Tool`](McpTool) into a [`CapabilityDescriptor`].
+///
+/// The descriptor ID is `"mcp-tool:{name}"`.  The MCP-specific extras (name,
+/// title) are stored in `extensions["mcp"]` so callers can round-trip.
+pub fn descriptor_from_mcp_tool(tool: &McpTool) -> CapabilityDescriptor {
+    let scheduling = SchedulingFacts::new(ExecutionClass::Exclusive, false, false, false, None);
+    let id = CapabilityId::new(format!("mcp-tool:{}", tool.name));
+    let description = tool.description.as_deref().unwrap_or("").to_string();
+
+    let mut desc = CapabilityDescriptor::new(
+        id,
+        CapabilityKind::Tool,
+        tool.name.as_ref(),
+        description,
+        scheduling,
+        ApprovalFacts::RuntimePolicy,
+        AuthFacts::Service { scopes: vec![] },
+    );
+    desc.input_schema = Some(
+        serde_json::to_value(&*tool.input_schema)
+            .unwrap_or_else(|_| serde_json::json!({"type": "object"})),
+    );
+    desc.output_schema = tool
+        .output_schema
+        .as_deref()
+        .and_then(|m| serde_json::to_value(m).ok());
+    desc.accepts = vec![CapabilityModality::Json];
+    desc.produces = vec![CapabilityModality::Json];
+    desc.streaming = StreamingSupport::None;
+
+    let mut mcp_ext = serde_json::Map::new();
+    mcp_ext.insert("kind".to_string(), serde_json::json!("tool"));
+    mcp_ext.insert("name".to_string(), serde_json::json!(tool.name.as_ref()));
+    mcp_ext.insert("title".to_string(), serde_json::json!(null));
+    desc.extensions
+        .insert("mcp".to_string(), serde_json::Value::Object(mcp_ext));
+
+    desc
+}
+
+/// Project an MCP [`Prompt`](rmcp::model::Prompt) into a [`CapabilityDescriptor`].
+///
+/// The descriptor ID is `"mcp-prompt:{name}"`.  The MCP-specific extras are
+/// stored in `extensions["mcp"]`.
+pub fn descriptor_from_mcp_prompt(prompt: &rmcp::model::Prompt) -> CapabilityDescriptor {
+    let scheduling = SchedulingFacts::new(ExecutionClass::Shared, false, true, true, None);
+    let id = CapabilityId::new(format!("mcp-prompt:{}", prompt.name));
+    let description = prompt.description.as_deref().unwrap_or("").to_string();
+
+    let mut desc = CapabilityDescriptor::new(
+        id,
+        CapabilityKind::Prompt,
+        &prompt.name,
+        description,
+        scheduling,
+        ApprovalFacts::None,
+        AuthFacts::Service { scopes: vec![] },
+    );
+    desc.accepts = vec![CapabilityModality::Json];
+    desc.produces = vec![CapabilityModality::Text];
+    desc.streaming = StreamingSupport::None;
+
+    let mut mcp_ext = serde_json::Map::new();
+    mcp_ext.insert("kind".to_string(), serde_json::json!("prompt"));
+    mcp_ext.insert("name".to_string(), serde_json::json!(&prompt.name));
+    mcp_ext.insert("title".to_string(), serde_json::json!(null));
+    mcp_ext.insert("arguments".to_string(), serde_json::json!(null));
+    desc.extensions
+        .insert("mcp".to_string(), serde_json::Value::Object(mcp_ext));
+
+    desc
+}
+
+/// Project an MCP [`Resource`](rmcp::model::Resource) into a [`CapabilityDescriptor`].
+///
+/// The descriptor ID is `"mcp-resource:{uri}"`.  The MCP-specific extras are
+/// stored in `extensions["mcp"]`.
+pub fn descriptor_from_mcp_resource(resource: &rmcp::model::Resource) -> CapabilityDescriptor {
+    let scheduling = SchedulingFacts::new(ExecutionClass::Shared, false, true, true, None);
+    let id = CapabilityId::new(format!("mcp-resource:{}", resource.uri));
+    let description = resource.description.as_deref().unwrap_or("").to_string();
+
+    let mut desc = CapabilityDescriptor::new(
+        id,
+        CapabilityKind::Resource,
+        &resource.name,
+        description,
+        scheduling,
+        ApprovalFacts::None,
+        AuthFacts::Service { scopes: vec![] },
+    );
+    desc.accepts = vec![];
+    desc.produces = vec![CapabilityModality::Text];
+    desc.streaming = StreamingSupport::None;
+
+    let mut mcp_ext = serde_json::Map::new();
+    mcp_ext.insert("kind".to_string(), serde_json::json!("resource"));
+    mcp_ext.insert("uri".to_string(), serde_json::json!(&resource.uri));
+    mcp_ext.insert(
+        "mime_type".to_string(),
+        resource
+            .mime_type
+            .as_deref()
+            .map(|m| serde_json::json!(m))
+            .unwrap_or(serde_json::json!(null)),
+    );
+    mcp_ext.insert("title".to_string(), serde_json::json!(null));
+    desc.extensions
+        .insert("mcp".to_string(), serde_json::Value::Object(mcp_ext));
+
+    desc
+}
+
 /// Wrapper that adapts an MCP tool to the [`ToolDyn`] interface.
 ///
 /// Holds a reference to the MCP peer for making remote tool calls.
@@ -536,7 +652,10 @@ mod tests {
     fn mcp_tool_output_schema_none() {
         let tool = make_test_tool("no_schema", "no output schema");
         // Same expression as McpToolWrapper::output_schema()
-        let result = tool.output_schema.as_deref().and_then(|m| serde_json::to_value(m).ok());
+        let result = tool
+            .output_schema
+            .as_deref()
+            .and_then(|m| serde_json::to_value(m).ok());
         assert!(result.is_none());
     }
 
@@ -545,7 +664,8 @@ mod tests {
     /// Tests the same field-access expression used in `McpToolWrapper::output_schema()`.
     #[test]
     fn mcp_tool_output_schema_present() {
-        let output_schema_val = json!({"type": "object", "properties": {"answer": {"type": "string"}}});
+        let output_schema_val =
+            json!({"type": "object", "properties": {"answer": {"type": "string"}}});
         let output_schema_obj = output_schema_val.as_object().unwrap().clone();
         let schema = json!({"type": "object"});
         let schema_obj = schema.as_object().unwrap().clone();
@@ -561,7 +681,11 @@ mod tests {
             meta: None,
         };
         // Same expression as McpToolWrapper::output_schema()
-        let result = tool.output_schema.as_deref().and_then(|m| serde_json::to_value(m).ok()).unwrap();
+        let result = tool
+            .output_schema
+            .as_deref()
+            .and_then(|m| serde_json::to_value(m).ok())
+            .unwrap();
         assert_eq!(result["type"], "object");
         assert!(result["properties"]["answer"].is_object());
     }

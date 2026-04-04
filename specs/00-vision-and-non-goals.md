@@ -1,3 +1,5 @@
+> **RETIRED — superseded by specs/v2/. Do not use for new implementation work.**
+
 # Vision and Non-Goals
 
 ## Vision

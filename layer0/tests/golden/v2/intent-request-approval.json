@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "intent_id": "intent-2",
+    "seq": 2
+  },
+  "kind": {
+    "kind": "request_approval",
+    "tool_name": "dangerous_tool",
+    "call_id": "call-1",
+    "input": {
+      "cmd": "rm -rf /tmp/test"
+    }
+  }
+}

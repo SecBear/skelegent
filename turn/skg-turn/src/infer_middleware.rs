@@ -365,7 +365,9 @@ mod tests {
                 mut request: InferRequest,
                 next: &dyn InferNext,
             ) -> Result<InferResponse, ProviderError> {
-                request.provider_options.insert("test".to_string(), serde_json::json!({"tagged": true}));
+                request
+                    .provider_options
+                    .insert("test".to_string(), serde_json::json!({"tagged": true}));
                 next.infer(request).await
             }
         }

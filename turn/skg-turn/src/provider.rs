@@ -181,7 +181,8 @@ impl<T: Provider> DynProvider for T {
     fn infer_stream_boxed(
         &self,
         request: InferRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::stream::InferStream, ProviderError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<crate::stream::InferStream, ProviderError>> + Send + '_>>
+    {
         Box::pin(self.infer_stream(request))
     }
 

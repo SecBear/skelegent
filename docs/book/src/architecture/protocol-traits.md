@@ -16,7 +16,7 @@ pub trait Operator: Send + Sync {
     async fn execute(
         &self,
         input: OperatorInput,
-    ) -> Result<OperatorOutput, OperatorError>;
+    ) -> Result<OperatorOutput, ProtocolError>;
 }
 ```
 
@@ -58,26 +58,23 @@ Tools are operators registered with `ToolMetadata`. The `allowed_operators` fiel
 ```rust
 pub struct OperatorOutput {
     pub message: Content,              // The operator's response
-    pub exit_reason: ExitReason,       // Why the loop stopped
+    pub outcome: Outcome,              // Why the loop stopped
     pub metadata: OperatorMetadata,    // Tokens, cost, timing, tool records
-    pub effects: Vec<Effect>,          // Side-effects to execute
+    pub intents: Vec<Intent>,          // Executable declarations to execute
 }
 ```
 
-The `effects` field is a critical design decision. The operator *declares* effects but does not execute them. The calling layer (orchestrator, environment, lifecycle coordinator) decides when and how to execute them. This is what makes the same operator code work both in-process and in a durable workflow.
+The `intents` field is a critical design decision. The operator *declares* intents but does not execute them. The calling layer (orchestrator, environment, lifecycle coordinator) decides when and how to execute them. This is what makes the same operator code work both in-process and in a durable workflow.
 
-### ExitReason
+### Outcome
 
 ```rust
-pub enum ExitReason {
-    Complete,                   // Natural completion
-    MaxTurns,                   // Hit iteration limit
-    BudgetExhausted,            // Hit cost budget
-    CircuitBreaker,             // Consecutive failures
-    Timeout,                    // Wall-clock timeout
-    MiddlewareHalt { reason },    // Middleware halted execution
-    Error,                      // Unrecoverable error
-    Custom(String),             // Extension point
+pub enum Outcome {
+    Terminal(TerminalOutcome),         // Natural completion
+    Limited(LimitedOutcome),           // Resource limit reached (MaxTurns, Budget, Timeout)
+    Suspended(SuspendedOutcome),       // Paused awaiting external input
+    Transferred(TransferredOutcome),   // Control transferred to another operator
+    Intercepted(InterceptedOutcome),   // Intercepted by middleware or rule
 }
 ```
 
@@ -134,7 +131,7 @@ pub trait Dispatcher: Send + Sync {
 
         input: OperatorInput,
 
-    ) -> Result<OperatorOutput, OrchError>;
+    ) -> Result<OperatorOutput, ProtocolError>;
 
 }
 
@@ -176,7 +173,7 @@ pub trait Signalable: Send + Sync {
 
         signal: SignalPayload,
 
-    ) -> Result<(), OrchError>;
+    ) -> Result<(), ProtocolError>;
 
 }
 
@@ -214,7 +211,7 @@ pub trait Queryable: Send + Sync {
 
         query: QueryPayload,
 
-    ) -> Result<serde_json::Value, OrchError>;
+    ) -> Result<serde_json::Value, ProtocolError>;
 
 }
 
@@ -262,7 +259,7 @@ pub trait StateReader: Send + Sync {
 }
 ```
 
-Every `StateStore` automatically implements `StateReader` via a blanket impl. Operators receive `&dyn StateReader` during context assembly -- they can read but cannot write directly. Writes go through `Effect`s in the `OperatorOutput`.
+Every `StateStore` automatically implements `StateReader` via a blanket impl. Operators receive `&dyn StateReader` during context assembly -- they can read but cannot write directly. Writes go through `Intent`s in the `OperatorOutput`.
 
 ## Protocol 4: Environment
 
@@ -308,7 +305,7 @@ pub trait DispatchMiddleware: Send + Sync {
         operator: &OperatorId,
         input: OperatorInput,
         next: DispatchNext<'_>,
-    ) -> Result<OperatorOutput, OrchError>;
+    ) -> Result<OperatorOutput, ProtocolError>;
 }
 
 #[async_trait]
@@ -335,7 +332,7 @@ pub trait ExecMiddleware: Send + Sync {
         &self,
         input: OperatorInput,
         next: ExecNext<'_>,
-    ) -> Result<OperatorOutput, OperatorError>;
+    ) -> Result<OperatorOutput, ProtocolError>;
 }
 ```
 

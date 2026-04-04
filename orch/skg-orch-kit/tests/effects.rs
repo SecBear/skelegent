@@ -1,6 +1,6 @@
 use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::effect::{Effect, EffectKind, MemoryScope, Scope, SignalPayload};
+use layer0::{Intent, IntentKind, MemoryScope, Scope, SignalPayload};
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::state::StateStore;
@@ -33,7 +33,7 @@ impl Signalable for MockOrch {
         &self,
         target: &WorkflowId,
         signal: SignalPayload,
-    ) -> Result<(), layer0::error::OrchError> {
+    ) -> Result<(), layer0::error::ProtocolError> {
         self.signals.lock().await.push((target.clone(), signal));
         Ok(())
     }
@@ -46,7 +46,7 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
 
     // Write then read outside handler.
-    let effect = Effect::new(EffectKind::WriteMemory {
+    let effect = Intent::new(IntentKind::WriteMemory {
         scope: Scope::Global,
         key: "k1".into(),
         value: json!({"v": 1}),
@@ -63,7 +63,7 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
     assert_eq!(got, Some(json!({"v": 1})));
 
     // Delete a missing key is Ok (idempotent)
-    let effect = Effect::new(EffectKind::DeleteMemory {
+    let effect = Intent::new(IntentKind::DeleteMemory {
         scope: Scope::Global,
         key: "missing".into(),
     });
@@ -74,7 +74,7 @@ async fn executes_write_read_delete_sequence_and_delete_missing_ok() {
     assert!(matches!(outcome, EffectOutcome::Applied));
 
     // Delete existing key then verify None
-    let effect = Effect::new(EffectKind::DeleteMemory {
+    let effect = Intent::new(IntentKind::DeleteMemory {
         scope: Scope::Global,
         key: "k1".into(),
     });
@@ -93,7 +93,7 @@ async fn delegate_handoff_and_signal_return_correct_outcomes() {
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
 
     // Delegate returns EffectOutcome::Delegate
-    let effect = Effect::new(EffectKind::Delegate {
+    let effect = Intent::new(IntentKind::Delegate {
         operator: OperatorId::new("child"),
         input: Box::new(OperatorInput::new(
             Content::text("child task"),
@@ -107,9 +107,13 @@ async fn delegate_handoff_and_signal_return_correct_outcomes() {
     );
 
     // Handoff returns EffectOutcome::Handoff
-    let effect = Effect::new(EffectKind::Handoff {
+    let effect = Intent::new(IntentKind::Handoff {
         operator: OperatorId::new("handoff_target"),
-        metadata: Some(json!({"ticket": 123})),
+        context: layer0::HandoffContext {
+            task: layer0::Content::text("handoff task"),
+            history: None,
+            metadata: Some(json!({"ticket": 123})),
+        },
     });
     let outcome = handler.handle(&effect, &ctx).await.expect("handoff ok");
     assert!(
@@ -118,7 +122,7 @@ async fn delegate_handoff_and_signal_return_correct_outcomes() {
     );
 
     // Signal is sent via Signalable
-    let effect = Effect::new(EffectKind::Signal {
+    let effect = Intent::new(IntentKind::Signal {
         target: WorkflowId::new("wf1"),
         payload: SignalPayload::new("sig.type", json!({"ok": true})),
     });
@@ -139,16 +143,16 @@ async fn preserves_effect_order_across_memory_and_orch_calls() {
 
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
     // Delete then Write ensures final value exists only if order preserved.
-    let effects: Vec<Effect> = vec![
-        Effect::new(EffectKind::DeleteMemory {
+    let effects: Vec<Intent> = vec![
+        Intent::new(IntentKind::DeleteMemory {
             scope: Scope::Global,
             key: "k_order".into(),
         }),
-        Effect::new(EffectKind::Delegate {
+        Intent::new(IntentKind::Delegate {
             operator: OperatorId::new("a"),
             input: Box::new(OperatorInput::new(Content::text("x"), TriggerType::Task)),
         }),
-        Effect::new(EffectKind::WriteMemory {
+        Intent::new(IntentKind::WriteMemory {
             scope: Scope::Global,
             key: "k_order".into(),
             value: json!(42),
@@ -159,7 +163,7 @@ async fn preserves_effect_order_across_memory_and_orch_calls() {
             salience: None,
             ttl: None,
         }),
-        Effect::new(EffectKind::Signal {
+        Intent::new(IntentKind::Signal {
             target: WorkflowId::new("wf_order"),
             payload: SignalPayload::new("t", json!({})),
         }),
@@ -192,7 +196,7 @@ async fn signal_without_signaler_returns_error() {
     let handler = LocalEffectHandler::new(state, None);
     let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
 
-    let effect = Effect::new(EffectKind::Signal {
+    let effect = Intent::new(IntentKind::Signal {
         target: WorkflowId::new("wf1"),
         payload: SignalPayload::new("t", json!({})),
     });

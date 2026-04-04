@@ -13,8 +13,8 @@
 use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::dispatch::Dispatcher;
-use layer0::effect::Effect;
-use layer0::error::{OrchError, StateError};
+use layer0::Intent;
+use layer0::error::{ProtocolError, StateError};
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::OperatorInput;
 use serde::{Deserialize, Serialize};
@@ -23,9 +23,9 @@ use thiserror::Error;
 /// Error type for effect handling.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Dispatch error.
-    #[error("orchestrator error: {0}")]
-    Dispatch(#[from] OrchError),
+    /// Protocol error.
+    #[error("protocol error: {0}")]
+    Protocol(#[from] ProtocolError),
     /// State backend error.
     #[error("state error: {0}")]
     State(#[from] StateError),
@@ -79,38 +79,38 @@ pub enum EffectOutcome {
     },
 }
 
-/// Handle a single effect and return what happened.
+/// Handle a single intent and return what happened.
 ///
-/// This is the single interface between effect declarations ([`Effect`] from
+/// This is the single interface between intent declarations ([`Intent`] from
 /// `layer0`) and their execution. Inspired by algebraic effect handlers:
-/// the handler interprets an effect, performs any side effects (state writes,
+/// the handler interprets an intent, performs any side effects (state writes,
 /// signal delivery), and returns a structured outcome.
 ///
-/// Dispatch effects (`Delegate`, `Handoff`) are NEVER executed by the handler.
+/// Dispatch intents (`Delegate`, `Handoff`) are NEVER executed by the handler.
 /// They are returned as [`EffectOutcome::Delegate`] / [`EffectOutcome::Handoff`]
 /// so the caller can control the dispatch loop (depth limiting, tracing,
 /// durable scheduling).
 ///
-/// For fire-and-forget callers, [`execute_effects`] dispatches immediately.
+/// For fire-and-forget callers, [`execute_intents`] dispatches immediately.
 #[async_trait]
 pub trait EffectHandler: Send + Sync {
-    /// Handle a single effect. Returns the outcome for the caller to act on.
-    async fn handle(&self, effect: &Effect, ctx: &DispatchContext) -> Result<EffectOutcome, Error>;
+    /// Handle a single intent. Returns the outcome for the caller to act on.
+    async fn handle(&self, intent: &Intent, ctx: &DispatchContext) -> Result<EffectOutcome, Error>;
 }
 
-/// Execute all effects, dispatching followups immediately.
+/// Execute all intents, dispatching followups immediately.
 ///
 /// Convenience for callers that don't need depth limiting or trace recording.
-/// Calls [`EffectHandler::handle`] for each effect and dispatches any
+/// Calls [`EffectHandler::handle`] for each intent and dispatches any
 /// [`EffectOutcome::Delegate`] / [`EffectOutcome::Handoff`] outcomes through
 /// the provided dispatcher.
-pub async fn execute_effects(
+pub async fn execute_intents(
     handler: &dyn EffectHandler,
-    effects: &[Effect],
+    intents: &[Intent],
     ctx: &DispatchContext,
     dispatcher: &dyn Dispatcher,
 ) -> Result<(), Error> {
-    for effect in effects {
+    for effect in intents {
         match handler.handle(effect, ctx).await? {
             EffectOutcome::Applied | EffectOutcome::Skipped => {}
             EffectOutcome::Delegate { operator, input }
@@ -118,9 +118,11 @@ pub async fn execute_effects(
                 let child_ctx = ctx.child(DispatchId::new(operator.as_str()), operator);
                 dispatcher
                     .dispatch(&child_ctx, input)
-                    .await?
+                    .await
+                    .map_err(Error::Protocol)?
                     .collect()
-                    .await?;
+                    .await
+                    .map_err(Error::Protocol)?;
             }
         }
     }
@@ -142,8 +144,8 @@ pub trait Signalable: Send + Sync {
     async fn signal(
         &self,
         target: &WorkflowId,
-        signal: layer0::effect::SignalPayload,
-    ) -> Result<(), OrchError>;
+        signal: layer0::SignalPayload,
+    ) -> Result<(), ProtocolError>;
 }
 
 /// Read-only query of a running workflow's state.
@@ -159,7 +161,7 @@ pub trait Queryable: Send + Sync {
         &self,
         target: &WorkflowId,
         query: QueryPayload,
-    ) -> Result<serde_json::Value, OrchError>;
+    ) -> Result<serde_json::Value, ProtocolError>;
 }
 
 /// Payload for querying a running workflow.

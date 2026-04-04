@@ -18,18 +18,23 @@ use layer0::DispatchContext;
 use layer0::approval::{ApprovalResponse, ToolCallAction};
 use layer0::content::Content;
 use layer0::context::{Message, Role};
+use layer0::dispatch::Dispatcher;
 use layer0::duration::DurationMs;
-use layer0::effect::{Effect, EffectKind, HandoffContext};
 use layer0::id::OperatorId;
-use layer0::operator::{ExitReason, OperatorMetadata, OperatorOutput};
+use layer0::intent::{HandoffContext, Intent, IntentKind};
+use layer0::operator::{InterceptionKind, Outcome, TerminalOutcome, TransferOutcome};
+#[cfg(test)]
+use layer0::operator::LimitReason;
+use layer0::operator::{OperatorMetadata, OperatorOutput};
+use layer0::wait::WaitReason;
 use serde_json::Value;
 use skg_tool::{ToolConcurrencyHint, ToolDyn, ToolError, ToolRegistry};
 use skg_turn::infer::{InferResponse, ToolCall};
 use skg_turn::provider::Provider;
 use skg_turn::types::{StopReason, ToolSchema};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use std::collections::HashMap;
 
 /// Predicate for dynamic tool availability.
 ///
@@ -188,20 +193,24 @@ impl ReactLoopConfig {
     }
 }
 
-/// Map a provider stop reason to an operator exit reason.
+/// Map a provider stop reason to an operator outcome.
 ///
 /// This is the decision point for determining why an agent loop ended.
 /// The default mapping used by [`react_loop()`]:
-/// - `StopReason::ContentFilter` → `ExitReason::SafetyStop`
-/// - Everything else → `ExitReason::Complete`
+/// - `StopReason::ContentFilter` → `Outcome::Intercepted { SafetyStop }`
+/// - Everything else → `Outcome::Terminal { Completed }`
 ///
 /// Override this by writing your own loop and using a different mapping.
-pub fn check_exit(stop_reason: &StopReason) -> ExitReason {
+pub fn check_exit(stop_reason: &StopReason) -> Outcome {
     match stop_reason {
-        StopReason::ContentFilter => ExitReason::SafetyStop {
-            reason: "content filter triggered".into(),
+        StopReason::ContentFilter => Outcome::Intercepted {
+            interception: InterceptionKind::SafetyStop {
+                reason: "content filter triggered".into(),
+            },
         },
-        _ => ExitReason::Complete,
+        _ => Outcome::Terminal {
+            terminal: TerminalOutcome::Completed,
+        },
     }
 }
 
@@ -218,16 +227,15 @@ pub fn is_handoff_sentinel(value: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
-
-/// Check which tool calls require approval and return the corresponding effects.
+/// Check which tool calls require approval and return the corresponding intents.
 ///
-/// Returns a vec of `Effect::ToolApprovalRequired` for each tool call where
+/// Returns a vec of `Intent::RequestApproval` for each tool call where
 /// `tool.approval_policy().requires_approval(&input)` is true. Returns an empty
 /// vec if no tools require approval.
 ///
 /// This is the decision point for human-in-the-loop approval. The caller
-/// decides what to do with the effects (emit them, filter them, etc.).
-pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<Effect> {
+/// decides what to do with the intents (emit them, filter them, etc.).
+pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<Intent> {
     tool_calls
         .iter()
         .filter(|call| {
@@ -235,11 +243,13 @@ pub fn check_approval(tool_calls: &[ToolCall], registry: &ToolRegistry) -> Vec<E
                 .get(&call.name)
                 .is_some_and(|t| t.approval_policy().requires_approval(&call.input))
         })
-        .map(|call| Effect::new(EffectKind::ToolApprovalRequired {
-            tool_name: call.name.clone(),
-            call_id: call.id.clone(),
-            input: call.input.clone(),
-        }))
+        .map(|call| {
+            Intent::new(IntentKind::RequestApproval {
+                tool_name: call.name.clone(),
+                call_id: call.id.clone(),
+                input: call.input.clone(),
+            })
+        })
         .collect()
 }
 
@@ -274,20 +284,20 @@ pub struct RejectedToolCall {
     pub reason: String,
 }
 
-/// Reconstruct pending tool calls from effects and resolve against an [`ApprovalResponse`].
+/// Reconstruct pending tool calls from intents and resolve against an [`ApprovalResponse`].
 ///
-/// Extracts [`EffectKind::ToolApprovalRequired`] from the effects slice, matches them
+/// Extracts [`IntentKind::RequestApproval`] from the intents slice, matches them
 /// against the approval response, and returns which calls to dispatch and which
 /// were rejected.
 ///
-/// Unknown `call_id`s referenced in the response (not present in `effects`) are
+/// Unknown `call_id`s referenced in the response (not present in `intents`) are
 /// silently ignored — only pending calls participate in the resolution.
-pub fn resolve_approval(effects: &[Effect], response: &ApprovalResponse) -> ResolvedApproval {
-    // Collect pending tool calls from ToolApprovalRequired effects.
-    let pending: Vec<(&str, &str, &serde_json::Value)> = effects
+pub fn resolve_approval(intents: &[Intent], response: &ApprovalResponse) -> ResolvedApproval {
+    // Collect pending tool calls from RequestApproval intents.
+    let pending: Vec<(&str, &str, &serde_json::Value)> = intents
         .iter()
-        .filter_map(|e| match &e.kind {
-            EffectKind::ToolApprovalRequired {
+        .filter_map(|i| match &i.kind {
+            IntentKind::RequestApproval {
                 tool_name,
                 call_id,
                 input,
@@ -448,7 +458,9 @@ fn structured_exit_output(
     ctx: &mut Context,
 ) -> Result<OperatorOutput, EngineError> {
     match err {
-        EngineError::Exit { reason, .. } => Ok(make_context_output(Content::text(""), reason, ctx)),
+        EngineError::Exit { outcome, .. } => {
+            Ok(make_context_output(Content::text(""), outcome, ctx))
+        }
         other => Err(other),
     }
 }
@@ -456,11 +468,11 @@ fn structured_exit_output(
 enum ToolDispatchOutcome {
     Continue,
     AwaitingApproval,
-    Exit(ExitReason),
+    Exit(Outcome),
 }
 
-fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
-    let mut output = OperatorOutput::new(message, exit);
+fn make_context_output(message: Content, outcome: Outcome, ctx: &mut Context) -> OperatorOutput {
+    let mut output = OperatorOutput::new(message, outcome);
     let mut meta = OperatorMetadata::default();
     meta.tokens_in = ctx.metrics.tokens_in;
     meta.tokens_out = ctx.metrics.tokens_out;
@@ -468,7 +480,7 @@ fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) ->
     meta.turns_used = ctx.metrics.turns_completed;
     meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
     output.metadata = meta;
-    output.effects = ctx.drain_effects();
+    output.intents = ctx.drain_intents();
     output
 }
 
@@ -483,7 +495,7 @@ fn make_context_output(message: Content, exit: ExitReason, ctx: &mut Context) ->
 /// 2. Append response to context
 /// 3. If no tool calls → return (model is done)
 /// 4. Check tool approval → if any tool requires approval, exit with
-///    [`ExitReason::AwaitingApproval`] and [`EffectKind::ToolApprovalRequired`]
+///    `Outcome::Suspended` and `IntentKind::RequestApproval`
 /// 5. Dispatch each tool call → append results to context
 /// 6. Increment turn counter → go to 1
 ///
@@ -536,13 +548,15 @@ pub async fn react_loop<P: Provider>(
 
         // Phase 4: Check tool approval
         let tool_calls = result.response.tool_calls.clone();
-        let approval_effects = check_approval(&tool_calls, tools);
+        let approval_intents = check_approval(&tool_calls, tools);
 
-        if !approval_effects.is_empty() {
-            ctx.extend_effects(approval_effects);
+        if !approval_intents.is_empty() {
+            ctx.extend_intents(approval_intents);
             return Ok(make_output(
                 result.response,
-                ExitReason::AwaitingApproval,
+                Outcome::Suspended {
+                    reason: WaitReason::Approval,
+                },
                 ctx,
             ));
         }
@@ -573,7 +587,8 @@ pub async fn react_loop<P: Provider>(
                     let call_name = call.name.clone();
                     let input = call.input.clone();
                     let d_ctx = dispatch_ctx.clone();
-                    let span = tracing::info_span!("tool_call", tool = %call_name, call_id = %call.id);
+                    let span =
+                        tracing::info_span!("tool_call", tool = %call_name, call_id = %call.id);
                     tracing::Instrument::instrument(
                         async move {
                             let start = std::time::Instant::now();
@@ -606,7 +621,7 @@ pub async fn react_loop<P: Provider>(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            ctx.push_effect(Effect::new(EffectKind::Handoff {
+                            ctx.push_intent(Intent::new(IntentKind::Handoff {
                                 operator: OperatorId::from(target.as_str()),
                                 context: HandoffContext {
                                     task: Content::text(reason),
@@ -616,7 +631,9 @@ pub async fn react_loop<P: Provider>(
                             }));
                             return Ok(make_context_output(
                                 Content::text(""),
-                                ExitReason::HandedOff,
+                                Outcome::Transfer {
+                                    transfer: TransferOutcome::HandedOff,
+                                },
                                 ctx,
                             ));
                         }
@@ -673,14 +690,19 @@ pub async fn react_loop<P: Provider>(
             }
         } else {
             for call in &tool_calls {
-                let tool_span = tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
+                let tool_span =
+                    tracing::info_span!("tool_call", tool = %call.name, call_id = %call.id);
                 let start = std::time::Instant::now();
                 let tool_result = tracing::Instrument::instrument(
-                    ctx.run(ExecuteTool::new(
-                        call.clone(),
-                        tools.clone(),
-                        dispatch_ctx.clone(),
-                    )),
+                    ctx.run(
+                        ExecuteTool::new(call.clone(), tools.clone(), dispatch_ctx.clone())
+                            .maybe_with_dispatcher(
+                                dispatch_ctx
+                                    .extensions()
+                                    .get::<Arc<dyn Dispatcher>>()
+                                    .cloned(),
+                            ),
+                    ),
                     tool_span,
                 )
                 .await;
@@ -700,7 +722,7 @@ pub async fn react_loop<P: Provider>(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            ctx.push_effect(Effect::new(EffectKind::Handoff {
+                            ctx.push_intent(Intent::new(IntentKind::Handoff {
                                 operator: OperatorId::from(target.as_str()),
                                 context: HandoffContext {
                                     task: Content::text(reason),
@@ -710,7 +732,9 @@ pub async fn react_loop<P: Provider>(
                             }));
                             return Ok(make_context_output(
                                 Content::text(""),
-                                ExitReason::HandedOff,
+                                Outcome::Transfer {
+                                    transfer: TransferOutcome::HandedOff,
+                                },
                                 ctx,
                             ));
                         }
@@ -769,17 +793,8 @@ pub async fn react_loop<P: Provider>(
     }
 }
 
-fn make_output(response: InferResponse, exit: ExitReason, ctx: &mut Context) -> OperatorOutput {
-    let mut output = OperatorOutput::new(response.content, exit);
-    let mut meta = OperatorMetadata::default();
-    meta.tokens_in = ctx.metrics.tokens_in;
-    meta.tokens_out = ctx.metrics.tokens_out;
-    meta.cost = ctx.metrics.cost;
-    meta.turns_used = ctx.metrics.turns_completed;
-    meta.duration = DurationMs::from_millis(ctx.metrics.elapsed_ms());
-    output.metadata = meta;
-    output.effects = ctx.drain_effects();
-    output
+fn make_output(response: InferResponse, outcome: Outcome, ctx: &mut Context) -> OperatorOutput {
+    make_context_output(response.content, outcome, ctx)
 }
 
 /// Extract tool schemas from a registry, applying a filter.
@@ -829,8 +844,8 @@ fn tool_schemas(registry: &ToolRegistry) -> Vec<ToolSchema> {
 ///
 /// Returns `(Some(validated_value), operator_output)` on success. Returns `(None,
 /// operator_output)` when the loop exits before producing a validated value — the caller
-/// **must** inspect [`OperatorOutput::exit_reason`] to determine whether the exit is
-/// resumable ([`ExitReason::AwaitingApproval`]) or terminal (budget, timeout, safety, etc.).
+/// **must** inspect [`OperatorOutput::outcome`] to determine whether the exit is
+/// resumable (`Outcome::Suspended`) or terminal (budget, timeout, safety, etc.).
 pub async fn react_loop_structured<P: Provider>(
     ctx: &mut Context,
     provider: &P,
@@ -887,7 +902,13 @@ pub async fn react_loop_structured<P: Provider>(
         // Phase 3: Try to extract structured output
         match output.extract(&result.response) {
             Ok(value) => {
-                let op_output = make_output(result.response, ExitReason::Complete, ctx);
+                let op_output = make_output(
+                    result.response,
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
+                    ctx,
+                );
                 return Ok((Some(value), op_output));
             }
             Err(OutputError::ValidationFailed { message, .. }) => {
@@ -939,12 +960,17 @@ pub async fn react_loop_structured<P: Provider>(
                 match dispatch {
                     ToolDispatchOutcome::Continue => continue,
                     ToolDispatchOutcome::AwaitingApproval => {
-                        let op_output =
-                            make_output(result.response, ExitReason::AwaitingApproval, ctx);
+                        let op_output = make_output(
+                            result.response,
+                            Outcome::Suspended {
+                                reason: WaitReason::Approval,
+                            },
+                            ctx,
+                        );
                         return Ok((None, op_output));
                     }
-                    ToolDispatchOutcome::Exit(reason) => {
-                        let op_output = make_context_output(Content::text(""), reason, ctx);
+                    ToolDispatchOutcome::Exit(outcome) => {
+                        let op_output = make_context_output(Content::text(""), outcome, ctx);
                         return Ok((None, op_output));
                     }
                 }
@@ -965,12 +991,17 @@ pub async fn react_loop_structured<P: Provider>(
                     match dispatch {
                         ToolDispatchOutcome::Continue => continue,
                         ToolDispatchOutcome::AwaitingApproval => {
-                            let op_output =
-                                make_output(result.response, ExitReason::AwaitingApproval, ctx);
+                            let op_output = make_output(
+                                result.response,
+                                Outcome::Suspended {
+                                    reason: WaitReason::Approval,
+                                },
+                                ctx,
+                            );
                             return Ok((None, op_output));
                         }
-                        ToolDispatchOutcome::Exit(reason) => {
-                            let op_output = make_context_output(Content::text(""), reason, ctx);
+                        ToolDispatchOutcome::Exit(outcome) => {
+                            let op_output = make_context_output(Content::text(""), outcome, ctx);
                             return Ok((None, op_output));
                         }
                     }
@@ -989,9 +1020,9 @@ pub async fn react_loop_structured<P: Provider>(
 
 /// Dispatch function tool calls, skipping the output tool.
 ///
-/// If any tool requires approval, stores [`EffectKind::ToolApprovalRequired`]
-/// effects in the context and returns `AwaitingApproval` (caller should exit with
-/// [`ExitReason::AwaitingApproval`]).
+/// If any tool requires approval, stores [`IntentKind::RequestApproval`]
+/// intents in the context and returns `AwaitingApproval` (caller should exit with
+/// `Outcome::Suspended`).
 async fn dispatch_function_tools(
     ctx: &mut Context,
     response: &InferResponse,
@@ -1008,10 +1039,10 @@ async fn dispatch_function_tools(
         .filter(|call| call.name != output_tool_name)
         .cloned()
         .collect();
-    let approval_effects = check_approval(&function_calls, tools);
+    let approval_intents = check_approval(&function_calls, tools);
 
-    if !approval_effects.is_empty() {
-        ctx.extend_effects(approval_effects.clone());
+    if !approval_intents.is_empty() {
+        ctx.extend_intents(approval_intents);
         return Ok(ToolDispatchOutcome::AwaitingApproval);
     }
 
@@ -1020,11 +1051,15 @@ async fn dispatch_function_tools(
             continue;
         }
         let (result_str, is_error) = match ctx
-            .run(ExecuteTool::new(
-                call.clone(),
-                tools.clone(),
-                dispatch_ctx.clone(),
-            ))
+            .run(
+                ExecuteTool::new(call.clone(), tools.clone(), dispatch_ctx.clone())
+                    .maybe_with_dispatcher(
+                        dispatch_ctx
+                            .extensions()
+                            .get::<Arc<dyn Dispatcher>>()
+                            .cloned(),
+                    ),
+            )
             .await
         {
             Ok(value) => {
@@ -1034,8 +1069,8 @@ async fn dispatch_function_tools(
                 };
                 (s, false)
             }
-            Err(EngineError::Exit { reason, .. }) => {
-                return Ok(ToolDispatchOutcome::Exit(reason));
+            Err(EngineError::Exit { outcome, .. }) => {
+                return Ok(ToolDispatchOutcome::Exit(outcome));
             }
             Err(e) => {
                 // InvalidInput: feed schema + error back so the model can correct the call.
@@ -1078,7 +1113,7 @@ async fn dispatch_function_tools(
             InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
         if let Err(err) = ctx.inject_message(result_msg).await {
             match err {
-                EngineError::Exit { reason, .. } => return Ok(ToolDispatchOutcome::Exit(reason)),
+                EngineError::Exit { outcome, .. } => return Ok(ToolDispatchOutcome::Exit(outcome)),
                 other => return Err(other),
             }
         }
@@ -1213,7 +1248,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         let request = provider
             .last_request()
             .expect("provider should record request");
@@ -1247,7 +1287,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         let request = provider
             .last_request()
             .expect("provider should record request");
@@ -1326,7 +1371,7 @@ mod tests {
     async fn assert_budget_exit_before_provider_call(
         mutate_ctx: impl FnOnce(&mut Context),
         config: BudgetGuardConfig,
-        expected_exit: ExitReason,
+        expected_outcome: Outcome,
     ) {
         let provider = TestProvider::new();
         provider.respond_with_text("should never be used");
@@ -1347,7 +1392,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, expected_exit);
+        assert_eq!(output.outcome, expected_outcome);
         assert_eq!(output.message.as_text(), Some(""));
         assert_eq!(provider.call_count(), 0);
     }
@@ -1355,7 +1400,7 @@ mod tests {
     async fn assert_structured_budget_exit_before_provider_call(
         mutate_ctx: impl FnOnce(&mut Context),
         config: BudgetGuardConfig,
-        expected_exit: ExitReason,
+        expected_outcome: Outcome,
     ) {
         let provider = TestProvider::new();
         provider.respond_with_text("should never be used");
@@ -1385,7 +1430,7 @@ mod tests {
         .unwrap();
 
         assert!(value.is_none());
-        assert_eq!(output.exit_reason, expected_exit);
+        assert_eq!(output.outcome, expected_outcome);
         assert_eq!(output.message.as_text(), Some(""));
         assert_eq!(provider.call_count(), 0);
     }
@@ -1400,7 +1445,9 @@ mod tests {
                 max_duration: None,
                 max_tool_calls: None,
             },
-            ExitReason::MaxTurns,
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns,
+            },
         )
         .await;
     }
@@ -1415,7 +1462,9 @@ mod tests {
                 max_duration: None,
                 max_tool_calls: None,
             },
-            ExitReason::BudgetExhausted,
+            Outcome::Limited {
+                limit: LimitReason::BudgetExhausted,
+            },
         )
         .await;
     }
@@ -1430,7 +1479,9 @@ mod tests {
                 max_duration: Some(Duration::from_secs(1)),
                 max_tool_calls: None,
             },
-            ExitReason::Timeout,
+            Outcome::Limited {
+                limit: LimitReason::Timeout,
+            },
         )
         .await;
     }
@@ -1445,7 +1496,9 @@ mod tests {
                 max_duration: None,
                 max_tool_calls: None,
             },
-            ExitReason::MaxTurns,
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns,
+            },
         )
         .await;
     }
@@ -1473,7 +1526,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(provider.call_count(), 1);
 
         let request = provider
@@ -1520,7 +1578,12 @@ mod tests {
         let value = value.expect("structured loop should return a validated value");
         assert_eq!(value["name"], "Tokyo");
         assert_eq!(value["population"], 13960000_u64);
-        assert!(matches!(output.exit_reason, ExitReason::Complete));
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         assert_eq!(provider.call_count(), 1);
     }
 
@@ -1743,10 +1806,15 @@ mod tests {
             value.is_none(),
             "approval pause must not fabricate structured output"
         );
-        assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
-        assert_eq!(output.effects.len(), 1);
-        match &output.effects[0].kind {
-            EffectKind::ToolApprovalRequired {
+        assert_eq!(
+            output.outcome,
+            Outcome::Suspended {
+                reason: WaitReason::Approval,
+            }
+        );
+        assert_eq!(output.intents.len(), 1);
+        match &output.intents[0].kind {
+            IntentKind::RequestApproval {
                 tool_name,
                 call_id,
                 input,
@@ -1755,7 +1823,7 @@ mod tests {
                 assert_eq!(call_id, "c2");
                 assert_eq!(input, &json!({ "cmd": "deploy" }));
             }
-            other => panic!("expected ToolApprovalRequired, got {other:?}"),
+            other => panic!("expected RequestApproval, got {other:?}"),
         }
 
         // Safe tool should not run once the loop pauses for approval.
@@ -1771,7 +1839,9 @@ mod tests {
 
         async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
             Err(EngineError::Exit {
-                reason: ExitReason::Timeout,
+                outcome: Outcome::Limited {
+                    limit: LimitReason::Timeout,
+                },
                 detail: "tool dispatch paused".into(),
             })
         }
@@ -1808,7 +1878,12 @@ mod tests {
         .unwrap();
 
         assert!(value.is_none());
-        assert_eq!(output.exit_reason, ExitReason::Timeout);
+        assert_eq!(
+            output.outcome,
+            Outcome::Limited {
+                limit: LimitReason::Timeout,
+            }
+        );
         assert_eq!(provider.call_count(), 1);
         assert_eq!(ctx.metrics.tool_calls_total, 0);
         assert!(
@@ -1974,7 +2049,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         // Verify only "allowed" tool was in the request schemas
         let request = provider.last_request().unwrap();
         let tool_names: Vec<&str> = request.tools.iter().map(|t| t.name.as_str()).collect();
@@ -2030,10 +2110,15 @@ mod tests {
             .unwrap();
 
         // Should exit with AwaitingApproval
-        assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
+        assert_eq!(
+            output.outcome,
+            Outcome::Suspended {
+                reason: WaitReason::Approval,
+            }
+        );
 
-        // Effects now flow through Context into output.effects
-        assert!(!output.effects.is_empty());
+        // Intents now flow through Context into output.intents
+        assert!(!output.intents.is_empty());
 
         // Provider should have been called exactly once
 
@@ -2062,8 +2147,13 @@ mod tests {
             .unwrap();
 
         // Normal completion — approval_policy defaults to ApprovalPolicy::None
-        assert_eq!(output.exit_reason, ExitReason::Complete);
-        assert!(output.effects.is_empty());
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
+        assert!(output.intents.is_empty());
     }
 
     #[tokio::test]
@@ -2091,9 +2181,14 @@ mod tests {
             .unwrap();
 
         // Should exit with AwaitingApproval (approval check happens before dispatch)
-        assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
-        // Effects now flow through Context into output.effects
-        assert!(!output.effects.is_empty());
+        assert_eq!(
+            output.outcome,
+            Outcome::Suspended {
+                reason: WaitReason::Approval,
+            }
+        );
+        // Intents now flow through Context into output.intents
+        assert!(!output.intents.is_empty());
     }
 
     #[tokio::test]
@@ -2115,21 +2210,26 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::AwaitingApproval);
+        assert_eq!(
+            output.outcome,
+            Outcome::Suspended {
+                reason: WaitReason::Approval,
+            }
+        );
         assert!(
-            !output.effects.is_empty(),
-            "approval effects must appear in OperatorOutput"
+            !output.intents.is_empty(),
+            "approval intents must appear in OperatorOutput"
         );
 
-        // Verify the effect is the expected ToolApprovalRequired variant
-        match &output.effects[0].kind {
-            EffectKind::ToolApprovalRequired {
+        // Verify the intent is the expected RequestApproval variant
+        match &output.intents[0].kind {
+            IntentKind::RequestApproval {
                 tool_name, call_id, ..
             } => {
                 assert_eq!(tool_name, "dangerous_tool");
                 assert_eq!(call_id, "c1");
             }
-            other => panic!("expected ToolApprovalRequired, got {other:?}"),
+            other => panic!("expected RequestApproval, got {other:?}"),
         }
     }
 
@@ -2190,8 +2290,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            output.exit_reason,
-            ExitReason::BudgetExhausted,
+            output.outcome,
+            Outcome::Limited {
+                limit: LimitReason::BudgetExhausted,
+            },
             "loop must exit with BudgetExhausted after 3 failed tool calls"
         );
         // Provider was called exactly 3 times (once per tool-call response consumed).
@@ -2202,19 +2304,26 @@ mod tests {
 
     #[test]
     fn test_check_exit_content_filter() {
-        let exit = check_exit(&StopReason::ContentFilter);
-        match exit {
-            ExitReason::SafetyStop { reason } => {
+        let outcome = check_exit(&StopReason::ContentFilter);
+        match outcome {
+            Outcome::Intercepted {
+                interception: InterceptionKind::SafetyStop { reason },
+            } => {
                 assert_eq!(reason, "content filter triggered");
             }
-            other => panic!("expected SafetyStop, got {other:?}"),
+            other => panic!("expected Intercepted(SafetyStop), got {other:?}"),
         }
     }
 
     #[test]
     fn test_check_exit_normal() {
-        let exit = check_exit(&StopReason::EndTurn);
-        assert_eq!(exit, ExitReason::Complete);
+        let outcome = check_exit(&StopReason::EndTurn);
+        assert_eq!(
+            outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 
     #[test]
@@ -2244,10 +2353,10 @@ mod tests {
             },
         ];
 
-        let effects = check_approval(&tool_calls, &tools);
-        assert_eq!(effects.len(), 1);
-        match &effects[0].kind {
-            EffectKind::ToolApprovalRequired {
+        let intents = check_approval(&tool_calls, &tools);
+        assert_eq!(intents.len(), 1);
+        match &intents[0].kind {
+            IntentKind::RequestApproval {
                 tool_name,
                 call_id,
                 input,
@@ -2256,7 +2365,7 @@ mod tests {
                 assert_eq!(call_id, "c1");
                 assert_eq!(input, &json!({ "x": 1 }));
             }
-            other => panic!("expected ToolApprovalRequired, got {other:?}"),
+            other => panic!("expected RequestApproval, got {other:?}"),
         }
     }
 
@@ -2288,9 +2397,10 @@ mod tests {
                 max_tool_calls: None,
             }),
         )]);
-        // Pre-seed an effect that must survive the exit path.
-        ctx.push_effect(Effect::new(EffectKind::Progress {
-            content: Content::text("sentinel-effect"),
+        // Pre-seed an intent that must survive the exit path.
+        ctx.push_intent(Intent::new(IntentKind::Custom {
+            name: "sentinel".into(),
+            payload: serde_json::json!({"content": "sentinel-intent"}),
         }));
         // Trip the budget guard: turns_completed already at limit.
         ctx.metrics.turns_completed = 1;
@@ -2304,17 +2414,23 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::MaxTurns);
         assert_eq!(
-            output.effects.len(),
-            1,
-            "effect pushed before budget exit must not be dropped"
-        );
-        match &output.effects[0].kind {
-            EffectKind::Progress { content } => {
-                assert_eq!(content.as_text(), Some("sentinel-effect"));
+            output.outcome,
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns,
             }
-            other => panic!("expected Progress effect, got {other:?}"),
+        );
+        assert_eq!(
+            output.intents.len(),
+            1,
+            "intent pushed before budget exit must not be dropped"
+        );
+        match &output.intents[0].kind {
+            IntentKind::Custom { name, payload } => {
+                assert_eq!(name, "sentinel");
+                assert_eq!(payload["content"], "sentinel-intent");
+            }
+            other => panic!("expected Custom intent, got {other:?}"),
         }
         // Provider must not have been called — the budget guard fired before inference.
         assert_eq!(provider.call_count(), 0);
@@ -2325,24 +2441,24 @@ mod tests {
     #[test]
     fn resolve_approve_all() {
         use layer0::approval::ApprovalResponse;
-        let effects = vec![
-            Effect::new(EffectKind::ToolApprovalRequired {
+        let intents = vec![
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "x": 1 }),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "x": 2 }),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({ "x": 3 }),
             }),
         ];
-        let result = resolve_approval(&effects, &ApprovalResponse::ApproveAll);
+        let result = resolve_approval(&intents, &ApprovalResponse::ApproveAll);
         assert_eq!(result.approved.len(), 3, "all three should be approved");
         assert_eq!(result.rejected.len(), 0);
         let ids: Vec<_> = result.approved.iter().map(|a| a.call_id.as_str()).collect();
@@ -2352,25 +2468,25 @@ mod tests {
     #[test]
     fn resolve_reject_all() {
         use layer0::approval::ApprovalResponse;
-        let effects = vec![
-            Effect::new(EffectKind::ToolApprovalRequired {
+        let intents = vec![
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({}),
             }),
         ];
         let result = resolve_approval(
-            &effects,
+            &intents,
             &ApprovalResponse::RejectAll {
                 reason: "too dangerous".into(),
             },
@@ -2383,25 +2499,25 @@ mod tests {
     #[test]
     fn resolve_partial() {
         use layer0::approval::ApprovalResponse;
-        let effects = vec![
-            Effect::new(EffectKind::ToolApprovalRequired {
+        let intents = vec![
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({}),
             }),
         ];
         let result = resolve_approval(
-            &effects,
+            &intents,
             &ApprovalResponse::Approve {
                 call_ids: vec!["call_1".into(), "call_2".into()],
             },
@@ -2416,13 +2532,13 @@ mod tests {
     #[test]
     fn resolve_modify() {
         use layer0::approval::ApprovalResponse;
-        let effects = vec![
-            Effect::new(EffectKind::ToolApprovalRequired {
+        let intents = vec![
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "path": "/etc/passwd" }),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "path": "/tmp/safe" }),
@@ -2430,7 +2546,7 @@ mod tests {
         ];
         let new_input = json!({ "path": "/tmp/approved" });
         let result = resolve_approval(
-            &effects,
+            &intents,
             &ApprovalResponse::Modify {
                 call_id: "call_1".into(),
                 new_input: new_input.clone(),
@@ -2462,18 +2578,18 @@ mod tests {
     #[test]
     fn resolve_batch() {
         use layer0::approval::{ApprovalResponse, ToolCallAction, ToolCallDecision};
-        let effects = vec![
-            Effect::new(EffectKind::ToolApprovalRequired {
+        let intents = vec![
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({ "x": 1 }),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({ "x": 2 }),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_c".into(),
                 call_id: "call_3".into(),
                 input: json!({ "x": 3 }),
@@ -2481,7 +2597,7 @@ mod tests {
         ];
         let new_input = json!({ "x": 99 });
         let result = resolve_approval(
-            &effects,
+            &intents,
             &ApprovalResponse::Batch {
                 decisions: vec![
                     ToolCallDecision {
@@ -2520,20 +2636,20 @@ mod tests {
     fn resolve_unknown_call_id() {
         use layer0::approval::ApprovalResponse;
         // Response includes a call_id not present in pending — silently ignored.
-        let effects = vec![
-            Effect::new(EffectKind::ToolApprovalRequired {
+        let intents = vec![
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_a".into(),
                 call_id: "call_1".into(),
                 input: json!({}),
             }),
-            Effect::new(EffectKind::ToolApprovalRequired {
+            Intent::new(IntentKind::RequestApproval {
                 tool_name: "tool_b".into(),
                 call_id: "call_2".into(),
                 input: json!({}),
             }),
         ];
         let result = resolve_approval(
-            &effects,
+            &intents,
             &ApprovalResponse::Approve {
                 call_ids: vec!["call_1".into(), "call_ghost".into()],
             },
@@ -2581,7 +2697,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert!(
             ctx.messages()
                 .iter()
@@ -2624,7 +2745,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert!(
             ctx.messages()
                 .iter()
@@ -2679,15 +2805,9 @@ mod tests {
             _input: serde_json::Value,
             _ctx: &DispatchContext,
         ) -> Pin<
-            Box<
-                dyn std::future::Future<Output = Result<serde_json::Value, ToolError>>
-                    + Send
-                    + '_,
-            >,
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
         > {
-            Box::pin(async {
-                Err(ToolError::InvalidInput("missing required field 'q'".into()))
-            })
+            Box::pin(async { Err(ToolError::InvalidInput("missing required field 'q'".into())) })
         }
     }
 
@@ -2708,8 +2828,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let config = ReactLoopConfig {
             max_tool_retries: 2,
             ..ReactLoopConfig::default()
@@ -2719,7 +2838,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert!(
             ctx.messages().iter().any(|m| {
                 let t = m.text_content();
@@ -2747,8 +2871,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let config = ReactLoopConfig {
             max_tool_retries: 0,
             ..ReactLoopConfig::default()
@@ -2758,7 +2881,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert!(
             !ctx.messages()
                 .iter()
@@ -2791,8 +2919,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         // max_tool_retries = 1: first InvalidInput retries, second falls through.
         let config = ReactLoopConfig {
             max_tool_retries: 1,
@@ -2803,10 +2930,17 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         let messages = ctx.messages();
         assert!(
-            messages.iter().any(|m| m.text_content().contains("Expected schema")),
+            messages
+                .iter()
+                .any(|m| m.text_content().contains("Expected schema")),
             "first InvalidInput must inject retry message with schema"
         );
         assert!(
@@ -2831,8 +2965,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let config = ReactLoopConfig {
             max_tool_retries: 2,
             ..ReactLoopConfig::default()
@@ -2842,7 +2975,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert!(
             !ctx.messages()
                 .iter()
@@ -2902,27 +3040,35 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::HandedOff);
+        assert_eq!(
+            output.outcome,
+            Outcome::Transfer {
+                transfer: TransferOutcome::HandedOff,
+            }
+        );
         assert_eq!(
             provider.call_count(),
             1,
             "loop must exit after handoff — provider must not be called again"
         );
 
-        let handoff_effects: Vec<_> = output
-            .effects
+        let handoff_intents: Vec<_> = output
+            .intents
             .iter()
-            .filter(|e| matches!(e.kind, EffectKind::Handoff { .. }))
+            .filter(|i| matches!(i.kind, IntentKind::Handoff { .. }))
             .collect();
-        assert_eq!(handoff_effects.len(), 1, "exactly one Handoff effect must be emitted");
-        match &handoff_effects[0].kind {
-            EffectKind::Handoff { operator, context } => {
+        assert_eq!(
+            handoff_intents.len(),
+            1,
+            "exactly one Handoff intent must be emitted"
+        );
+        match &handoff_intents[0].kind {
+            IntentKind::Handoff { operator, context } => {
                 assert_eq!(operator.as_str(), "routing-agent");
                 assert_eq!(
                     context.task.as_text().unwrap_or(""),
@@ -2949,21 +3095,28 @@ mod tests {
             .await
             .unwrap();
 
-        let dispatch_ctx =
-            DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let output = react_loop(&mut ctx, &provider, &tools, &dispatch_ctx, &simple_config())
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert_eq!(
             provider.call_count(),
             2,
             "loop must continue after a non-handoff tool result"
         );
         assert!(
-            output.effects.iter().all(|e| !matches!(e.kind, EffectKind::Handoff { .. })),
-            "no Handoff effect must be emitted for a normal tool result"
+            output
+                .intents
+                .iter()
+                .all(|i| !matches!(i.kind, IntentKind::Handoff { .. })),
+            "no Handoff intent must be emitted for a normal tool result"
         );
     }
 
@@ -2991,8 +3144,9 @@ mod tests {
             &self,
             _input: serde_json::Value,
             _ctx: &DispatchContext,
-        ) -> Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
-        {
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
+        > {
             let delay_ms = self.delay_ms;
             Box::pin(async move {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -3039,7 +3193,12 @@ mod tests {
             .unwrap();
         let elapsed = start.elapsed();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         // Sequential execution would take ≥ 100 ms. Parallel completes in ~50 ms.
         // Allow generous headroom for slow CI: must be well under 2× single-tool time.
         assert!(
@@ -3083,7 +3242,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         // Both tool results must appear in context so the second inference sees them.
         assert_eq!(
             ctx.metrics.tool_calls_total, 2,

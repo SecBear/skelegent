@@ -2,7 +2,9 @@
 
 use crate::context::Message;
 use crate::dispatch_context::DispatchContext;
-use crate::{content::Content, duration::DurationMs, effect::Effect, error::OperatorError, id::*};
+use crate::error::ProtocolError;
+use crate::intent::Intent;
+use crate::{content::Content, duration::DurationMs, id::*};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -141,58 +143,119 @@ impl OperatorConfig {
     }
 }
 
-/// Why an operator invocation ended. The caller needs to know this to decide
-/// what happens next (retry? continue? escalate?).
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// OUTCOME FAMILY (v2)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// Why an operator invocation ended (v2 typed replacement for [`ExitReason`]).
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Outcome {
+    /// Invocation completed with a terminal result.
+    Terminal {
+        /// Terminal outcome variant.
+        terminal: TerminalOutcome,
+    },
+    /// Control transferred to another operator.
+    Transfer {
+        /// Transfer outcome variant.
+        transfer: TransferOutcome,
+    },
+    /// Invocation suspended waiting for external input.
+    Suspended {
+        /// Why the invocation is suspended.
+        reason: crate::wait::WaitReason,
+    },
+    /// Invocation stopped due to a resource or policy limit.
+    Limited {
+        /// Which limit was hit.
+        limit: LimitReason,
+    },
+    /// Invocation was intercepted by a middleware or policy gate.
+    Intercepted {
+        /// What kind of interception.
+        interception: InterceptionKind,
+    },
+}
+
+/// Terminal outcomes — the operator produced a final result.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ExitReason {
-    /// Model produced a final text response (natural completion).
-    Complete,
-    /// Hit the max_turns limit.
+pub enum TerminalOutcome {
+    /// Natural completion — model produced a final response.
+    Completed,
+    /// Unrecoverable error during execution.
+    Failed,
+}
+
+/// Transfer outcomes — control moved to another operator.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferOutcome {
+    /// Delegated work to another operator (current continues after).
+    Delegated,
+    /// Handed off control entirely (current is done).
+    HandedOff,
+}
+
+/// Why an invocation was stopped due to resource or policy limits.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitReason {
+    /// Hit the max turns/iterations limit.
     MaxTurns,
-    /// Hit the cost budget (`max_cost`) or the tool-call step limit (`max_tool_calls`).
-    /// Runtime/orchestration code may distinguish the exact cause above Layer 0.
+    /// Budget exhausted (cost or tool-call step limit).
     BudgetExhausted,
-    /// Circuit breaker tripped (consecutive failures).
-    CircuitBreaker,
     /// Wall-clock timeout.
     Timeout,
-    /// Interceptor/middleware halted execution.
-    InterceptorHalt {
-        /// The reason the interceptor halted execution.
+    /// Circuit breaker tripped.
+    CircuitBreaker,
+}
+
+/// How an invocation was intercepted.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterceptionKind {
+    /// Middleware or policy halted execution.
+    PolicyHalt {
+        /// Reason provided by the interceptor.
         reason: String,
     },
-    /// Unrecoverable error during execution.
-    Error,
-    /// Provider safety system stopped generation (HTTP 200, content filtered).
-    ///
-    /// Semantically distinct from `Error` (not a transport or execution failure)
-    /// and `Complete` (model did not finish naturally). Arrives via
-    /// `StopReason::ContentFilter` in the provider response — the provider
-    /// acknowledged the request but refused to complete it. Not retriable
-    /// without modification to the context or request.
+    /// Provider safety system blocked generation.
     SafetyStop {
-        /// Human-readable reason string supplied by the provider or runtime.
+        /// Reason provided by the provider.
         reason: String,
     },
-    /// One or more tool calls require human approval before execution.
-    /// The calling layer should inspect [`OperatorOutput::effects`] for
-    /// [`Effect::ToolApprovalRequired`] entries, obtain approval, then
-    /// either execute the tools and re-enter the loop, or inject a denial
-    /// message and re-enter.
-    AwaitingApproval,
-    /// The current operator handed off control to another operator.
-    ///
-    /// The calling layer should inspect [`OperatorOutput::effects`] for an
-    /// [`Effect::Handoff`] entry to find the target operator.
-    HandedOff,
-    /// Future exit reasons.
-    Custom(String),
+}
+
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Terminal { terminal } => write!(f, "terminal:{terminal:?}"),
+            Self::Transfer { transfer } => write!(f, "transfer:{transfer:?}"),
+            Self::Suspended { reason } => write!(f, "suspended:{reason:?}"),
+            Self::Limited { limit } => write!(f, "limited:{limit:?}"),
+            Self::Intercepted { interception } => write!(f, "intercepted:{interception:?}"),
+        }
+    }
 }
 
 /// Output from an operator. Contains the response, metadata about
-/// execution, and any side-effects the operator wants executed.
+/// execution, and any intents the operator wants executed.
+///
+/// CRITICAL DESIGN DECISION: The operator declares intents but does
+/// not execute them. The calling layer (orchestrator, lifecycle
+/// coordinator) decides when and how to execute them. This is
+/// what makes the operator runtime independent of the layers around it.
+///
+/// An operator running in-process has its intents executed immediately.
+/// An operator running in a Temporal activity has its intents serialized
+/// and executed by the workflow. Same operator code, different execution.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorOutput {
@@ -200,31 +263,18 @@ pub struct OperatorOutput {
     pub message: Content,
 
     /// Why the operator invocation ended.
-    pub exit_reason: ExitReason,
+    pub outcome: Outcome,
 
     /// Execution metadata (cost, tokens, timing).
     pub metadata: OperatorMetadata,
 
-    /// Side-effects the operator wants executed.
+    /// Executable intents declared during this invocation.
     ///
-    /// **Preferred path:** declare effects via `Context::push_effect()` /
-    /// `Context::extend_effects()` during execution. The context engine's
-    /// `make_output()` drains declared effects into this field.
-    ///
-    /// **Dispatch-channel path:** `EffectEmitter` exists for dispatch-layer
-    /// wiring of progress/artifact events to `DispatchHandle`, but operators
-    /// do not receive it — it is NOT a parameter on `Operator::execute`.
-    ///
-    /// CRITICAL DESIGN DECISION: The operator declares effects but does
-    /// not execute them. The calling layer (orchestrator, lifecycle
-    /// coordinator) decides when and how to execute them. This is
-    /// what makes the operator runtime independent of the layers around it.
-    ///
-    /// An operator running in-process has its effects executed immediately.
-    /// An operator running in a Temporal activity has its effects serialized
-    /// and executed by the workflow. Same operator code, different execution.
+    /// Intents are declared via `Context::push_intent()` / `Context::extend_intents()`
+    /// during execution. The context engine's `make_output()` drains declared intents
+    /// into this field.
     #[serde(default)]
-    pub effects: Vec<Effect>,
+    pub intents: Vec<Intent>,
 }
 
 /// Execution metadata. Every field is concrete (not optional) because
@@ -275,45 +325,6 @@ pub struct SubDispatchRecord {
     pub duration: DurationMs,
     /// Whether the call succeeded.
     pub success: bool,
-}
-
-impl ExitReason {
-    /// Create an `InterceptorHalt` exit reason.
-    pub fn interceptor_halt(reason: impl Into<String>) -> Self {
-        Self::InterceptorHalt {
-            reason: reason.into(),
-        }
-    }
-
-    /// Create a `SafetyStop` exit reason.
-    pub fn safety_stop(reason: impl Into<String>) -> Self {
-        Self::SafetyStop {
-            reason: reason.into(),
-        }
-    }
-
-    /// Create a `Custom` exit reason.
-    pub fn custom(reason: impl Into<String>) -> Self {
-        Self::Custom(reason.into())
-    }
-}
-
-impl std::fmt::Display for ExitReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Complete => write!(f, "complete"),
-            Self::MaxTurns => write!(f, "max_turns"),
-            Self::BudgetExhausted => write!(f, "budget_exhausted"),
-            Self::CircuitBreaker => write!(f, "circuit_breaker"),
-            Self::Timeout => write!(f, "timeout"),
-            Self::InterceptorHalt { reason } => write!(f, "interceptor_halt: {reason}"),
-            Self::Error => write!(f, "error"),
-            Self::SafetyStop { reason } => write!(f, "safety_stop: {reason}"),
-            Self::AwaitingApproval => write!(f, "awaiting_approval"),
-            Self::HandedOff => write!(f, "handed_off"),
-            Self::Custom(reason) => write!(f, "custom: {reason}"),
-        }
-    }
 }
 
 impl TriggerType {
@@ -389,32 +400,23 @@ impl OperatorInput {
 
 impl OperatorOutput {
     /// Create a new OperatorOutput with required fields.
-    pub fn new(message: Content, exit_reason: ExitReason) -> Self {
+    pub fn new(message: Content, outcome: Outcome) -> Self {
         Self {
             message,
-            exit_reason,
+            outcome,
             metadata: OperatorMetadata::default(),
-            effects: vec![],
+            intents: vec![],
         }
     }
 
-    /// Check whether this output contains effects that need an interpreter.
+    /// Check whether this output contains intents that need an executor.
     ///
-    /// Returns `true` if [`effects`](Self::effects) is non-empty. Callers that
-    /// consume `OperatorOutput` directly (without an `EffectHandler` or
+    /// Returns `true` if [`intents`](Self::intents) is non-empty. Callers that
+    /// consume `OperatorOutput` directly (without an `IntentHandler` or
     /// `OrchestratedRunner`) should check this and decide whether the unhandled
-    /// effects are acceptable or a bug.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let output = op.execute(input, &ctx).await?
-    /// if output.has_unhandled_effects() {
-    ///     tracing::warn!("effects will not be executed: {:?}", output.effects);
-    /// }
-    /// ```
-    pub fn has_unhandled_effects(&self) -> bool {
-        !self.effects.is_empty()
+    /// intents are acceptable or a bug.
+    pub fn has_unhandled_intents(&self) -> bool {
+        !self.intents.is_empty()
     }
 }
 
@@ -517,7 +519,7 @@ pub trait Operator: Send + Sync {
         &self,
         input: OperatorInput,
         ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError>;
+    ) -> Result<OperatorOutput, ProtocolError>;
 }
 
 /// Optional metadata about an operator's capabilities and requirements.
@@ -598,54 +600,6 @@ mod tests {
     }
 
     #[test]
-    fn exit_reason_constructors() {
-        let halt = ExitReason::interceptor_halt("policy violation");
-        assert_eq!(
-            halt,
-            ExitReason::InterceptorHalt {
-                reason: "policy violation".into()
-            }
-        );
-
-        let safety = ExitReason::safety_stop("content filtered");
-        assert_eq!(
-            safety,
-            ExitReason::SafetyStop {
-                reason: "content filtered".into()
-            }
-        );
-
-        let custom = ExitReason::custom("user_cancel");
-        assert_eq!(custom, ExitReason::Custom("user_cancel".into()));
-    }
-
-    #[test]
-    fn exit_reason_display() {
-        assert_eq!(ExitReason::Complete.to_string(), "complete");
-        assert_eq!(ExitReason::MaxTurns.to_string(), "max_turns");
-        assert_eq!(ExitReason::BudgetExhausted.to_string(), "budget_exhausted");
-        assert_eq!(ExitReason::CircuitBreaker.to_string(), "circuit_breaker");
-        assert_eq!(ExitReason::Timeout.to_string(), "timeout");
-        assert_eq!(
-            ExitReason::interceptor_halt("blocked").to_string(),
-            "interceptor_halt: blocked"
-        );
-        assert_eq!(ExitReason::Error.to_string(), "error");
-        assert_eq!(
-            ExitReason::safety_stop("filtered").to_string(),
-            "safety_stop: filtered"
-        );
-        assert_eq!(
-            ExitReason::AwaitingApproval.to_string(),
-            "awaiting_approval"
-        );
-        assert_eq!(
-            ExitReason::custom("user_cancel").to_string(),
-            "custom: user_cancel"
-        );
-    }
-
-    #[test]
     fn trigger_type_custom_constructor() {
         let trigger = TriggerType::custom("webhook");
         assert_eq!(trigger, TriggerType::Custom("webhook".into()));
@@ -695,11 +649,39 @@ mod tests {
         assert!(!back.parallel_safe);
     }
 
+    #[test]
+    fn outcome_serde_round_trip() {
+        let outcomes = vec![
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Failed,
+            },
+            Outcome::Transfer {
+                transfer: TransferOutcome::HandedOff,
+            },
+            Outcome::Limited {
+                limit: LimitReason::BudgetExhausted,
+            },
+            Outcome::Intercepted {
+                interception: InterceptionKind::SafetyStop {
+                    reason: "content filtered".into(),
+                },
+            },
+        ];
+        for outcome in outcomes {
+            let json = serde_json::to_string(&outcome).unwrap();
+            let back: Outcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, outcome);
+        }
+    }
+
     #[tokio::test]
     async fn operator_with_meta() {
         use crate::content::Content;
         use crate::dispatch_context::DispatchContext;
-        use crate::error::OperatorError;
+        use crate::error::ProtocolError;
         use crate::id::{DispatchId, OperatorId};
 
         struct Echo;
@@ -710,8 +692,13 @@ mod tests {
                 &self,
                 input: OperatorInput,
                 _ctx: &DispatchContext,
-            ) -> Result<OperatorOutput, OperatorError> {
-                Ok(OperatorOutput::new(input.message, ExitReason::Complete))
+            ) -> Result<OperatorOutput, ProtocolError> {
+                Ok(OperatorOutput::new(
+                    input.message,
+                    Outcome::Terminal {
+                        terminal: TerminalOutcome::Completed,
+                    },
+                ))
             }
         }
 
@@ -746,7 +733,12 @@ mod tests {
         let input = OperatorInput::new(Content::text("hello"), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("test"), OperatorId::new("test"));
         let output = echo.execute(input, &ctx).await.unwrap();
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
 
         // Both traits as trait objects
         fn accepts_meta(_m: &dyn OperatorMeta) {}

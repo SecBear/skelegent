@@ -13,8 +13,9 @@
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
+use layer0::Dispatcher;
 use layer0::context::{Message, Role};
-use layer0::error::OperatorError;
+use layer0::error::ProtocolError;
 use layer0::id::OperatorId;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput};
 use skg_tool::ToolRegistry;
@@ -56,6 +57,10 @@ pub struct CognitiveOperator<P: Provider> {
     config: ReactLoopConfig,
     /// Factory for rules injected into each execution context.
     rule_factory: Option<RuleFactory>,
+    /// Optional dispatcher injected into the `DispatchContext` extensions before
+    /// each `react_loop` call. When set, downstream tools and sub-dispatch sites
+    /// can access it via `dispatch_ctx.extensions().get::<Arc<dyn Dispatcher>>()`.
+    dispatcher: Option<Arc<dyn Dispatcher>>,
 }
 
 impl<P: Provider> CognitiveOperator<P> {
@@ -63,18 +68,29 @@ impl<P: Provider> CognitiveOperator<P> {
     ///
     /// `operator_id` identifies this operator in dispatch traces and tool
     /// call metadata.
+    ///
+    /// Tools are automatically wrapped in a `ToolRegistryOrchestrator` so
+    /// sub-dispatch goes through the `Dispatcher` protocol by default.
+    /// Use [`.with_dispatcher()`] to override with a custom dispatcher.
     pub fn new(
         operator_id: impl Into<OperatorId>,
         provider: P,
         tools: ToolRegistry,
         config: ReactLoopConfig,
     ) -> Self {
+        // Auto-wrap tools in a ToolRegistryOrchestrator so the dispatcher-
+        // backed execution path is the default. Callers that need a custom
+        // dispatcher can override with .with_dispatcher().
+        let default_dispatcher: Arc<dyn Dispatcher> = Arc::new(
+            skg_tool::adapter::ToolRegistryOrchestrator::new(tools.clone()),
+        );
         Self {
             provider,
             tools,
             operator_id: operator_id.into(),
             config,
             rule_factory: None,
+            dispatcher: Some(default_dispatcher),
         }
     }
 
@@ -89,6 +105,18 @@ impl<P: Provider> CognitiveOperator<P> {
     /// not `Clone` (they contain boxed trait objects).
     pub fn with_rules(mut self, factory: impl Fn() -> Vec<Rule> + Send + Sync + 'static) -> Self {
         self.rule_factory = Some(Arc::new(factory));
+        self
+    }
+
+    /// Attach a dispatcher, enabling sub-dispatch from within the react loop.
+    ///
+    /// The dispatcher is inserted into the `DispatchContext` extensions before
+    /// each `react_loop` invocation. Tools and other downstream code can retrieve
+    /// it via `dispatch_ctx.extensions().get::<Arc<dyn Dispatcher>>()`.
+    ///
+    /// This is construction-time capability injection, not per-request data.
+    pub fn with_dispatcher(mut self, dispatcher: Arc<dyn Dispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
         self
     }
 
@@ -125,9 +153,26 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         &self,
         input: OperatorInput,
         dispatch_ctx: &DispatchContext,
-    ) -> Result<OperatorOutput, OperatorError> {
+    ) -> Result<OperatorOutput, ProtocolError> {
         let mut ctx = self.create_context();
         let mut config = self.config.clone();
+
+        // If a dispatcher was provided at construction time, inject it into a
+        // cloned dispatch context so all per-dispatch logic (prompt resolution,
+        // react_loop, and any tools it invokes) sees the same capability set.
+        // Declare storage before the rebind so the lifetime covers the full function.
+        let owned_ctx_storage;
+        let dispatch_ctx = match &self.dispatcher {
+            Some(d) => {
+                owned_ctx_storage = {
+                    let mut cloned = dispatch_ctx.clone();
+                    cloned.extensions_mut().insert(Arc::clone(d));
+                    cloned
+                };
+                &owned_ctx_storage
+            }
+            None => dispatch_ctx,
+        };
 
         // Resolve dynamic system prompt, if a resolver is set.
         // Takes precedence over the static system_prompt field.
@@ -144,7 +189,11 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             if config.system_prompt.is_empty() {
                 config.system_prompt = addendum.clone();
             } else {
-                config.system_prompt = format!("{base}\n\n{addendum}", base = config.system_prompt, addendum = addendum);
+                config.system_prompt = format!(
+                    "{base}\n\n{addendum}",
+                    base = config.system_prompt,
+                    addendum = addendum
+                );
             }
         }
 
@@ -152,7 +201,7 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         if !config.system_prompt.is_empty() {
             ctx.inject_system(&config.system_prompt)
                 .await
-                .map_err(OperatorError::context_assembly)?;
+                .map_err(map_engine_error)?;
         }
 
         // Seed context with pre-assembled messages from caller, if any.
@@ -161,14 +210,13 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
         if let Some(messages) = input.context.filter(|m| !m.is_empty()) {
             ctx.inject_messages(messages)
                 .await
-                .map_err(OperatorError::context_assembly)?;
+                .map_err(map_engine_error)?;
         }
 
         // Inject user message
         ctx.inject_message(Message::new(Role::User, input.message))
             .await
-            .map_err(OperatorError::context_assembly)?;
-
+            .map_err(map_engine_error)?;
 
         // Apply allowed_operators from dispatch input as a tool filter.
         // When a parent sets allowed_operators, only those tools are visible
@@ -192,45 +240,26 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
     }
 }
 
-/// Classified mapping from [`EngineError`] to [`OperatorError`].
+/// Classified mapping from [`EngineError`] to [`ProtocolError`].
 ///
 /// Preserves error semantics: retryable provider errors stay retryable,
-/// operator errors pass through, retryable tool errors become `Retryable`,
-/// and non-retryable tool errors become `NonRetryable`.
-pub fn map_engine_error(err: EngineError) -> OperatorError {
+/// and non-retryable errors are classified appropriately.
+pub fn map_engine_error(err: EngineError) -> ProtocolError {
+    use layer0::error::ErrorCode;
     match err {
         EngineError::Provider(err) => {
-            if err.is_retryable() {
-                OperatorError::model_retryable(err)
-            } else {
-                OperatorError::Model {
-                    source: Box::new(err),
-                    retryable: false,
-                }
-            }
+            let retryable = err.is_retryable();
+            ProtocolError::new(ErrorCode::Unavailable, err.to_string(), retryable)
         }
-        EngineError::Operator(err) => err,
         EngineError::Tool(err) => {
-            // Preserve retryability signal from the tool layer rather than
-            // always masking it as SubDispatch (which callers cannot retry).
-            let message = err.to_string();
-            if err.is_retryable() {
-                OperatorError::Retryable {
-                    message,
-                    source: Some(Box::new(err)),
-                }
-            } else {
-                OperatorError::NonRetryable {
-                    message,
-                    source: Some(Box::new(err)),
-                }
-            }
+            let retryable = err.is_retryable();
+            ProtocolError::new(ErrorCode::Internal, err.to_string(), retryable)
         }
-        EngineError::Halted { reason } => OperatorError::Halted { reason },
-        EngineError::Exit { reason, detail } => OperatorError::Halted {
-            reason: format!("{reason:?}: {detail}"),
-        },
-        EngineError::Custom(err) => OperatorError::Other(err),
+        EngineError::Halted { reason } => ProtocolError::new(ErrorCode::Conflict, reason, false),
+        EngineError::Exit { outcome, detail } => {
+            ProtocolError::new(ErrorCode::Conflict, format!("{outcome}: {detail}"), false)
+        }
+        EngineError::Custom(err) => ProtocolError::internal(err.to_string()),
     }
 }
 
@@ -239,7 +268,7 @@ mod tests {
     use super::*;
     use layer0::content::Content;
     use layer0::id::DispatchId;
-    use layer0::operator::{ExitReason, OperatorConfig, TriggerType};
+    use layer0::operator::{LimitReason, OperatorConfig, Outcome, TerminalOutcome, TriggerType};
     use skg_turn::test_utils::{TestProvider, make_text_response};
 
     fn test_ctx() -> DispatchContext {
@@ -269,7 +298,12 @@ mod tests {
 
         let output = op.execute(simple_input("Hi"), &test_ctx()).await.unwrap();
 
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
     }
 
@@ -292,13 +326,11 @@ mod tests {
         let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config());
 
         let result = op.execute(simple_input("test"), &test_ctx()).await;
-        assert!(matches!(
-            result,
-            Err(OperatorError::Model {
-                retryable: true,
-                ..
-            })
-        ));
+        let err = result.unwrap_err();
+        assert!(
+            err.retryable,
+            "rate-limited error should be retryable: {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -309,7 +341,12 @@ mod tests {
         let output = Operator::execute(op.as_ref(), simple_input("Hi"), &test_ctx())
             .await
             .unwrap();
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 
     #[tokio::test]
@@ -337,9 +374,14 @@ mod tests {
         let result = op.execute(simple_input("hi"), &test_ctx()).await;
 
         // Budget guard returns a structured exit (MaxTurns) — not an error.
-        // ExitReason::MaxTurns is an expected termination, not a failure.
+        // Outcome::Limited { limit: LimitReason::MaxTurns } is an expected termination, not a failure.
         let output = result.unwrap();
-        assert_eq!(output.exit_reason, layer0::operator::ExitReason::MaxTurns);
+        assert_eq!(
+            output.outcome,
+            Outcome::Limited {
+                limit: LimitReason::MaxTurns,
+            }
+        );
     }
 
     // ── allowed_operators filtering ────────────────────────────────────────
@@ -395,7 +437,12 @@ mod tests {
 
         // The model never saw tool_b or tool_c, so it returned text
         // (no tool calls). The exit is Complete.
-        assert_eq!(output.exit_reason, ExitReason::Complete);
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
     }
 
     #[test]
@@ -463,51 +510,47 @@ mod tests {
     #[test]
     fn map_engine_error_transient_tool_becomes_retryable() {
         use crate::error::EngineError;
-        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::Transient("network blip".into()));
         let mapped = map_engine_error(err);
         assert!(
-            matches!(mapped, OperatorError::Retryable { .. }),
-            "transient tool error should map to Retryable, got {mapped:?}"
+            mapped.retryable,
+            "transient tool error should map to retryable, got {mapped:?}"
         );
     }
 
     #[test]
     fn map_engine_error_rate_limited_tool_becomes_retryable() {
         use crate::error::EngineError;
-        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::RateLimited {
             retry_after: None,
             message: "429".into(),
         });
         let mapped = map_engine_error(err);
         assert!(
-            matches!(mapped, OperatorError::Retryable { .. }),
-            "rate-limited tool error should map to Retryable, got {mapped:?}"
+            mapped.retryable,
+            "rate-limited tool error should map to retryable, got {mapped:?}"
         );
     }
 
     #[test]
     fn map_engine_error_execution_failed_tool_becomes_non_retryable() {
         use crate::error::EngineError;
-        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::ExecutionFailed("boom".into()));
         let mapped = map_engine_error(err);
         assert!(
-            matches!(mapped, OperatorError::NonRetryable { .. }),
-            "execution-failed tool error should map to NonRetryable, got {mapped:?}"
+            !mapped.retryable,
+            "execution-failed tool error should map to non-retryable, got {mapped:?}"
         );
     }
 
     #[test]
     fn map_engine_error_tool_not_found_becomes_non_retryable() {
         use crate::error::EngineError;
-        use layer0::error::OperatorError;
         let err = EngineError::Tool(skg_tool::ToolError::NotFound("my_tool".into()));
         let mapped = map_engine_error(err);
         assert!(
-            matches!(mapped, OperatorError::NonRetryable { .. }),
-            "not-found tool error should map to NonRetryable, got {mapped:?}"
+            !mapped.retryable,
+            "not-found tool error should map to non-retryable, got {mapped:?}"
         );
     }
 
@@ -615,7 +658,7 @@ mod tests {
         let config = ReactLoopConfig {
             system_prompt: "Static only".into(),
             model: Some("test-model".into()),
-            ..Default::default()  // system_prompt_fn: None
+            ..Default::default() // system_prompt_fn: None
         };
         let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), config);
 
@@ -629,4 +672,105 @@ mod tests {
         );
     }
 
+    // ── dispatcher wiring ────────────────────────────────────────────────────
+
+    /// A no-op dispatcher that panics if `dispatch()` is called.
+    ///
+    /// Used to verify that wiring the dispatcher into a `CognitiveOperator`
+    /// does not break normal execution (the dispatcher is injected into context
+    /// extensions but is never called when the model returns a plain text response).
+    struct PanicDispatcher;
+
+    #[async_trait::async_trait]
+    impl Dispatcher for PanicDispatcher {
+        async fn dispatch(
+            &self,
+            _ctx: &DispatchContext,
+            _input: OperatorInput,
+        ) -> Result<layer0::DispatchHandle, layer0::error::ProtocolError> {
+            panic!("PanicDispatcher::dispatch called — not expected in this test");
+        }
+    }
+
+    /// Wiring a dispatcher into `CognitiveOperator` does not break text-only execution.
+    #[tokio::test]
+    async fn with_dispatcher_executes_normally() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
+        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config())
+            .with_dispatcher(Arc::new(PanicDispatcher));
+
+        let output = op.execute(simple_input("Hi"), &test_ctx()).await.unwrap();
+
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
+        assert_eq!(output.message.as_text().unwrap(), "Hello!");
+    }
+
+    /// The dispatcher is accessible in the dispatch context seen by per-dispatch hooks.
+    #[tokio::test]
+    async fn dispatcher_injected_into_context_extensions() {
+        use crate::react::SystemPromptFn;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct WitnessDispatcher;
+
+        #[async_trait::async_trait]
+        impl Dispatcher for WitnessDispatcher {
+            async fn dispatch(
+                &self,
+                _ctx: &DispatchContext,
+                _input: OperatorInput,
+            ) -> Result<layer0::DispatchHandle, layer0::error::ProtocolError> {
+                panic!("WitnessDispatcher::dispatch — not expected in this test");
+            }
+        }
+
+        let seen = Arc::new(AtomicBool::new(false));
+        let seen_clone = Arc::clone(&seen);
+        let resolver: SystemPromptFn = Arc::new(move |ctx| {
+            let found = ctx.extensions().get::<Arc<dyn Dispatcher>>().is_some();
+            seen_clone.store(found, Ordering::SeqCst);
+            "prompt from resolver".to_string()
+        });
+
+        let provider = TestProvider::with_responses(vec![make_text_response("done")]);
+        let config = ReactLoopConfig {
+            system_prompt: "static fallback".into(),
+            model: Some("test-model".into()),
+            system_prompt_fn: Some(resolver),
+            ..Default::default()
+        };
+
+        let dispatcher = Arc::new(WitnessDispatcher);
+        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), config)
+            .with_dispatcher(dispatcher);
+
+        op.execute(simple_input("go"), &test_ctx()).await.unwrap();
+
+        assert!(
+            seen.load(Ordering::SeqCst),
+            "dispatcher was not found in context extensions"
+        );
+    }
+
+    /// `with_dispatcher` is chainable after `with_rules` and preserves rules.
+    #[tokio::test]
+    async fn with_dispatcher_chains_after_with_rules() {
+        let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
+        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config())
+            .with_rules(std::vec::Vec::new) // no-op rules
+            .with_dispatcher(Arc::new(PanicDispatcher));
+
+        let output = op.execute(simple_input("hi"), &test_ctx()).await.unwrap();
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            }
+        );
+    }
 }

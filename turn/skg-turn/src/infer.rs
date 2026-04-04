@@ -397,10 +397,9 @@ mod tests {
             "thinking": { "type": "enabled", "budget_tokens": 1024 },
             "system_cache_control": { "type": "ephemeral" }
         });
-        let req = InferRequest::new(vec![])
-            .with_provider_option("anthropic", opts.clone());
+        let req = InferRequest::new(vec![]).with_provider_option("anthropic", opts.clone());
         assert_eq!(req.provider_options.get("anthropic"), Some(&opts));
-        assert!(req.provider_options.get("openai").is_none());
+        assert!(!req.provider_options.contains_key("openai"));
     }
 
     #[test]
@@ -409,7 +408,9 @@ mod tests {
         for choice in [
             ToolChoice::Auto,
             ToolChoice::Any,
-            ToolChoice::Tool { name: "search".into() },
+            ToolChoice::Tool {
+                name: "search".into(),
+            },
             ToolChoice::None,
         ] {
             let json = serde_json::to_value(&choice).unwrap();
@@ -439,13 +440,18 @@ mod tests {
 
     #[test]
     fn infer_request_builder_methods() {
-        use crate::types::{ToolChoice, ResponseFormat};
+        use crate::types::{ResponseFormat, ToolChoice};
         let req = InferRequest::new(vec![])
-            .with_provider_option("anthropic", serde_json::json!({ "thinking": { "type": "enabled", "budget_tokens": 2048 } }))
+            .with_provider_option(
+                "anthropic",
+                serde_json::json!({ "thinking": { "type": "enabled", "budget_tokens": 2048 } }),
+            )
             .with_tool_choice(ToolChoice::Any)
             .with_response_format(ResponseFormat::Json);
         assert_eq!(
-            req.provider_options.get("anthropic").and_then(|o| o.get("thinking")),
+            req.provider_options
+                .get("anthropic")
+                .and_then(|o| o.get("thinking")),
             Some(&serde_json::json!({ "type": "enabled", "budget_tokens": 2048 }))
         );
         assert_eq!(req.tool_choice, Some(ToolChoice::Any));

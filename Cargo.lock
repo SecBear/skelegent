@@ -2888,34 +2888,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "skg-workspace"
-version = "0.4.1"
-dependencies = [
- "async-trait",
- "futures-util",
- "layer0",
- "reqwest 0.12.28",
- "rust_decimal",
- "serde_json",
- "skelegent",
- "skg-context",
- "skg-context-engine",
- "skg-op-single-shot",
- "skg-orch-local",
- "skg-provider-anthropic",
- "skg-provider-codex",
- "skg-provider-ollama",
- "skg-provider-openai",
- "skg-secret",
- "skg-state-fs",
- "skg-state-memory",
- "skg-tool",
- "skg-turn",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

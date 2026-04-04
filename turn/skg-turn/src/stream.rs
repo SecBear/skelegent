@@ -111,10 +111,7 @@ pub fn single_response_stream(response: InferResponse) -> InferStream {
     impl Stream for OnceStream {
         type Item = Result<StreamEvent, ProviderError>;
 
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
+        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             Poll::Ready(self.event.take())
         }
     }
@@ -171,9 +168,9 @@ mod tests {
     /// Default `infer_stream` impl (via TestProvider) wraps the response in Done.
     #[tokio::test]
     async fn infer_stream_default_impl_wraps_response() {
-        use futures_util::StreamExt;
         use crate::provider::Provider;
         use crate::test_utils::TestProvider;
+        use futures_util::StreamExt;
 
         let provider = TestProvider::new();
         provider.respond_with_text("hello world");

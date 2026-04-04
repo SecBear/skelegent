@@ -36,11 +36,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use layer0::{
-    Lifetime, MemoryScope, Scope, SessionId, StateStore, StoreOptions,
-    DispatchContext,
-};
-use serde_json::{json, Value};
+use layer0::{DispatchContext, Lifetime, MemoryScope, Scope, SessionId, StateStore, StoreOptions};
+use serde_json::{Value, json};
 
 use crate::{ToolDyn, ToolError, ToolRegistry};
 
@@ -233,10 +230,7 @@ impl ToolDyn for MemorySearchTool {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidInput("'query' must be a non-null string".into()))?
                 .to_owned();
-            let limit = obj
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(5) as usize;
+            let limit = obj.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
             let results = store
                 .search(&scope, &query, limit)
                 .await
@@ -386,7 +380,7 @@ pub fn register_memory_tools(registry: &mut ToolRegistry) {
 mod tests {
     use super::*;
     use layer0::{
-        effect::Scope,
+        intent::Scope,
         id::{DispatchId, OperatorId, SessionId},
         state::StateStore,
         test_utils::InMemoryStore,

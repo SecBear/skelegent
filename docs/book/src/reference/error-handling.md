@@ -1,6 +1,6 @@
 # Error Handling
 
-> **Note:** This page covers the error type design. Usage examples and error recovery patterns are planned for a future update.
+> **Note:** This page reflects the v2 error model. `OperatorError` and `OrchError` from v1 are deprecated; `ProtocolError` is the canonical error type at invocation boundaries.
 
 ## Design pattern
 
@@ -10,43 +10,26 @@ Every error enum includes an `Other` variant with `#[from] Box<dyn std::error::E
 
 ## Error types by protocol
 
-### OperatorError
+### ProtocolError
 
-Errors from operator execution (Layer 0, `layer0::error::OperatorError`):
+The canonical error type at all invocation boundaries (`layer0::error::ProtocolError`):
 
 ```rust
-pub enum OperatorError {
-    Model(String),           // LLM provider error
-    SubDispatch { operator, message },  // Sub-dispatch execution error
-    ContextAssembly(String), // Context assembly failed
-    Retryable(String),       // Transient, may succeed on retry
-    NonRetryable(String),    // Permanent failure (budget, safety, invalid input)
-    Other(Box<dyn Error>),   // Catch-all
+pub enum ProtocolError {
+    NotFound { operator: OperatorId },   // Operator not registered
+    PolicyDenied { reason: String },     // Middleware/policy short-circuit
+    Transient { message: String },       // Retryable failure
+    Permanent { message: String },       // Non-retryable failure
+    Internal { message: String },        // Unexpected runtime error
+    Other(Box<dyn Error>),               // Catch-all
 }
 ```
 
-The `Retryable` / `NonRetryable` distinction lets orchestrators make retry decisions without inspecting error details.
-
-### OrchError
-
-Errors from orchestration (Layer 0, `layer0::error::OrchError`):
-
-```rust
-pub enum OrchError {
-    OperatorNotFound(String),    // Operator ID not registered
-    WorkflowNotFound(String), // Workflow ID not found
-    DispatchFailed(String),   // Dispatch failed
-    SignalFailed(String),     // Signal delivery failed
-    OperatorError(OperatorError), // Propagated from operator
-    Other(Box<dyn Error>),    // Catch-all
-}
-```
-
-`OperatorError` propagates into `OrchError` via the `From` trait. If an operator fails during dispatch, the error is wrapped automatically.
+`ProtocolError::is_retryable()` returns `true` for `Transient`, and `false` for `Permanent`, `PolicyDenied`, and `NotFound`. The `RetryMiddleware` uses this to decide whether to retry a failed dispatch.
 
 ### StateError
 
-Errors from state operations (Layer 0, `layer0::error::StateError`):
+Errors from state operations (`layer0::error::StateError`):
 
 ```rust
 pub enum StateError {
@@ -61,7 +44,7 @@ Note: `StateStore::read` returns `Ok(None)` for missing keys. `NotFound` is for 
 
 ### EnvError
 
-Errors from environment operations (Layer 0, `layer0::error::EnvError`):
+Errors from environment operations (`layer0::error::EnvError`):
 
 ```rust
 pub enum EnvError {
@@ -69,12 +52,9 @@ pub enum EnvError {
     IsolationViolation(String), // Isolation boundary violated
     CredentialFailed(String),   // Credential injection failed
     ResourceExceeded(String),   // Resource limit exceeded
-    OperatorError(OperatorError), // Propagated from operator
     Other(Box<dyn Error>),      // Catch-all
 }
 ```
-
-Like `OrchError`, `OperatorError` propagates into `EnvError` via `From`.
 
 ### ProviderError
 
@@ -114,11 +94,11 @@ Errors propagate upward through the layer stack:
 ```
 ProviderError / ToolError
         ↓ (mapped by operator implementation)
-  OperatorError
-        ↓ (From impl)
-  OrchError / EnvError
+  ProtocolError
+        ↓ (same type at all invocation boundaries)
+  Dispatcher / Environment callers
 ```
 
-Provider and tool errors are mapped to `OperatorError` by the operator implementation (e.g., the `react_loop`-based operator maps `ProviderError::RateLimited` to `OperatorError::Model { retryable: true }`). Operator errors propagate into orchestration and environment errors automatically via `From` impls. The `RetryMiddleware` checks `OperatorError::is_retryable()` to determine whether an `OrchError::OperatorError` should be retried.
+Provider and tool errors are mapped to `ProtocolError` by the operator implementation (e.g., the `react_loop`-based operator maps `ProviderError::RateLimited` to `ProtocolError::Transient { .. }`). The `RetryMiddleware` checks `ProtocolError::is_retryable()` to determine whether to retry.
 
-This layered propagation ensures that callers at each level see errors appropriate to their abstraction. An orchestrator sees `OrchError`, never `ProviderError`.
+This unified error type ensures callers at every level see the same abstraction. There is no impedance mismatch between operator errors and orchestration errors.

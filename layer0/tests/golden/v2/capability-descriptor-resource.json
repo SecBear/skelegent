@@ -1,0 +1,25 @@
+{
+  "id": "state://global/config",
+  "kind": "resource",
+  "name": "config",
+  "description": "Global configuration resource",
+  "accepts": [],
+  "produces": ["text"],
+  "streaming": "none",
+  "scheduling": {
+    "execution_class": "shared",
+    "ordering_sensitive": false,
+    "idempotent": true,
+    "interruptible": true,
+    "max_concurrency": 32
+  },
+  "approval": "none",
+  "auth": {
+    "mode": "service",
+    "scopes": ["state.read"]
+  },
+  "tags": ["resource", "state"],
+  "extensions": {
+    "source": "mcp"
+  }
+}

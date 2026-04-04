@@ -10,7 +10,7 @@ use layer0::approval::{
     ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
     ToolCallDecision,
 };
-use layer0::effect::{Effect, EffectKind};
+use layer0::{Intent, IntentKind};
 use layer0::operator::{OperatorInput, TriggerType};
 use serde_json::{Value, json};
 use skg_run_core::ResumeInput;
@@ -197,37 +197,38 @@ fn deserialize_rt(response: &ApprovalResponse) -> ApprovalResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: Orchestrator constructs ApprovalRequest from EffectKind::ToolApprovalRequired
+// Test 3: Orchestrator constructs ApprovalRequest from IntentKind::RequestApproval
 // ---------------------------------------------------------------------------
 
 #[test]
 fn approval_request_from_effects() {
-    // Simulate what an operator would push into OperatorOutput::effects
-    let effects = vec![
-        Effect::new(EffectKind::ToolApprovalRequired {
+    // Simulate what an operator would push into OperatorOutput::intents
+    let intents = [
+        Intent::new(IntentKind::RequestApproval {
             tool_name: "delete_file".to_owned(),
             call_id: "call_001".to_owned(),
             input: json!({ "path": "/etc/passwd" }),
         }),
-        Effect::new(EffectKind::ToolApprovalRequired {
+        Intent::new(IntentKind::RequestApproval {
             tool_name: "send_email".to_owned(),
             call_id: "call_002".to_owned(),
             input: json!({ "to": "external@example.com" }),
         }),
-        // Non-approval effect — must not appear in pending
-        Effect::new(EffectKind::Progress {
-            content: Content::text("Thinking..."),
+        // Non-approval intent — must not appear in pending
+        Intent::new(IntentKind::Custom {
+            name: "progress".to_owned(),
+            payload: json!({ "content": "Thinking..." }),
         }),
     ];
 
-    // Orchestrator construction pattern: drain ToolApprovalRequired entries
+    // Orchestrator construction pattern: drain RequestApproval entries
     let run_id = "run-xyz789".to_owned();
     let wait_point = "wp-approval-2".to_owned();
 
-    let pending: Vec<PendingToolCall> = effects
+    let pending: Vec<PendingToolCall> = intents
         .iter()
         .filter_map(|e| {
-            if let EffectKind::ToolApprovalRequired {
+            if let IntentKind::RequestApproval {
                 tool_name,
                 call_id,
                 input,
@@ -237,7 +238,7 @@ fn approval_request_from_effects() {
                     call_id: call_id.clone(),
                     tool_name: tool_name.clone(),
                     tool_input: input.clone(),
-                    // Default reason for operator-declared approval effects is PolicyAlways
+                    // Default reason for operator-declared approval intents is PolicyAlways
                     reason: ApprovalReason::PolicyAlways,
                 })
             } else {

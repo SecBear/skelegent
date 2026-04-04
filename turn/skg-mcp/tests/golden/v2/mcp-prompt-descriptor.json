@@ -1,0 +1,29 @@
+{
+  "id": "mcp-prompt:greet",
+  "kind": "prompt",
+  "name": "greet",
+  "description": "Greeting prompt",
+  "accepts": ["json"],
+  "produces": ["text"],
+  "streaming": "none",
+  "scheduling": {
+    "execution_class": "shared",
+    "ordering_sensitive": false,
+    "idempotent": true,
+    "interruptible": true
+  },
+  "approval": "none",
+  "auth": {
+    "mode": "service",
+    "scopes": []
+  },
+  "tags": [],
+  "extensions": {
+    "mcp": {
+      "kind": "prompt",
+      "name": "greet",
+      "title": null,
+      "arguments": null
+    }
+  }
+}

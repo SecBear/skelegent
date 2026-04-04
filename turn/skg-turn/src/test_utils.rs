@@ -362,7 +362,7 @@ pub fn generate_from_schema(schema: &serde_json::Value) -> serde_json::Value {
     match type_str {
         "string" => json!("test_value"),
         "integer" => json!(42),
-        "number" => json!(3.14),
+        "number" => json!(2.72),
         "boolean" => json!(true),
         "object" => {
             let mut obj = serde_json::Map::new();
@@ -552,15 +552,30 @@ mod tests {
         use serde_json::json;
 
         // Scalar types
-        assert_eq!(generate_from_schema(&json!({"type": "string"})), json!("test_value"));
+        assert_eq!(
+            generate_from_schema(&json!({"type": "string"})),
+            json!("test_value")
+        );
         assert_eq!(generate_from_schema(&json!({"type": "integer"})), json!(42));
-        assert_eq!(generate_from_schema(&json!({"type": "number"})), json!(3.14));
-        assert_eq!(generate_from_schema(&json!({"type": "boolean"})), json!(true));
+        assert_eq!(
+            generate_from_schema(&json!({"type": "number"})),
+            json!(2.72)
+        );
+        assert_eq!(
+            generate_from_schema(&json!({"type": "boolean"})),
+            json!(true)
+        );
 
         // Unknown and missing type → null
-        assert_eq!(generate_from_schema(&json!({"type": "unknown"})), json!(null));
+        assert_eq!(
+            generate_from_schema(&json!({"type": "unknown"})),
+            json!(null)
+        );
         assert_eq!(generate_from_schema(&json!(null)), json!(null));
-        assert_eq!(generate_from_schema(&json!({"description": "no type"})), json!(null));
+        assert_eq!(
+            generate_from_schema(&json!({"description": "no type"})),
+            json!(null)
+        );
 
         // Array wraps a single generated item
         let arr = generate_from_schema(&json!({"type": "array", "items": {"type": "string"}}));
@@ -576,7 +591,10 @@ mod tests {
             "required": ["name"]
         }));
         assert_eq!(obj["name"], json!("test_value"));
-        assert!(obj.as_object().unwrap().get("age").is_none(), "optional field should be skipped");
+        assert!(
+            obj.as_object().unwrap().get("age").is_none(),
+            "optional field should be skipped"
+        );
 
         // Object with no required → empty object
         let empty_obj = generate_from_schema(&json!({

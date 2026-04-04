@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "event_id": "event-10",
+    "dispatch_id": "dispatch-1",
+    "seq": 10,
+    "timestamp_unix_ms": 1700000000300,
+    "source": "runtime"
+  },
+  "kind": {
+    "kind": "suspended",
+    "wait": {
+      "reason": "approval"
+    }
+  }
+}

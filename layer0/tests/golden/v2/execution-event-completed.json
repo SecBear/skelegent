@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "event_id": "event-2",
+    "dispatch_id": "dispatch-1",
+    "seq": 2,
+    "timestamp_unix_ms": 1700000000100,
+    "source": "orchestrator"
+  },
+  "kind": {
+    "kind": "completed",
+    "output": {
+      "message": "ok",
+      "outcome": {
+        "type": "terminal",
+        "terminal": "completed"
+      },
+      "exit_reason": "complete",
+      "metadata": {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "cost": "0",
+        "turns_used": 0,
+        "sub_dispatches": [],
+        "duration": 0
+      },
+      "intents": []
+    }
+  }
+}

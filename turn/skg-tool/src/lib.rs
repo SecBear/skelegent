@@ -19,6 +19,10 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use layer0::DispatchContext;
+use layer0::{
+    ApprovalFacts, AuthFacts, CapabilityDescriptor, CapabilityId, CapabilityKind, ExecutionClass,
+    SchedulingFacts,
+};
 
 /// Errors from tool operations.
 #[non_exhaustive]
@@ -293,6 +297,45 @@ impl Default for ToolRegistry {
     }
 }
 
+/// Project a [`ToolDyn`] into a [`CapabilityDescriptor`].
+///
+/// Maps tool metadata to the canonical v2 discovery payload:
+/// - `name` → `id` + `name`
+/// - `description` → `description`
+/// - `input_schema` → `input_schema`
+/// - `output_schema` → `output_schema`
+/// - `concurrency_hint` Shared → `ExecutionClass::Shared`, Exclusive → `ExecutionClass::Exclusive`
+/// - `approval_policy` None → `ApprovalFacts::None`, Always → `ApprovalFacts::Always`,
+///   Conditional → `ApprovalFacts::RuntimePolicy`
+pub fn tool_descriptor(tool: &dyn ToolDyn) -> CapabilityDescriptor {
+    let execution_class = match tool.concurrency_hint() {
+        ToolConcurrencyHint::Shared => ExecutionClass::Shared,
+        ToolConcurrencyHint::Exclusive => ExecutionClass::Exclusive,
+    };
+
+    let approval = match tool.approval_policy() {
+        ApprovalPolicy::None => ApprovalFacts::None,
+        ApprovalPolicy::Always => ApprovalFacts::Always,
+        ApprovalPolicy::Conditional(_) => ApprovalFacts::RuntimePolicy,
+    };
+
+    let scheduling = SchedulingFacts::new(execution_class, false, false, false, None);
+    let id = CapabilityId::new(tool.name());
+
+    let mut desc = CapabilityDescriptor::new(
+        id,
+        CapabilityKind::Tool,
+        tool.name(),
+        tool.description(),
+        scheduling,
+        approval,
+        AuthFacts::Open,
+    );
+    desc.input_schema = Some(tool.input_schema());
+    desc.output_schema = tool.output_schema();
+    desc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,14 +565,21 @@ mod tests {
     fn output_schema_custom() {
         struct SchemaTool;
         impl ToolDyn for SchemaTool {
-            fn name(&self) -> &str { "schema_tool" }
-            fn description(&self) -> &str { "has output schema" }
-            fn input_schema(&self) -> serde_json::Value { json!({"type": "object"}) }
+            fn name(&self) -> &str {
+                "schema_tool"
+            }
+            fn description(&self) -> &str {
+                "has output schema"
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                json!({"type": "object"})
+            }
             fn call(
                 &self,
                 _input: serde_json::Value,
                 _ctx: &DispatchContext,
-            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
+            {
                 Box::pin(async { Ok(json!(null)) })
             }
             fn output_schema(&self) -> Option<serde_json::Value> {
@@ -547,14 +597,21 @@ mod tests {
     fn aliased_tool_delegates_output_schema() {
         struct InnerWithSchema;
         impl ToolDyn for InnerWithSchema {
-            fn name(&self) -> &str { "inner" }
-            fn description(&self) -> &str { "" }
-            fn input_schema(&self) -> serde_json::Value { json!({"type": "object"}) }
+            fn name(&self) -> &str {
+                "inner"
+            }
+            fn description(&self) -> &str {
+                ""
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                json!({"type": "object"})
+            }
             fn call(
                 &self,
                 _input: serde_json::Value,
                 _ctx: &DispatchContext,
-            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>> {
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>>
+            {
                 Box::pin(async { Ok(json!(null)) })
             }
             fn output_schema(&self) -> Option<serde_json::Value> {
@@ -566,5 +623,4 @@ mod tests {
         let schema = aliased.output_schema().unwrap();
         assert_eq!(schema["type"], "string");
     }
-
 }
