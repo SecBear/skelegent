@@ -19,9 +19,9 @@ use layer0::content::Content;
 use layer0::duration::DurationMs;
 use layer0::id::OperatorId;
 use layer0::intent::{HandoffContext, Intent, IntentKind};
-use layer0::operator::{OperatorMetadata, OperatorOutput, Outcome, TransferOutcome};
 #[cfg(test)]
 use layer0::operator::{LimitReason, TerminalOutcome};
+use layer0::operator::{OperatorMetadata, OperatorOutput, Outcome, TransferOutcome};
 use layer0::wait::WaitReason;
 use skg_tool::ToolRegistry;
 use skg_turn::infer::InferResponse;

@@ -48,6 +48,7 @@ members = [
   "turn/skg-tool-openapi",
   "examples/react-chatbot",
   "examples/multi-agent",
+  "tools/skg-compaction-server",
 ]
 
 [workspace.package]
@@ -56,4 +57,3 @@ rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/secbear/skelegent"
 homepage = "https://github.com/secbear/skelegent"
-

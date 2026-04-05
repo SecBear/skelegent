@@ -10,9 +10,9 @@
 
 use crate::dispatch::DispatchHandle;
 use crate::dispatch_context::DispatchContext;
-use crate::intent::Scope;
 use crate::environment::EnvironmentSpec;
 use crate::error::{EnvError, ProtocolError, StateError};
+use crate::intent::Scope;
 use crate::operator::{OperatorInput, OperatorOutput};
 use crate::state::StoreOptions;
 use async_trait::async_trait;

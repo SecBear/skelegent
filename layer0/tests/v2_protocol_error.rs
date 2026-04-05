@@ -15,7 +15,11 @@ fn protocol_error_round_trip_all_codes() {
     for (code, expected_wire) in codes {
         let pe = ProtocolError::new(code, "test", false);
         let json = serde_json::to_value(&pe).expect("serialize");
-        assert_eq!(json["code"], json!(expected_wire), "code wire name mismatch");
+        assert_eq!(
+            json["code"],
+            json!(expected_wire),
+            "code wire name mismatch"
+        );
         let back: ProtocolError = serde_json::from_value(json).expect("deserialize");
         assert_eq!(back.code, code);
     }
@@ -31,7 +35,10 @@ fn protocol_error_unavailable_golden_fixture() {
     let pe: ProtocolError = serde_json::from_value(fixture.clone()).expect("deserialize");
     assert_eq!(pe.code, ErrorCode::Unavailable);
     assert!(pe.retryable);
-    assert_eq!(pe.details.get("provider").map(String::as_str), Some("anthropic"));
+    assert_eq!(
+        pe.details.get("provider").map(String::as_str),
+        Some("anthropic")
+    );
     let reencoded = serde_json::to_value(&pe).expect("serialize");
     assert_eq!(reencoded, fixture);
 }

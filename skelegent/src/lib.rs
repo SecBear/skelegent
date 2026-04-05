@@ -114,9 +114,10 @@ pub use agent::{AgentBuildError, AgentBuilder, agent};
 pub mod prelude {
     #[cfg(feature = "core")]
     pub use layer0::{
-        Content, ContentBlock, Environment, Intent, IntentKind, InterceptionKind, LimitReason, Operator,
-        OperatorConfig, OperatorId, OperatorInput, OperatorOutput, Outcome, ProtocolError, Scope,
-        SessionId, StateReader, StateStore, TerminalOutcome, TransferOutcome, WorkflowId,
+        Content, ContentBlock, Environment, Intent, IntentKind, InterceptionKind, LimitReason,
+        Operator, OperatorConfig, OperatorId, OperatorInput, OperatorOutput, Outcome,
+        ProtocolError, Scope, SessionId, StateReader, StateStore, TerminalOutcome, TransferOutcome,
+        WorkflowId,
     };
 
     #[cfg(feature = "core")]

@@ -41,7 +41,10 @@ fn drain_intents_transfers_ownership() {
 
     let drained = ctx.drain_intents();
     assert_eq!(drained.len(), 1);
-    assert!(ctx.intents().is_empty(), "intents should be empty after drain");
+    assert!(
+        ctx.intents().is_empty(),
+        "intents should be empty after drain"
+    );
 }
 
 #[test]

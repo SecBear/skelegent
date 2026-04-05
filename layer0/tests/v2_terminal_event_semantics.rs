@@ -1,8 +1,8 @@
+use layer0::OperatorOutput;
 use layer0::content::Content;
 use layer0::error::ProtocolError;
 use layer0::event::EventKind;
 use layer0::operator::{Outcome, TerminalOutcome};
-use layer0::OperatorOutput;
 use serde_json::json;
 
 // ── EventKind::Failed is for protocol failure only ──────────────────────────
@@ -48,7 +48,9 @@ fn terminal_failed_outcome_travels_through_completed_event() {
     // Round-trip preserves the distinction.
     let decoded: EventKind = serde_json::from_value(encoded).expect("deserialize");
     match decoded {
-        EventKind::Completed { output: decoded_output } => {
+        EventKind::Completed {
+            output: decoded_output,
+        } => {
             assert_eq!(
                 decoded_output.outcome,
                 Outcome::Terminal {

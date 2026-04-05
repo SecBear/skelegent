@@ -27,7 +27,10 @@ async fn collect_preserves_intents_from_completed_output() {
 
     let result = handle.collect().await.expect("collect");
     assert_eq!(result.intents.len(), 1);
-    assert!(matches!(result.intents[0].kind, IntentKind::DeleteMemory { .. }));
+    assert!(matches!(
+        result.intents[0].kind,
+        IntentKind::DeleteMemory { .. }
+    ));
 }
 
 // ── Missing terminal event returns Unavailable error ────────────────────────
@@ -50,7 +53,10 @@ async fn missing_terminal_after_cancellation_returns_error() {
     // Drop sender after cancellation to simulate no terminal event.
     drop(sender);
 
-    let err = handle.collect().await.expect_err("should fail after cancel");
+    let err = handle
+        .collect()
+        .await
+        .expect_err("should fail after cancel");
     // Missing terminal event after cancellation also returns Unavailable.
     assert_eq!(err.code, ErrorCode::Unavailable);
 }

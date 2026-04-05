@@ -26,8 +26,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use layer0::CompactionPolicy;
 use layer0::Content;
 use layer0::context::{Message, MessageMeta, Role};
-use layer0::intent::Scope;
 use layer0::error::StateError;
+use layer0::intent::Scope;
 use layer0::state::StateReader;
 
 /// Configuration for [`ContextAssembler`].

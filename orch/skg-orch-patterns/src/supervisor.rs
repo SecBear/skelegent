@@ -18,13 +18,13 @@ use async_trait::async_trait;
 use layer0::DispatchContext;
 use layer0::context::{Message, Role};
 use layer0::dispatch::Dispatcher;
-use layer0::{HandoffContext, IntentKind};
 use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{
     LimitReason, Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome,
     TransferOutcome, TriggerType,
 };
+use layer0::{HandoffContext, IntentKind};
 
 use crate::selector::SpeakerSelector;
 
@@ -203,13 +203,13 @@ mod tests {
     use async_trait::async_trait;
     use layer0::DispatchContext;
     use layer0::content::Content;
-    use layer0::{HandoffContext, Intent, IntentKind};
     use layer0::error::ProtocolError;
     use layer0::id::{DispatchId, OperatorId};
     use layer0::operator::{
         Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TransferOutcome,
         TriggerType,
     };
+    use layer0::{HandoffContext, Intent, IntentKind};
     use skg_orch_local::LocalOrch;
 
     use super::*;

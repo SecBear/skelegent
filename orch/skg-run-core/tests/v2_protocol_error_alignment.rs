@@ -126,8 +126,10 @@ fn kernel_fail_transition_carries_protocol_error() {
         other => panic!("expected Failed view, got {other:?}"),
     }
 
-    assert!(transition.commands.iter().any(|c| matches!(
-        c,
-        OrchestrationCommand::FailRun { .. }
-    )));
+    assert!(
+        transition
+            .commands
+            .iter()
+            .any(|c| matches!(c, OrchestrationCommand::FailRun { .. }))
+    );
 }

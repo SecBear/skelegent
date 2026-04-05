@@ -10,8 +10,8 @@ use layer0::approval::{
     ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
     ToolCallDecision,
 };
-use layer0::{Intent, IntentKind};
 use layer0::operator::{OperatorInput, TriggerType};
+use layer0::{Intent, IntentKind};
 use serde_json::{Value, json};
 use skg_run_core::ResumeInput;
 

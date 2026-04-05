@@ -6,8 +6,8 @@
 //! Provides true persistence across process restarts.
 
 use async_trait::async_trait;
-use layer0::intent::Scope;
 use layer0::error::StateError;
+use layer0::intent::Scope;
 use layer0::state::{SearchResult, StateStore, StoreOptions};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

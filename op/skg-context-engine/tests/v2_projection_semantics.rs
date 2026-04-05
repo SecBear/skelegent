@@ -1,5 +1,5 @@
-use layer0::context::{Message, Role};
 use layer0::Content;
+use layer0::context::{Message, Role};
 use skg_context_engine::{CompileConfig, Context, InferBoundary, StreamInferBoundary};
 
 // ── Provider deltas projected only at locked semantic boundaries ─────────────

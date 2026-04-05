@@ -380,8 +380,8 @@ pub fn register_memory_tools(registry: &mut ToolRegistry) {
 mod tests {
     use super::*;
     use layer0::{
-        intent::Scope,
         id::{DispatchId, OperatorId, SessionId},
+        intent::Scope,
         state::StateStore,
         test_utils::InMemoryStore,
     };

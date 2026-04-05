@@ -209,7 +209,7 @@ mod tests {
     use layer0::content::Content;
     use layer0::dispatch::{DispatchEvent, DispatchHandle};
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{Outcome, OperatorOutput, TerminalOutcome, TriggerType};
+    use layer0::operator::{OperatorOutput, Outcome, TerminalOutcome, TriggerType};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 

@@ -1,5 +1,5 @@
-use layer0::intent::Scope;
 use layer0::id::SessionId;
+use layer0::intent::Scope;
 use layer0::state::{StateReader, StateStore};
 use skg_state_memory::MemoryStore;
 use std::sync::Arc;

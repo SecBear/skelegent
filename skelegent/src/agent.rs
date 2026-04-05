@@ -18,9 +18,9 @@
 
 use layer0::DispatchContext;
 use layer0::content::Content;
-use layer0::effect::EffectKind;
 use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
+use layer0::intent::IntentKind;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
 use skg_context_engine::ToolFilter;
 use skg_tool::{ToolDyn, ToolRegistry};
@@ -175,32 +175,29 @@ impl AgentBuilder {
         let input = OperatorInput::new(Content::text(message), TriggerType::User);
         let ctx = DispatchContext::new(DispatchId::new("agent"), OperatorId::new("agent"));
         let output = op.execute(input, &ctx).await?;
-        reject_operational_effects(&output.effects)?;
-        // Observational effects (Log, Signal, etc.) are safe to drop.
+        reject_unhandled_intents(&output.intents)?;
         Ok(output)
     }
 }
 
-/// Inspect effects and return `Err` for any that mutate external state.
+/// Reject the output if any intents were declared that require a handler.
 ///
-/// Operational effects (`WriteMemory`, `DeleteMemory`, `Delegate`, `Handoff`)
-/// cannot be silently dropped — doing so produces plausible-looking but wrong
-/// output. The caller must use [`OrchestratedRunner`] to handle them.
-/// Observational effects (`Log`, `Signal`, `Observation`, etc.) are advisory
-/// and safe to drop.
-fn reject_operational_effects(effects: &[layer0::Effect]) -> Result<(), ProtocolError> {
-    let operational = effects.iter().any(|e| {
+/// In v2, all [`layer0::Intent`] variants require an [`OrchestratedRunner`] to
+/// execute (write memory, signal, delegate, handoff, etc.).  `AgentBuilder::run()`
+/// has no intent handler and cannot safely ignore them.
+fn reject_unhandled_intents(intents: &[layer0::Intent]) -> Result<(), ProtocolError> {
+    let has_intent = intents.iter().any(|intent| {
         matches!(
-            &e.kind,
-            EffectKind::WriteMemory { .. }
-                | EffectKind::DeleteMemory { .. }
-                | EffectKind::Delegate { .. }
-                | EffectKind::Handoff { .. }
+            &intent.kind,
+            IntentKind::WriteMemory { .. }
+                | IntentKind::DeleteMemory { .. }
+                | IntentKind::Delegate { .. }
+                | IntentKind::Handoff { .. }
         )
     });
-    if operational {
+    if has_intent {
         return Err(ProtocolError::internal(
-            "AgentBuilder::run() cannot execute operational effects \
+            "AgentBuilder::run() cannot handle intents \
              (WriteMemory, DeleteMemory, Delegate, Handoff). \
              Use OrchestratedRunner instead.",
         ));
@@ -628,19 +625,19 @@ mod tests {
         );
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
-    // ── Effect classification tests ────────────────────────────────────────────────
+    // ── Intent rejection tests ────────────────────────────────────────────
     //
-    // These tests exercise reject_operational_effects(), which is the exact
-    // function that AgentBuilder::run() delegates to after execute().
+    // These tests exercise reject_unhandled_intents(), which is the function
+    // that AgentBuilder::run() calls after execute().
 
     #[test]
-    fn run_rejects_operational_effects() {
-        use layer0::Effect;
-        use layer0::effect::{EffectKind, MemoryScope, Scope};
+    fn run_rejects_intents() {
+        use layer0::Intent;
+        use layer0::intent::{IntentKind, MemoryScope, Scope};
         use serde_json::json;
 
-        // WriteMemory is an operational effect — run() must return Err.
-        let effects = vec![Effect::new(EffectKind::WriteMemory {
+        // WriteMemory requires an IntentHandler — run() must return Err.
+        let intents = vec![Intent::new(IntentKind::WriteMemory {
             scope: Scope::Global,
             key: "state-key".into(),
             value: json!({"x": 1}),
@@ -651,10 +648,10 @@ mod tests {
             salience: None,
             ttl: None,
         })];
-        let result = super::reject_operational_effects(&effects);
+        let result = super::reject_unhandled_intents(&intents);
         assert!(
             result.is_err(),
-            "WriteMemory is an operational effect; run() must reject it"
+            "WriteMemory intent requires a handler; run() must reject it"
         );
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -664,19 +661,13 @@ mod tests {
     }
 
     #[test]
-    fn run_allows_observational_effects() {
-        use layer0::Effect;
-        use layer0::effect::EffectKind;
-
-        // Log is observational — run() must not error on observational-only effects.
-        let effects = vec![Effect::new(EffectKind::Log {
-            level: "info".into(),
-            message: "agent completed successfully".into(),
-        })];
-        let result = super::reject_operational_effects(&effects);
+    fn run_passes_without_intents() {
+        // No intents declared — run() must not error.
+        let intents: Vec<layer0::Intent> = vec![];
+        let result = super::reject_unhandled_intents(&intents);
         assert!(
             result.is_ok(),
-            "Log is observational; run() must not reject it"
+            "Empty intent list must not cause run() to error"
         );
     }
 }

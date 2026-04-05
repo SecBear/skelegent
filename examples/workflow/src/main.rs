@@ -28,7 +28,9 @@ use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
 use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::operator::{Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType};
+use layer0::operator::{
+    Operator, OperatorInput, OperatorOutput, Outcome, TerminalOutcome, TriggerType,
+};
 use skg_orch_local::LocalOrch;
 use skg_orch_patterns::WorkflowBuilder;
 use std::sync::Arc;
@@ -51,7 +53,9 @@ impl Operator for ResearchOp {
         let result = format!("Research findings on {topic}");
         Ok(OperatorOutput::new(
             Content::text(result),
-            Outcome::Terminal { terminal: TerminalOutcome::Completed },
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }
@@ -72,7 +76,9 @@ impl Operator for AnalyzeOp {
         let result = format!("Analysis of: {text}");
         Ok(OperatorOutput::new(
             Content::text(result),
-            Outcome::Terminal { terminal: TerminalOutcome::Completed },
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }
@@ -93,7 +99,9 @@ impl Operator for SummarizeOp {
         let result = format!("Summary: {text}");
         Ok(OperatorOutput::new(
             Content::text(result),
-            Outcome::Terminal { terminal: TerminalOutcome::Completed },
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }
@@ -115,7 +123,9 @@ impl Operator for FormatOp {
         let result = format!("Formatted:\n{text}");
         Ok(OperatorOutput::new(
             Content::text(result),
-            Outcome::Terminal { terminal: TerminalOutcome::Completed },
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
         ))
     }
 }

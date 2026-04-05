@@ -1,3 +1,5 @@
+> **RETIRED** — superseded by `specs/v2/10-errors-versioning-and-conformance.md` (conformance and golden-trace coverage).
+
 # Testing, Examples, and Backpressure
 
 ## Purpose

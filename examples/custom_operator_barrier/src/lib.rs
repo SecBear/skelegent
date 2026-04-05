@@ -58,7 +58,9 @@ use layer0::DispatchContext;
 use layer0::content::{Content, ContentBlock};
 use layer0::duration::DurationMs;
 use layer0::error::ProtocolError;
-use layer0::operator::{Operator, OperatorInput, OperatorOutput, Outcome, SubDispatchRecord, TerminalOutcome};
+use layer0::operator::{
+    Operator, OperatorInput, OperatorOutput, Outcome, SubDispatchRecord, TerminalOutcome,
+};
 use skg_tool::ToolRegistry;
 /// A minimal operator that batches tool calls between barriers.
 pub struct BarrierOperator {
@@ -172,7 +174,12 @@ impl Operator for BarrierOperator {
             _ => { /* ignore unknown content kinds */ }
         }
 
-        let mut output = OperatorOutput::new(Content::Blocks(out_blocks), Outcome::Terminal { terminal: TerminalOutcome::Completed });
+        let mut output = OperatorOutput::new(
+            Content::Blocks(out_blocks),
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         output.metadata = metadata;
         Ok(output)
     }
@@ -257,7 +264,12 @@ mod tests {
             }
             _ => panic!("expected blocks"),
         }
-        assert_eq!(out.outcome, Outcome::Terminal { terminal: TerminalOutcome::Completed });
+        assert_eq!(
+            out.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
         assert!(
             out.intents.is_empty(),
             "no intents expected from barrier operator"

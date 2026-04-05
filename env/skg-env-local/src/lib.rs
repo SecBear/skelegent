@@ -395,7 +395,7 @@ mod tests {
     use super::*;
     use layer0::content::Content;
     use layer0::error::ProtocolError;
-    use layer0::operator::{Outcome, OperatorOutput, TerminalOutcome, TriggerType};
+    use layer0::operator::{OperatorOutput, Outcome, TerminalOutcome, TriggerType};
 
     struct EchoOperator;
 

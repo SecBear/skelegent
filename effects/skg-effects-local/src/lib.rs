@@ -8,12 +8,12 @@
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::{Intent, IntentKind, Scope};
 use layer0::error::{ProtocolError, StateError};
 use layer0::middleware::{StoreStack, StoreWriteNext};
 use layer0::operator::{OperatorInput, TriggerType};
 use layer0::reducer::ReducerRegistry;
 use layer0::state::{StateStore, StoreOptions};
+use layer0::{Intent, IntentKind, Scope};
 use skg_effects_core::Signalable;
 use skg_effects_core::{EffectHandler, EffectOutcome, Error, UnknownEffectPolicy};
 use std::sync::Arc;
@@ -222,7 +222,10 @@ where
                 // Approval intents are caller-interpreted — not handled by EffectHandler.
                 match self.unknown_policy {
                     UnknownEffectPolicy::IgnoreAndWarn => {
-                        tracing::warn!("ignoring approval intent (caller must handle): {:?}", intent);
+                        tracing::warn!(
+                            "ignoring approval intent (caller must handle): {:?}",
+                            intent
+                        );
                         Ok(EffectOutcome::Skipped)
                     }
                     UnknownEffectPolicy::Error => Err(Error::UnknownEffect),

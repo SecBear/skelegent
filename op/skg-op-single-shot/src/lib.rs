@@ -12,7 +12,9 @@ use layer0::content::Content;
 use layer0::context::{Message, Role};
 use layer0::duration::DurationMs;
 use layer0::error::{ErrorCode, ProtocolError};
-use layer0::operator::{Operator, OperatorInput, OperatorMetadata, OperatorOutput, Outcome, TerminalOutcome};
+use layer0::operator::{
+    Operator, OperatorInput, OperatorMetadata, OperatorOutput, Outcome, TerminalOutcome,
+};
 use rust_decimal::Decimal;
 use skg_turn::infer::InferRequest;
 use skg_turn::provider::Provider;
@@ -134,9 +136,12 @@ impl<P: Provider + 'static> Operator for SingleShotOperator<P> {
         let message: Content = response.content;
 
         // Always Outcome::Completed for single-shot
-        let mut output = OperatorOutput::new(message, Outcome::Terminal {
-            terminal: TerminalOutcome::Completed,
-        });
+        let mut output = OperatorOutput::new(
+            message,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         output.metadata = metadata;
 
         Ok(output)

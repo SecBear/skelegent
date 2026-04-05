@@ -734,10 +734,7 @@ mod tests {
         struct StubProvider;
 
         impl Provider for StubProvider {
-            async fn infer(
-                &self,
-                request: InferRequest,
-            ) -> Result<InferResponse, ProviderError> {
+            async fn infer(&self, request: InferRequest) -> Result<InferResponse, ProviderError> {
                 Ok(InferResponse {
                     content: Content::text("streamed-ok"),
                     tool_calls: vec![],
@@ -812,10 +809,7 @@ mod tests {
         }
 
         impl Provider for NativeStreamingProvider {
-            async fn infer(
-                &self,
-                _request: InferRequest,
-            ) -> Result<InferResponse, ProviderError> {
+            async fn infer(&self, _request: InferRequest) -> Result<InferResponse, ProviderError> {
                 Err(ProviderError::Other("not used".into()))
             }
 

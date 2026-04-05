@@ -20,9 +20,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use layer0::DispatchContext;
+use layer0::IntentKind;
 use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
-use layer0::IntentKind;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, TriggerType};
 use skg_context_engine::{CognitiveOperator, ReactLoopConfig};

@@ -706,7 +706,7 @@ name = "hello-claude"
 version = "0.0.0"
 dependencies = [
  "layer0",
- "skg-auth-omp 0.4.0",
+ "skg-auth-omp",
  "skg-op-single-shot",
  "skg-provider-anthropic",
  "tokio",
@@ -2390,17 +2390,6 @@ dependencies = [
 
 [[package]]
 name = "skg-auth-omp"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "rusqlite",
- "serde_json",
- "skg-auth",
- "tracing",
-]
-
-[[package]]
-name = "skg-auth-omp"
 version = "0.4.1"
 dependencies = [
  "async-trait",
@@ -2413,6 +2402,19 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "skg-compaction-server"
+version = "0.4.1"
+dependencies = [
+ "layer0",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "skg-context",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

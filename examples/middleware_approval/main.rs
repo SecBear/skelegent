@@ -136,7 +136,12 @@ impl DispatchNext for EchoTerminal {
         input: OperatorInput,
     ) -> Result<DispatchHandle, ProtocolError> {
         println!("[terminal]       ALLOWED: operator={}", ctx.operator_id);
-        let output = OperatorOutput::new(input.message, Outcome::Terminal { terminal: TerminalOutcome::Completed });
+        let output = OperatorOutput::new(
+            input.message,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("echo"));
         tokio::spawn(async move {
             let _ = sender.send(DispatchEvent::Completed { output }).await;

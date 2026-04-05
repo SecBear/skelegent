@@ -25,8 +25,7 @@ fn waiting_run_view_round_trip_golden_fixture() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("golden/v2/run-view-waiting.json"))
             .expect("fixture json");
-    let view: skg_run_core::RunView =
-        serde_json::from_value(fixture.clone()).expect("deserialize");
+    let view: skg_run_core::RunView = serde_json::from_value(fixture.clone()).expect("deserialize");
 
     // Verify the structural decode.
     assert_eq!(view.run_id().as_str(), "run-42");

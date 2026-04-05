@@ -12,8 +12,8 @@
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
-use layer0::dispatch::Dispatcher;
 use layer0::Intent;
+use layer0::dispatch::Dispatcher;
 use layer0::error::{ProtocolError, StateError};
 use layer0::id::{DispatchId, OperatorId, WorkflowId};
 use layer0::operator::OperatorInput;

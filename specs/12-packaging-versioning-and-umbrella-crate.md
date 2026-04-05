@@ -1,3 +1,5 @@
+> **RETIRED** — versioning section superseded by `specs/v2/10-errors-versioning-and-conformance.md`; packaging obligations carried forward into v2 adoption.
+
 # Packaging, Versioning, and Umbrella Crate
 
 ## Purpose

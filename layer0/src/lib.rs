@@ -99,9 +99,15 @@ pub use capability::{
 pub use error::{EnvError, ErrorCode, ProtocolError, StateError};
 
 // Dispatch
+pub use approval::{
+    ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
+    ToolCallDecision,
+};
+pub use content::{Content, ContentBlock};
+pub use context::{Message, MessageMeta, Role};
 pub use dispatch::{
-    Artifact, CollectedDispatch, CollectedInvocation, DispatchEvent, DispatchHandle, DispatchSender,
-    Dispatcher, InvocationHandle,
+    Artifact, CollectedDispatch, CollectedInvocation, DispatchEvent, DispatchHandle,
+    DispatchSender, Dispatcher, InvocationHandle,
 };
 pub use dispatch_context::{AuthIdentity, DispatchContext, Extensions, TraceContext};
 pub use duration::DurationMs;
@@ -116,12 +122,6 @@ pub use operator::{
     Operator, OperatorConfig, OperatorInput, OperatorMeta, OperatorMetadata, OperatorOutput,
     SubDispatchRecord, ToolMetadata,
 };
-pub use approval::{
-    ApprovalReason, ApprovalRequest, ApprovalResponse, PendingToolCall, ToolCallAction,
-    ToolCallDecision,
-};
-pub use content::{Content, ContentBlock};
-pub use context::{Message, MessageMeta, Role};
 pub use reducer::{AppendList, MergeObject, Overwrite, ReducerRegistry, StateReducer, Sum};
 pub use secret::{SecretAccessEvent, SecretAccessOutcome, SecretSource};
 pub use state::{

@@ -22,9 +22,9 @@ use layer0::dispatch::Dispatcher;
 use layer0::duration::DurationMs;
 use layer0::id::OperatorId;
 use layer0::intent::{HandoffContext, Intent, IntentKind};
-use layer0::operator::{InterceptionKind, Outcome, TerminalOutcome, TransferOutcome};
 #[cfg(test)]
 use layer0::operator::LimitReason;
+use layer0::operator::{InterceptionKind, Outcome, TerminalOutcome, TransferOutcome};
 use layer0::operator::{OperatorMetadata, OperatorOutput};
 use layer0::wait::WaitReason;
 use serde_json::Value;

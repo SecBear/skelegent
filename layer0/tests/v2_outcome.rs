@@ -1,6 +1,4 @@
-use layer0::operator::{
-    InterceptionKind, LimitReason, Outcome, TerminalOutcome, TransferOutcome,
-};
+use layer0::operator::{InterceptionKind, LimitReason, Outcome, TerminalOutcome, TransferOutcome};
 use layer0::wait::WaitReason;
 use layer0::{Content, Intent, IntentKind, OperatorOutput};
 use serde_json::json;
@@ -19,7 +17,10 @@ fn outcome_terminal_completed_round_trip() {
     let outcome = Outcome::Terminal {
         terminal: TerminalOutcome::Completed,
     };
-    assert_outcome_round_trip(&outcome, json!({"type": "terminal", "terminal": "completed"}));
+    assert_outcome_round_trip(
+        &outcome,
+        json!({"type": "terminal", "terminal": "completed"}),
+    );
 }
 
 #[test]
@@ -35,7 +36,10 @@ fn outcome_transfer_handed_off_round_trip() {
     let outcome = Outcome::Transfer {
         transfer: TransferOutcome::HandedOff,
     };
-    assert_outcome_round_trip(&outcome, json!({"type": "transfer", "transfer": "handed_off"}));
+    assert_outcome_round_trip(
+        &outcome,
+        json!({"type": "transfer", "transfer": "handed_off"}),
+    );
 }
 
 #[test]
@@ -43,7 +47,10 @@ fn outcome_transfer_delegated_round_trip() {
     let outcome = Outcome::Transfer {
         transfer: TransferOutcome::Delegated,
     };
-    assert_outcome_round_trip(&outcome, json!({"type": "transfer", "transfer": "delegated"}));
+    assert_outcome_round_trip(
+        &outcome,
+        json!({"type": "transfer", "transfer": "delegated"}),
+    );
 }
 
 #[test]
@@ -206,14 +213,16 @@ fn handoff_transfer_derived_from_first_matching_intent() {
 
     // Verify an output with handoff intents can carry them alongside the outcome.
     let mut output_with_intents = output;
-    output_with_intents.intents.push(Intent::new(IntentKind::Handoff {
-        operator: layer0::OperatorId::new("target-op"),
-        context: layer0::HandoffContext {
-            task: Content::text("please continue"),
-            history: None,
-            metadata: None,
-        },
-    }));
+    output_with_intents
+        .intents
+        .push(Intent::new(IntentKind::Handoff {
+            operator: layer0::OperatorId::new("target-op"),
+            context: layer0::HandoffContext {
+                task: Content::text("please continue"),
+                history: None,
+                metadata: None,
+            },
+        }));
     assert_eq!(output_with_intents.intents.len(), 1);
     assert!(matches!(
         output_with_intents.intents[0].kind,

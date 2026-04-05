@@ -2,8 +2,8 @@
 
 use crate::{Boundary, RecordEntry, RecordSink, context_from_otel};
 use async_trait::async_trait;
-use layer0::intent::Scope;
 use layer0::error::StateError;
+use layer0::intent::Scope;
 use layer0::middleware::{StoreMiddleware, StoreReadNext, StoreWriteNext};
 use layer0::state::StoreOptions;
 use std::sync::Arc;

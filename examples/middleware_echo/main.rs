@@ -30,7 +30,12 @@ impl DispatchNext for EchoTerminal {
         _ctx: &DispatchContext,
         input: OperatorInput,
     ) -> Result<DispatchHandle, ProtocolError> {
-        let output = OperatorOutput::new(input.message, Outcome::Terminal { terminal: TerminalOutcome::Completed });
+        let output = OperatorOutput::new(
+            input.message,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed,
+            },
+        );
         let (handle, sender) = DispatchHandle::channel(DispatchId::new("echo"));
         tokio::spawn(async move {
             let _ = sender.send(DispatchEvent::Completed { output }).await;

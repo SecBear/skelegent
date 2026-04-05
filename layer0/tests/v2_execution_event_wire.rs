@@ -1,3 +1,4 @@
+use layer0::OperatorOutput;
 use layer0::content::Content;
 use layer0::dispatch::Artifact;
 use layer0::error::ProtocolError;
@@ -5,7 +6,6 @@ use layer0::event::{EventKind, ExecutionEvent};
 use layer0::intent::{Intent, IntentKind};
 use layer0::operator::{Outcome, TerminalOutcome};
 use layer0::wait::WaitReason;
-use layer0::OperatorOutput;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -202,9 +202,10 @@ fn failed_round_trip() {
 
 #[test]
 fn suspended_approval_golden_fixture() {
-    let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("golden/v2/execution-event-suspended-approval.json"))
-            .expect("fixture json");
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "golden/v2/execution-event-suspended-approval.json"
+    ))
+    .expect("fixture json");
     let event: ExecutionEvent = serde_json::from_value(fixture.clone()).expect("deserialize");
     assert_eq!(event.meta.event_id, "event-10");
     match &event.kind {

@@ -1,11 +1,11 @@
 //! Tests for ReducerRegistry wiring inside LocalEffectHandler.
 
 use layer0::DispatchContext;
-use layer0::{Intent, IntentKind, MemoryScope, Scope};
 use layer0::id::{DispatchId, OperatorId};
 use layer0::reducer::{AppendList, ReducerRegistry};
 use layer0::state::StateStore;
 use layer0::test_utils::InMemoryStore;
+use layer0::{Intent, IntentKind, MemoryScope, Scope};
 use serde_json::json;
 use skg_effects_core::{EffectHandler, EffectOutcome};
 use skg_effects_local::LocalEffectHandler;

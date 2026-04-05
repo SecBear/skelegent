@@ -12,7 +12,9 @@ fn completed_outcome() -> Outcome {
 }
 
 /// Helper to run a handle scenario: send events, then collect.
-async fn collect_with_events(events: Vec<DispatchEvent>) -> Result<OperatorOutput, layer0::ProtocolError> {
+async fn collect_with_events(
+    events: Vec<DispatchEvent>,
+) -> Result<OperatorOutput, layer0::ProtocolError> {
     let (handle, sender) = InvocationHandle::channel(DispatchId::new("collect-test"));
     tokio::spawn(async move {
         for event in events {

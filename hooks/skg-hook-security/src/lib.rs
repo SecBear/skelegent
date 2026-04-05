@@ -245,7 +245,7 @@ mod tests {
     use super::*;
     use layer0::dispatch::Artifact;
     use layer0::id::{DispatchId, OperatorId};
-    use layer0::operator::{Outcome, OperatorOutput, TerminalOutcome, TriggerType};
+    use layer0::operator::{OperatorOutput, Outcome, TerminalOutcome, TriggerType};
 
     struct MockDispatchNext {
         output_text: String,
@@ -258,8 +258,7 @@ mod tests {
             _ctx: &DispatchContext,
             _input: OperatorInput,
         ) -> Result<DispatchHandle, ProtocolError> {
-            let output =
-                OperatorOutput::new(
+            let output = OperatorOutput::new(
                 Content::text(&self.output_text),
                 Outcome::Terminal {
                     terminal: TerminalOutcome::Completed,
@@ -286,8 +285,7 @@ mod tests {
             _input: OperatorInput,
         ) -> Result<DispatchHandle, ProtocolError> {
             let progress = Content::text(&self.progress_text);
-            let output =
-                OperatorOutput::new(
+            let output = OperatorOutput::new(
                 Content::text(&self.output_text),
                 Outcome::Terminal {
                     terminal: TerminalOutcome::Completed,

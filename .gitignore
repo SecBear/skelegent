@@ -4,3 +4,5 @@
 /.worktrees/
 /.brain/
 docs/superpowers/
+.skelesearch/
+.fastembed_cache/
