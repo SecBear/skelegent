@@ -2346,7 +2346,6 @@ version = "0.4.1"
 dependencies = [
  "layer0",
  "serde_json",
- "skg-context",
  "skg-context-engine",
  "skg-env-local",
  "skg-mcp",
@@ -2405,31 +2404,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "skg-compaction-server"
-version = "0.4.1"
-dependencies = [
- "layer0",
- "rmcp",
- "serde",
- "serde_json",
- "skg-context",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "skg-context"
-version = "0.4.1"
-dependencies = [
- "async-trait",
- "layer0",
- "serde_json",
- "skg-state-memory",
- "skg-turn",
- "tokio",
-]
-
-[[package]]
 name = "skg-context-engine"
 version = "0.4.1"
 dependencies = [
@@ -2440,7 +2414,6 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "skg-context",
  "skg-state-memory",
  "skg-tool",
  "skg-turn",
@@ -2647,7 +2620,6 @@ dependencies = [
  "serde",
  "serde_json",
  "skg-auth",
- "skg-context",
  "skg-context-engine",
  "skg-state-memory",
  "skg-tool",
@@ -2685,7 +2657,6 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
- "skg-context",
  "skg-context-engine",
  "skg-state-memory",
  "skg-tool",
@@ -2706,7 +2677,6 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
- "skg-context",
  "skg-context-engine",
  "skg-state-memory",
  "skg-tool",

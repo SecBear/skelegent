@@ -15,7 +15,6 @@ path = "src/lib.rs"
 
 [dependencies]
 layer0 = { path = "../layer0", optional = true, version = "0.4.1" }
-skg-context = { path = "../turn/skg-context", optional = true, version = "0.4.1" }
 skg-mcp = { path = "../turn/skg-mcp", optional = true, version = "0.4.1" }
 skg-context-engine = { path = "../op/skg-context-engine", optional = true, version = "0.4.1" }
 skg-op-single-shot = { path = "../op/skg-op-single-shot", optional = true, version = "0.4.1" }
@@ -34,7 +33,7 @@ skg-turn = { path = "../turn/skg-turn", optional = true, version = "0.4.1" }
 default = ["core"]
 
 # Protocol + core wiring
-core = ["dep:layer0", "dep:skg-context", "dep:skg-tool", "dep:skg-turn"]
+core = ["dep:layer0", "dep:skg-tool", "dep:skg-turn"]
 
 # Tooling / integration
 mcp = ["core", "dep:skg-mcp"]
@@ -70,7 +69,7 @@ macros = ["skg-tool/macros"]
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 skg-turn = { path = "../turn/skg-turn", version = "0.4.1", features = [
-  "test-utils",
+   "test-utils",
 ] }
 skg-context-engine = { path = "../op/skg-context-engine", version = "0.4.1" }
 layer0 = { path = "../layer0", version = "0.4.1" }

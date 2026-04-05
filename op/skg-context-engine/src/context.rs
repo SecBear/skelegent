@@ -336,6 +336,27 @@ impl Context {
         self.messages.iter().map(|m| m.estimated_tokens()).sum()
     }
 
+    // ── Convenience methods (dispatch through run()) ────────────────
+
+    /// Inject or replace the system prompt. Dispatches through [`Context::run()`].
+    pub async fn inject_system(&mut self, prompt: &str) -> Result<(), EngineError> {
+        self.run(crate::ops::InjectSystem {
+            prompt: prompt.to_owned(),
+        })
+        .await
+    }
+
+    /// Append a message to context. Dispatches through [`Context::run()`].
+    pub async fn inject_message(&mut self, msg: Message) -> Result<(), EngineError> {
+        self.run(crate::ops::InjectMessage { message: msg }).await
+    }
+
+    /// Append multiple messages to context. Dispatches through [`Context::run()`].
+    pub async fn inject_messages(&mut self, msgs: Vec<Message>) -> Result<(), EngineError> {
+        self.run(crate::ops::InjectMessages { messages: msgs })
+            .await
+    }
+
     /// Execute a context operation, firing applicable rules before and after.
     ///
     /// This is the central dispatch point. The sequence is:

@@ -42,7 +42,7 @@
 //!
 //! | Feature | What it enables |
 //! |---------|----------------|
-//! | `core` *(default)* | [`layer0`] protocols + [`skg_context`] + [`skg_tool`] + [`skg_turn`] |
+//! | `core` *(default)* | [`layer0`] protocols + [`skg_tool`] + [`skg_turn`] |
 //! | `agent` | [`agent()`](crate::agent) builder (implies `context-engine` + `state-memory`) |
 //! | `context-engine` | [`skg_context_engine::Context`] — composable context engine |
 //! | `op-single-shot` | [`skg_op_single_shot::SingleShotOperator`] — one-shot operator |
@@ -76,8 +76,6 @@
 
 #[cfg(feature = "core")]
 pub use layer0;
-#[cfg(feature = "core")]
-pub use skg_context;
 #[cfg(feature = "context-engine")]
 pub use skg_context_engine;
 #[cfg(feature = "env-local")]
