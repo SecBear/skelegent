@@ -23,7 +23,8 @@ You must understand these types to work in this codebase:
 | ----------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Operator`                                | layer0             | Object-safe trait. `execute(input, ctx) -> Result<OperatorOutput, ProtocolError>`. The unit of agent behavior.                                                                                                                                |
 | `DispatchContext`                         | layer0             | Execution metadata threaded through every boundary: dispatch ID, trace context, auth, typed extensions. Every operator, tool, and middleware receives this.                                                                                   |
-| `Context`                                 | skg-context-engine | Mutable conversation substrate: messages, rules, metrics, intents. All mutations go through `ctx.run(op)` which fires rules. Intents are declared here via `push_intent()` and drained into `OperatorOutput::intents`.                        |
+| `Context`                                 | skg-context-engine | Mutable conversation substrate: messages, extensions, metrics, intents. Direct synchronous mutations. Intents declared via `push_intent()` and drained into `OperatorOutput::intents`.                                                        |
+| `Middleware` / `Pipeline`                  | skg-context-engine | `Middleware` is the single abstraction for context transformation. `Pipeline` holds ordered before_send/after_send middleware phases. Budget guards, compaction, telemetry are all middleware.                                                  |
 | `Intent`                                  | layer0             | Executable declarations (Delegate, Handoff, Signal, WriteMemory, etc.). Operators declare intent; outer layers execute.                                                                                                                        |
 | `ExecutionEvent`                          | layer0             | Semantic observation envelope: status changes, tool calls, intent declarations, artifacts, completion. Stream-first.                                                                                                                           |
 | `CapabilitySource` / `CapabilityDescriptor` | layer0           | Read-only discovery. Sibling to `Dispatcher`. Describes what operators are available and what they accept.                                                                                                                                    |
@@ -38,8 +39,10 @@ You must understand these types to work in this codebase:
 User message
   → Dispatcher.dispatch(ctx: &DispatchContext, input)
     → Operator.execute(input, &DispatchContext)
-      → react_loop(Context, Provider, Tools, &DispatchContext, config)
-        → Context.run(ops) fires Rules
+      → react_loop(Context, Provider, Tools, &DispatchContext, config, &Pipeline)
+        → Pipeline.run_before(ctx) runs middleware
+        → Context.compile() + Provider.infer(request)
+        → Pipeline.run_after(ctx) runs middleware
         → Provider.infer(request) → response (projected into ExecutionEvents)
         → Tools execute with DispatchContext
         → Context.push_intent(Intent) declares executable intent
@@ -73,8 +76,7 @@ User message
 | Architectural positions    | `ARCHITECTURE.md`                                      |
 | Behavioral requirements    | `specs/v2/` (current); `specs/` (indexed by `SPECS.md`) |
 | Operational constraints    | `rules/`                                               |
-| Deep rationale             | `docs/`                                                |
-| Crate map and key concepts | `llms.txt`                                             |
+| Deep rationale             | `specs/v2/` (see spec docs for rationale)              |
 
 Authority: ARCHITECTURE.md > specs > rules > agent judgment. If specs are
 ambiguous, update the specs (do not invent behavior).

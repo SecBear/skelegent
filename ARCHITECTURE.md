@@ -21,7 +21,7 @@ Then change the code. Do not let code drift from the architecture.
 **Authority**: Architecture > Specs (`specs/`) > Rules (`rules/`) > Agent
 judgment. Higher authority wins. A spec may refine but not contradict a position.
 
-**Decision surface map**: `docs/design/23-decision-surface.md` is the concrete inventory of where each golden decision currently lives: Layer 0 noun, turn-local knob, orchestration knob, and backend implementation point. Use it to normalize configuration surfaces without expanding Layer 0 speculatively.
+**Decision surface map**: Each golden decision lives at one level: Layer 0 noun, turn-local knob, orchestration knob, or backend implementation point. Do not expand Layer 0 speculatively.
 
 ---
 
@@ -334,33 +334,29 @@ let mut input = OperatorInput::new(message, TriggerType::Task);
 input.config = Some(config);
 dispatcher.dispatch(&operator_id, input).await;
 
-// Child constructs the rule (behavior):
-let mut ctx = Context::new();
+// Child constructs the pipeline (behavior):
+let mut pipeline = Pipeline::new();
 if let Some(max_cost) = input.config.as_ref().and_then(|c| c.max_cost) {
-    ctx.add_rule(Rule::before::<Compile>("budget", 100, BudgetGuard::with_config(BudgetGuardConfig {
+    pipeline.push_before(Box::new(BudgetGuard::with_config(BudgetGuardConfig {
         max_cost: Some(max_cost),
         ..Default::default()
     })));
 }
 ```
 
-### Why not a RuleSpec enum?
+### Why not a MiddlewareSpec enum?
 
-A serializable enum of known rule types (`BudgetGuard`, `Telemetry`,
+A serializable enum of known middleware types (`BudgetGuard`, `Telemetry`,
 `AutoCompact`, `Custom(Value)`) is a closed vocabulary disguised as
-extensible. Every new rule type requires editing the enum or falling back
+extensible. Every new middleware requires editing the enum or falling back
 to untyped JSON. This is a central registry — it violates composability
-(§1) and forces the framework to know about every rule that will ever exist.
-
-The `Custom { name, config: Value }` escape hatch is worse: it recreates
-dynamic dispatch without type safety, requiring a name-to-constructor
-registry that must be synchronized across processes.
+(§1) and forces the framework to know about every middleware that will ever exist.
 
 ### The dispatch boundary
 
 Same-process dispatch (`LocalDispatcher`): the agent registry — the thing
 that maps `OperatorId` to a constructed `Operator` — is where behavior is wired.
-Rules are attached at operator construction, not per-dispatch. If a system
+Middleware is attached at operator construction, not per-dispatch. If a system
 architect wants agent B to always run with a budget guard, they configure that
 when registering agent B.
 
@@ -370,7 +366,7 @@ data using its own operator factories. Behavior stays local to the process
 that executes it.
 
 Per-dispatch variation (parent wants a tighter budget this time): use
-`OperatorConfig` fields. The child reads the data and adjusts its rules.
+`OperatorConfig` fields. The child reads the data and adjusts its pipeline.
 The data travels. The behavior doesn't.
 
 ### Antipattern — behavior descriptors
