@@ -8,10 +8,8 @@ use thiserror::Error;
 
 /// Uniform error type for all protocol boundaries (v2).
 ///
-/// Every protocol trait returns `Result<T, ProtocolError>`. Each v1 error type
-/// (`OperatorError`, `OrchError`) has a `From` impl that maps into this type
-/// so downstream callers migrating one boundary at a time compile without
-/// changes.
+/// Every protocol trait returns `Result<T, ProtocolError>`. Structured,
+/// serializable, and retryable-aware.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProtocolError {

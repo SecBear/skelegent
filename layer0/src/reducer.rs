@@ -1,6 +1,6 @@
 //! Reducer strategies for concurrent state writes to the same key.
 //!
-//! When parallel branches both emit [`Effect::WriteMemory`] for the same key,
+//! When parallel branches both emit `IntentKind::WriteMemory` for the same key,
 //! the orchestrator needs a deterministic merge policy. A [`StateReducer`]
 //! encodes that policy; a [`ReducerRegistry`] routes keys to the right one.
 

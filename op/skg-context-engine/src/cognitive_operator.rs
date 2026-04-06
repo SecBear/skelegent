@@ -4,9 +4,9 @@
 //! composition model and layer0's object-safe `Operator` trait. Rather than
 //! every consumer writing the same boilerplate wrapper, this operator provides:
 //!
-//! - Proper `EngineError` → `OperatorError` mapping (classified, not `to_string()`)
+//! - Proper `EngineError` → `ProtocolError` mapping (classified, not `to_string()`)
 //! - `Context` creation with optional pipeline injection
-//! - Structured exit handling (`ExitReason::MaxTurns`, etc.)
+//! - Structured exit handling (`Outcome::Limited`, etc.)
 //!
 //! Generic over `P: Provider` (not object-safe). The object-safe boundary
 //! is `Operator`, which `AgentOperator<P>` implements via `#[async_trait]`.

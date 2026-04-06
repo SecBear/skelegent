@@ -244,7 +244,7 @@ mod tests {
         }
     }
 
-    /// Emits `Effect::Handoff` with a `HandoffContext` and exits with `HandedOff`.
+    /// Emits `IntentKind::Handoff` with a `HandoffContext` and exits with `Outcome::Transfer`.
     ///
     /// `task` is the explicit next-step message the handing-off operator supplies.
     /// Carries a `target` ID so the swarm tests can inspect transition logic,

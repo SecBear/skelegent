@@ -176,7 +176,7 @@ impl OrchestratedRunner {
     /// [`EffectHandler`]. Compose logging, validation, and audit layers here:
     ///
     /// ```rust,ignore
-    /// let log = Arc::new(InMemoryEffectLog::new());
+    /// let log = Arc::new(InMemoryEffectStore::new());
     /// let stack = EffectStack::new()
     ///     .push(LoggingEffectMiddleware::new(log.clone()));
     /// let runner = OrchestratedRunner::new(dispatcher, handler)

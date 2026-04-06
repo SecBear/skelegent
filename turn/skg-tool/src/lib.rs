@@ -151,9 +151,9 @@ pub trait ToolDyn: Send + Sync {
     /// The approval policy for this tool.
     ///
     /// When the policy requires approval, the ReAct loop will emit
-    /// [`Effect::ToolApprovalRequired`] and exit with
-    /// [`ExitReason::AwaitingApproval`] instead of executing the tool
-    /// directly. The calling layer decides how to handle approval.
+    /// `IntentKind::RequestApproval` and exit with
+    /// `Outcome::Suspended { reason: WaitReason::Approval }` instead of
+    /// executing the tool directly. The calling layer decides how to handle approval.
     ///
     /// Default is [`ApprovalPolicy::None`] — tools execute immediately.
     fn approval_policy(&self) -> ApprovalPolicy {

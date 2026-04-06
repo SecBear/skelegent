@@ -1,14 +1,14 @@
 //! multi-agent — supervisor-style routing with peer-to-peer handoff.
 //!
 //! Demonstrates:
-//!   - `CognitiveOperator<TestProvider>` — deterministic agents, no API keys required
-//!   - `HandoffTool` — LLM sentinel detected by react_loop, emits Effect::Handoff
+//!   - `AgentOperator<TestProvider>` — deterministic agents, no API keys required
+//!   - `HandoffTool` — LLM sentinel detected by react_loop, emits IntentKind::Handoff
 //!   - `SwarmOperator` — peer-to-peer handoff with explicit transition validation
 //!   - `LocalOrch` — in-process dispatcher registering all three agents
 //!   - Custom `ToolDyn` impls — `charge` (billing) and `lookup_ticket` (support)
 //!
 //! Flow for "I need help with my bill":
-//!   1. triage-agent  → calls HandoffTool → Effect::Handoff to billing-agent
+//!   1. triage-agent  → calls HandoffTool → IntentKind::Handoff to billing-agent
 //!   2. billing-agent → calls ChargeTool  → confirms charge → Complete
 //!
 //! The support-agent is registered and reachable (triage→support transition is
@@ -154,9 +154,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // Its TestProvider is pre-loaded with a single tool call response:
     // calling `transfer_to_billing-agent` — a HandoffTool. When react_loop
-    // sees the `{"__handoff": true, ...}` sentinel it emits Effect::Handoff and
-    // exits with ExitReason::HandedOff; the SwarmOperator then dispatches the
-    // next agent named in the effect.
+    // sees the `{"__handoff": true, ...}` sentinel it emits IntentKind::Handoff and
+    // exits with Outcome::Transfer { HandedOff }; the SwarmOperator then dispatches the
+    // next agent named in the intent.
     let triage_provider = TestProvider::with_responses(vec![make_tool_call_response(
         "transfer_to_billing-agent",
         "call-001",

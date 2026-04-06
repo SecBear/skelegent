@@ -51,7 +51,7 @@ impl Operator for ToolOperator {
     /// Execute the wrapped tool.
     ///
     /// `input.message` must be valid JSON text representing the tool's input.
-    /// Any parse failure is surfaced as `OperatorError::NonRetryable`.
+    /// Any parse failure is surfaced as a non-retryable `ProtocolError`.
     async fn execute(
         &self,
         input: OperatorInput,

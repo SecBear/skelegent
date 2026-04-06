@@ -33,14 +33,14 @@
 //! }
 //!
 //! impl Operator for CoordinatorOp {
-//!     async fn execute(&self, input: OperatorInput, ctx: &DispatchContext) -> Result<OperatorOutput, OperatorError> {
+//!     async fn execute(&self, input: OperatorInput, ctx: &DispatchContext) -> Result<OperatorOutput, ProtocolError> {
 //!         // delegate to a sibling — goes through orchestrator middleware
 //!         let child_output = self.dispatcher
 //!             .dispatch(&ctx, child_input)
 //!             .await?
 //!             .collect()
 //!             .await
-//!             .map_err(|e| OperatorError::non_retryable(e.to_string()))?;
+//!             .map_err(|e| ProtocolError::internal(e.to_string()))?;
 //!         // ...
 //!     }
 //! }

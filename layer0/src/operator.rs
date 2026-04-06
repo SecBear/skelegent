@@ -147,7 +147,7 @@ impl OperatorConfig {
 // OUTCOME FAMILY (v2)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-/// Why an operator invocation ended (v2 typed replacement for [`ExitReason`]).
+/// Why an operator invocation ended.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

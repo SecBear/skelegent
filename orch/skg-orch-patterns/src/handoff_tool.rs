@@ -3,7 +3,7 @@
 //! When an LLM calls this tool it receives a structured JSON object containing
 //! `__handoff: true`, the `target` operator ID, and the `reason` the model
 //! supplied. The orchestration layer inspects the tool result and performs the
-//! actual handoff (e.g. by emitting [`layer0::Effect::Handoff`]).
+//! actual handoff (e.g. by emitting `IntentKind::Handoff`).
 
 use std::future::Future;
 use std::pin::Pin;

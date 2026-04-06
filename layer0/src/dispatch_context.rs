@@ -10,7 +10,7 @@
 //! Before DispatchContext, different components carried different subsets
 //! of identity and correlation: OperatorInput had session but no trace ID;
 //! ToolCallContext had operator_id but no session or auth; middleware saw
-//! operator + input but no dispatch ID; EffectEmitter had a sender channel
+//! operator + input but no dispatch ID; effect handlers had a sender channel
 //! but no identity.
 //!
 //! DispatchContext is the single type that unifies all of these. Every
