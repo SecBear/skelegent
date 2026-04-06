@@ -1,3 +1,8 @@
+> **SUPERSEDED** — The ContextOp/Rule/Trigger architecture described below was
+> replaced by Middleware/Pipeline in the v2 redesign. See `src/middleware.rs`,
+> `src/pipeline.rs`, and the module docs in `src/lib.rs` for the current design.
+> This document is retained for historical context only.
+
 # skg-context-engine Design Specification
 
 ## Philosophy

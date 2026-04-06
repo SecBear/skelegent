@@ -15,9 +15,9 @@ skg-turn = { path = "../../turn/skg-turn", version = "0.4.1" }
 skg-auth = { path = "../../auth/skg-auth", version = "0.4.1" }
 layer0 = { path = "../../layer0", version = "0.4.1" }
 reqwest = { version = "0.12", default-features = false, features = [
-  "json",
-  "rustls-tls",
-  "stream",
+   "json",
+   "rustls-tls",
+   "stream",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,4 +31,3 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
 skg-tool = { path = "../../turn/skg-tool", version = "0.4.1" }
 skg-state-memory = { path = "../../state/skg-state-memory", version = "0.4.1" }
-skg-context-engine = { path = "../../op/skg-context-engine", version = "0.4.1" }

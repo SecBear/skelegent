@@ -374,8 +374,8 @@ mod tests {
     use super::*;
     use layer0::operator::{Outcome, TerminalOutcome};
     use skg_context_engine::{
-        CognitiveBuilder, CognitiveOperator, ReactLoopConfig,
-        rules::{BudgetGuard, BudgetGuardConfig},
+        CognitiveBuilder, CognitiveOperator, Middleware, Pipeline, ReactLoopConfig,
+        react::{BudgetGuard, BudgetGuardConfig},
     };
     use skg_turn::test_utils::{FunctionProvider, make_text_response};
     use std::sync::Arc;
@@ -406,20 +406,15 @@ mod tests {
                 ..Default::default()
             },
         )
-        .with_rules(|| {
-            let guard = BudgetGuard::with_config(BudgetGuardConfig {
+        .with_pipeline(|| {
+            let mut pipeline = Pipeline::new();
+            pipeline.push_before(Box::new(BudgetGuard::with_config(BudgetGuardConfig {
                 max_cost: None,
-                max_turns: Some(0),
+                max_turns: Some(0), // zero turns = immediate budget exit
                 max_duration: None,
                 max_tool_calls: None,
-            });
-            // BeforeAny fires during inject_system/inject_message context.run() calls.
-            vec![skg_context_engine::rule::Rule::new(
-                "budget_guard",
-                skg_context_engine::rule::Trigger::BeforeAny,
-                100,
-                guard,
-            )]
+            })));
+            pipeline
         });
 
         let input = OperatorInput::new(Content::text("hi"), TriggerType::User);
