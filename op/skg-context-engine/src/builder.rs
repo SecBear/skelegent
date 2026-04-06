@@ -1,93 +1,198 @@
-//! Typestate builder for [`CognitiveOperator`].
+//! Typestate builder for [`AgentOperator`].
 //!
-//! Provides an ergonomic fluent API for constructing a [`CognitiveOperator`]
+//! Provides an ergonomic fluent API for constructing an [`AgentOperator`]
 //! with compile-time enforcement that a provider is supplied before building.
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use skg_context_engine::{CognitiveBuilder, CognitiveOperator, ReactLoopConfig};
+//! use skg_context_engine::{AgentBuilder, AgentOperator, ReactLoopConfig};
 //! use skg_tool::ToolRegistry;
 //!
-//! let op = CognitiveBuilder::new()
+//! let op = AgentBuilder::new()
 //!     .system_prompt("You are a helpful assistant.")
 //!     .max_tokens(2048)
 //!     .provider(my_provider)
 //!     .build();
-//! // op: CognitiveOperator<MyProvider>
+//! // op: AgentOperator<MyProvider>
 //!
-//! // CognitiveOperator::builder() also works when P can be inferred:
-//! let op: CognitiveOperator<MyProvider> = CognitiveOperator::builder()
+//! // AgentOperator::builder() also works when P can be inferred:
+//! let op: AgentOperator<MyProvider> = AgentOperator::builder()
 //!     .provider(my_provider)
 //!     .build();
 //! ```
 //!
 //! The provider step is required — `build()` is only available on
-//! `CognitiveBuilder<WithProvider<P>>`:
+//! `AgentBuilder<WithProvider<P>>`:
 //!
 //! ```rust,compile_fail
-//! # use skg_context_engine::builder::CognitiveBuilder;
-//! // This fails to compile: build() does not exist on CognitiveBuilder<NoProvider>.
-//! let op = CognitiveBuilder::new().build();
+//! # use skg_context_engine::builder::AgentBuilder;
+//! // This fails to compile: build() does not exist on AgentBuilder<NoProvider>.
+//! let op = AgentBuilder::new().build();
 //! ```
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use layer0::Dispatcher;
+use layer0::operator::{LimitReason, Outcome};
+use rust_decimal::Decimal;
 use skg_tool::{ToolDyn, ToolRegistry};
 use skg_turn::provider::Provider;
 
-use crate::cognitive_operator::RuleFactory;
-use crate::rule::Rule;
-use crate::rules::{BudgetGuard, BudgetGuardConfig};
-use crate::{CognitiveOperator, InferBoundary, ReactLoopConfig};
+use crate::context::Context;
+use crate::error::EngineError;
+use crate::middleware::Middleware;
+use crate::pipeline::Pipeline;
+use crate::{AgentOperator, ReactLoopConfig};
+
+// ── PipelineFactory type ──────────────────────────────────────────────────────
+
+/// Factory that produces a fresh [`Pipeline`] for each execution.
+///
+/// Pipelines contain `Box<dyn ErasedMiddleware>` and cannot be cloned, so
+/// the operator needs a factory to create fresh instances per `execute()` call.
+pub type PipelineFactory = Arc<dyn Fn() -> Pipeline + Send + Sync>;
+
+// ── BudgetGuard middleware ────────────────────────────────────────────────────
+
+/// Configuration limits for [`BudgetGuard`].
+#[derive(Debug, Clone, Default)]
+pub struct BudgetGuardConfig {
+    /// Maximum number of completed inference turns.
+    pub max_turns: Option<u32>,
+    /// Maximum cumulative cost in USD.
+    pub max_cost: Option<Decimal>,
+    /// Maximum wall-clock duration.
+    pub max_duration: Option<Duration>,
+    /// Maximum total tool calls dispatched.
+    pub max_tool_calls: Option<u32>,
+}
+
+/// Middleware that enforces resource limits before each inference call.
+///
+/// Checks `ctx.metrics` against the configured limits. Returns
+/// [`EngineError::Exit`] with [`Outcome::Limited`] on the first exceeded limit,
+/// preventing the inference call from happening.
+///
+/// Check order: turns → cost → duration → tool calls.
+pub struct BudgetGuard {
+    config: BudgetGuardConfig,
+}
+
+impl BudgetGuard {
+    /// Create a `BudgetGuard` with the given configuration.
+    pub fn with_config(config: BudgetGuardConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl Middleware for BudgetGuard {
+    async fn process(&self, ctx: &mut Context) -> Result<(), EngineError> {
+        let m = &ctx.metrics;
+
+        if let Some(max) = self.config.max_turns {
+            if m.turns_completed >= max {
+                return Err(EngineError::Exit {
+                    outcome: Outcome::Limited {
+                        limit: LimitReason::MaxTurns,
+                    },
+                    detail: format!("turns_completed {} >= max_turns {}", m.turns_completed, max),
+                });
+            }
+        }
+
+        if let Some(max) = self.config.max_cost {
+            if m.cost >= max {
+                return Err(EngineError::Exit {
+                    outcome: Outcome::Limited {
+                        limit: LimitReason::BudgetExhausted,
+                    },
+                    detail: format!("cost {} >= max_cost {}", m.cost, max),
+                });
+            }
+        }
+
+        if let Some(max) = self.config.max_duration {
+            let elapsed = m.start.elapsed();
+            if elapsed >= max {
+                return Err(EngineError::Exit {
+                    outcome: Outcome::Limited {
+                        limit: LimitReason::Timeout,
+                    },
+                    detail: format!("elapsed {:?} >= max_duration {:?}", elapsed, max),
+                });
+            }
+        }
+
+        if let Some(max) = self.config.max_tool_calls {
+            if m.tool_calls_total >= max {
+                return Err(EngineError::Exit {
+                    outcome: Outcome::Limited {
+                        limit: LimitReason::BudgetExhausted,
+                    },
+                    detail: format!(
+                        "tool_calls_total {} >= max_tool_calls {}",
+                        m.tool_calls_total, max
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "BudgetGuard"
+    }
+}
 
 // ── Typestate markers ─────────────────────────────────────────────────────────
 
 /// Typestate marker: no provider has been set yet.
 ///
-/// A `CognitiveBuilder<NoProvider>` does not expose [`build()`](CognitiveBuilder::build);
-/// that method is only available after calling [`.provider()`](CognitiveBuilder::provider).
+/// An `AgentBuilder<NoProvider>` does not expose [`build()`](AgentBuilder::build);
+/// that method is only available after calling [`.provider()`](AgentBuilder::provider).
 pub struct NoProvider;
 
 /// Typestate marker: a provider of type `P` has been set.
 ///
-/// When the builder is in this state, [`build()`](CognitiveBuilder::build) is available.
+/// When the builder is in this state, [`build()`](AgentBuilder::build) is available.
 pub struct WithProvider<P>(P);
 
 // ── Builder struct ────────────────────────────────────────────────────────────
 
-/// Typestate builder for [`CognitiveOperator`].
+/// Typestate builder for [`AgentOperator`].
 ///
-/// Construct via [`CognitiveOperator::builder()`] or [`CognitiveBuilder::new()`].
+/// Construct via [`AgentOperator::builder()`] or [`AgentBuilder::new()`].
 /// Configure fluently, then supply a provider with [`.provider()`] and call
-/// [`.build()`] to obtain a [`CognitiveOperator`].
+/// [`.build()`] to obtain an [`AgentOperator`].
 ///
-/// `max_turns` is enforced via a [`BudgetGuard`] rule injected at build time.
-/// Any additional rules supplied via [`.rules()`] are combined with the budget
-/// guard (budget guard fires first at priority 100).
-pub struct CognitiveBuilder<State> {
+/// `max_turns` is enforced via a [`BudgetGuard`] middleware injected into the
+/// before-send phase at build time. Any pipeline supplied via [`.pipeline()`]
+/// has the budget guard prepended (fires first).
+pub struct AgentBuilder<State> {
     state: State,
     operator_id: Option<String>,
     /// Standalone system prompt; overrides `config.system_prompt` when non-empty.
     system_prompt: String,
     tools: ToolRegistry,
     config: ReactLoopConfig,
-    rule_factory: Option<RuleFactory>,
+    pipeline_factory: Option<PipelineFactory>,
     /// Stored separately because `ReactLoopConfig` has no `max_turns` field;
-    /// wired into a `BudgetGuard` rule at [`build()`](CognitiveBuilder::build) time.
+    /// wired into a `BudgetGuard` middleware at [`build()`](AgentBuilder::build) time.
     max_turns: Option<u32>,
-    /// Optional dispatcher forwarded to [`CognitiveOperator::with_dispatcher`] at
+    /// Optional dispatcher forwarded to [`AgentOperator::with_dispatcher`] at
     /// build time. Construction-time capability, not per-request data.
     dispatcher: Option<Arc<dyn Dispatcher>>,
 }
 
 // ── NoProvider state ──────────────────────────────────────────────────────────
 
-impl CognitiveBuilder<NoProvider> {
+impl AgentBuilder<NoProvider> {
     /// Create a builder with no provider set.
     ///
-    /// Equivalent to [`CognitiveOperator::builder()`].
+    /// Equivalent to [`AgentOperator::builder()`].
     pub fn new() -> Self {
         Self {
             state: NoProvider,
@@ -95,7 +200,7 @@ impl CognitiveBuilder<NoProvider> {
             system_prompt: String::new(),
             tools: ToolRegistry::new(),
             config: ReactLoopConfig::default(),
-            rule_factory: None,
+            pipeline_factory: None,
             max_turns: None,
             dispatcher: None,
         }
@@ -103,22 +208,22 @@ impl CognitiveBuilder<NoProvider> {
 
     /// Supply the LLM provider, advancing the builder to [`WithProvider`] state.
     ///
-    /// After this call, [`build()`](CognitiveBuilder::build) becomes available.
-    pub fn provider<P: Provider + 'static>(self, p: P) -> CognitiveBuilder<WithProvider<P>> {
-        CognitiveBuilder {
+    /// After this call, [`build()`](AgentBuilder::build) becomes available.
+    pub fn provider<P: Provider + 'static>(self, p: P) -> AgentBuilder<WithProvider<P>> {
+        AgentBuilder {
             state: WithProvider(p),
             operator_id: self.operator_id,
             system_prompt: self.system_prompt,
             tools: self.tools,
             config: self.config,
-            rule_factory: self.rule_factory,
+            pipeline_factory: self.pipeline_factory,
             max_turns: self.max_turns,
             dispatcher: self.dispatcher,
         }
     }
 }
 
-impl Default for CognitiveBuilder<NoProvider> {
+impl Default for AgentBuilder<NoProvider> {
     fn default() -> Self {
         Self::new()
     }
@@ -126,26 +231,26 @@ impl Default for CognitiveBuilder<NoProvider> {
 
 // ── WithProvider state ────────────────────────────────────────────────────────
 
-impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
-    /// Finalize the builder and produce a [`CognitiveOperator`].
+impl<P: Provider + 'static> AgentBuilder<WithProvider<P>> {
+    /// Finalize the builder and produce an [`AgentOperator`].
     ///
-    /// This method is only available on `CognitiveBuilder<WithProvider<P>>`.
-    /// Attempting to call it on `CognitiveBuilder<NoProvider>` is a compile error:
+    /// This method is only available on `AgentBuilder<WithProvider<P>>`.
+    /// Attempting to call it on `AgentBuilder<NoProvider>` is a compile error:
     ///
     /// ```rust,compile_fail
-    /// # use skg_context_engine::builder::CognitiveBuilder;
-    /// // build() does not exist on CognitiveBuilder<NoProvider>
-    /// let _op = CognitiveBuilder::new().build();
+    /// # use skg_context_engine::builder::AgentBuilder;
+    /// // build() does not exist on AgentBuilder<NoProvider>
+    /// let _op = AgentBuilder::new().build();
     /// ```
     ///
     /// The system prompt set via [`.system_prompt()`] takes precedence over
     /// `config.system_prompt` when non-empty.
     ///
-    /// When `max_turns` was set via [`.max_turns()`], a [`BudgetGuard`] rule is
-    /// injected at priority 100 using `Rule::before::<InferBoundary>`. Any
-    /// rules supplied via [`.rules()`] are appended after the budget guard so
-    /// the guard always fires first.
-    pub fn build(self) -> CognitiveOperator<P> {
+    /// When `max_turns` was set via [`.max_turns()`], a [`BudgetGuard`]
+    /// middleware is prepended to the before-send phase of the pipeline.
+    /// Any pipeline supplied via [`.pipeline()`] has the guard prepended so
+    /// it always fires first.
+    pub fn build(self) -> AgentOperator<P> {
         let operator_id = self.operator_id.unwrap_or_else(|| "agent".into());
 
         // system_prompt wins over whatever is in config when non-empty, so
@@ -155,41 +260,41 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
             config.system_prompt = self.system_prompt;
         }
 
-        let op = CognitiveOperator::new(operator_id, self.state.0, self.tools, config);
-        let dispatcher = self.dispatcher;
-
-        let op = match (self.max_turns, self.rule_factory) {
-            (Some(max_turns), Some(user_factory)) => {
-                // Budget guard fires first (priority 100); user rules follow.
-                op.with_rules(move || {
-                    let guard = BudgetGuard::with_config(BudgetGuardConfig {
+        let pipeline_factory: Option<PipelineFactory> =
+            match (self.max_turns, self.pipeline_factory) {
+                (Some(max_turns), Some(user_factory)) => Some(Arc::new(move || {
+                    let mut pipeline = user_factory();
+                    // Budget guard fires first (prepended); user middleware follows.
+                    pipeline.before_send.insert(
+                        0,
+                        Box::new(BudgetGuard::with_config(BudgetGuardConfig {
+                            max_turns: Some(max_turns),
+                            ..Default::default()
+                        })),
+                    );
+                    pipeline
+                })),
+                (Some(max_turns), None) => Some(Arc::new(move || {
+                    let mut pipeline = Pipeline::new();
+                    pipeline.push_before(Box::new(BudgetGuard::with_config(BudgetGuardConfig {
                         max_turns: Some(max_turns),
-                        max_cost: None,
-                        max_duration: None,
-                        max_tool_calls: None,
-                    });
-                    let mut rules = vec![Rule::before::<InferBoundary>("budget_guard", 100, guard)];
-                    rules.extend(user_factory());
-                    rules
-                })
-            }
-            (Some(max_turns), None) => op.with_rules(move || {
-                let guard = BudgetGuard::with_config(BudgetGuardConfig {
-                    max_turns: Some(max_turns),
-                    max_cost: None,
-                    max_duration: None,
-                    max_tool_calls: None,
-                });
-                vec![Rule::before::<InferBoundary>("budget_guard", 100, guard)]
-            }),
-            (None, Some(factory)) => op.with_rules(move || factory()),
-            // No rules configured — match CognitiveOperator::new() behavior exactly.
-            (None, None) => op,
-        };
+                        ..Default::default()
+                    })));
+                    pipeline
+                })),
+                (None, Some(factory)) => Some(Arc::new(move || factory())),
+                // No pipeline configured — AgentOperator::new() behavior.
+                (None, None) => None,
+            };
 
-        // Wire in the dispatcher last, after rules are set, so the full chain
-        // (with_rules → with_dispatcher) is set up correctly.
-        match dispatcher {
+        let op = AgentOperator::new(operator_id, self.state.0, self.tools, config);
+
+        // Wire in pipeline factory and optional dispatcher.
+        let op = match pipeline_factory {
+            Some(f) => op.with_pipeline(move || f()),
+            None => op,
+        };
+        match self.dispatcher {
             Some(d) => op.with_dispatcher(d),
             None => op,
         }
@@ -226,7 +331,7 @@ impl<P: Provider + 'static> CognitiveBuilder<WithProvider<P>> {
 
 // ── Shared setters (both states) ──────────────────────────────────────────────
 
-impl<S> CognitiveBuilder<S> {
+impl<S> AgentBuilder<S> {
     /// Set the operator ID used in dispatch traces and tool-call metadata.
     ///
     /// Defaults to `"agent"` when not set.
@@ -263,8 +368,8 @@ impl<S> CognitiveBuilder<S> {
 
     /// Set the maximum number of ReAct turns.
     ///
-    /// Enforced via a [`BudgetGuard`] rule injected before each inference call.
-    /// When combined with [`.rules()`], the budget guard fires first.
+    /// Enforced via a [`BudgetGuard`] middleware injected before each inference
+    /// call. When combined with [`.pipeline()`], the budget guard fires first.
     pub fn max_turns(mut self, max: u32) -> Self {
         self.max_turns = Some(max);
         self
@@ -286,14 +391,14 @@ impl<S> CognitiveBuilder<S> {
         self
     }
 
-    /// Set the rule factory for injecting rules into each execution context.
+    /// Set the pipeline factory for injecting middleware into each execution context.
     ///
-    /// The factory is called once per `execute()` invocation because rules
+    /// The factory is called once per `execute()` invocation because pipelines
     /// contain boxed trait objects and are not `Clone`. When [`.max_turns()`]
-    /// is also set, the budget guard is prepended (priority 100) and user rules
-    /// follow.
-    pub fn rules(mut self, factory: RuleFactory) -> Self {
-        self.rule_factory = Some(factory);
+    /// is also set, a [`BudgetGuard`] middleware is prepended to the
+    /// before-send phase and user middleware follows.
+    pub fn pipeline(mut self, factory: PipelineFactory) -> Self {
+        self.pipeline_factory = Some(factory);
         self
     }
 
@@ -310,7 +415,7 @@ impl<S> CognitiveBuilder<S> {
 
     /// Attach a dispatcher for sub-dispatch from within the react loop.
     ///
-    /// Forwarded to [`CognitiveOperator::with_dispatcher`] at build time.
+    /// Forwarded to [`AgentOperator::with_dispatcher`] at build time.
     /// The dispatcher is injected into the `DispatchContext` extensions so
     /// downstream tools can access it via
     /// `dispatch_ctx.extensions().get::<Arc<dyn Dispatcher>>()`.
@@ -346,7 +451,7 @@ mod tests {
     async fn builder_creates_operator() {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
 
-        let op = CognitiveBuilder::new()
+        let op = AgentBuilder::new()
             .operator_id("test-op")
             .system_prompt("You are helpful.")
             .max_tokens(1024)
@@ -367,13 +472,13 @@ mod tests {
     }
 
     /// Builder with only a provider uses the same defaults as
-    /// `CognitiveOperator::new("agent", provider, ToolRegistry::new(), ReactLoopConfig::default())`.
+    /// `AgentOperator::new("agent", provider, ToolRegistry::new(), ReactLoopConfig::default())`.
     #[tokio::test]
     async fn builder_defaults_sensible() {
         let provider = TestProvider::with_responses(vec![make_text_response("Hi")]);
 
         // Minimal build: just provider, everything else is default.
-        let op = CognitiveBuilder::new().provider(provider).build();
+        let op = AgentBuilder::new().provider(provider).build();
 
         let output = Operator::execute(&op, simple_input("Hello"), &test_ctx())
             .await
@@ -396,7 +501,7 @@ mod tests {
             make_text_response("Second"),
         ]);
 
-        let op = CognitiveBuilder::new()
+        let op = AgentBuilder::new()
             .system_prompt("You are helpful.")
             .max_turns(1)
             .provider(provider)
@@ -415,13 +520,13 @@ mod tests {
         );
     }
 
-    /// [`CognitiveBuilder::run()`] is a one-shot convenience: build + execute with a
+    /// [`AgentBuilder::run()`] is a one-shot convenience: build + execute with a
     /// synthesized dispatch context.
     #[tokio::test]
     async fn builder_run_convenience() {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello from run!")]);
 
-        let output = CognitiveBuilder::new()
+        let output = AgentBuilder::new()
             .system_prompt("You are helpful.")
             .provider(provider)
             .run("Hi!")
@@ -461,7 +566,7 @@ mod tests {
     async fn builder_dispatcher_executes_normally() {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
 
-        let op = CognitiveBuilder::new()
+        let op = AgentBuilder::new()
             .system_prompt("You are helpful.")
             .dispatcher(Arc::new(NullDispatcher))
             .provider(provider)
@@ -485,7 +590,7 @@ mod tests {
     async fn builder_dispatcher_before_provider() {
         let provider = TestProvider::with_responses(vec![make_text_response("ok")]);
 
-        let op = CognitiveBuilder::new()
+        let op = AgentBuilder::new()
             .dispatcher(Arc::new(NullDispatcher)) // set before provider
             .provider(provider)
             .build();
@@ -502,12 +607,12 @@ mod tests {
         );
     }
 
-    /// Dispatcher chains correctly with max_turns (rule wiring).
+    /// Dispatcher chains correctly with max_turns (pipeline wiring).
     #[tokio::test]
     async fn builder_dispatcher_with_max_turns() {
         let provider = TestProvider::with_responses(vec![make_text_response("done")]);
 
-        let op = CognitiveBuilder::new()
+        let op = AgentBuilder::new()
             .max_turns(5)
             .dispatcher(Arc::new(NullDispatcher))
             .provider(provider)

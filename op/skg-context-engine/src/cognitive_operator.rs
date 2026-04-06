@@ -1,15 +1,15 @@
-//! [`CognitiveOperator`] — wraps [`react_loop`](crate::react_loop) as an [`Operator`].
+//! [`AgentOperator`] — wraps [`react_loop`](crate::react_loop) as an [`Operator`].
 //!
 //! This is the canonical bridge between the context engine's free-function
 //! composition model and layer0's object-safe `Operator` trait. Rather than
 //! every consumer writing the same boilerplate wrapper, this operator provides:
 //!
 //! - Proper `EngineError` → `OperatorError` mapping (classified, not `to_string()`)
-//! - `Context` creation with optional rule injection
+//! - `Context` creation with optional pipeline injection
 //! - Structured exit handling (`ExitReason::MaxTurns`, etc.)
 //!
 //! Generic over `P: Provider` (not object-safe). The object-safe boundary
-//! is `Operator`, which `CognitiveOperator<P>` implements via `#[async_trait]`.
+//! is `Operator`, which `AgentOperator<P>` implements via `#[async_trait]`.
 
 use async_trait::async_trait;
 use layer0::DispatchContext;
@@ -25,46 +25,47 @@ use std::sync::Arc;
 
 use crate::context::Context;
 use crate::error::EngineError;
+use crate::pipeline::Pipeline;
 use crate::react::ReactLoopConfig;
-use crate::{Rule, react_loop};
+use crate::react::react_loop;
 
-/// Factory that produces rules for each execution.
+/// Factory that produces a [`Pipeline`] for each execution.
 ///
-/// Rules contain `Box<dyn ErasedOp>` and are not `Clone`, so the operator
-/// needs a factory to create fresh rules for each `execute()` call.
-pub type RuleFactory = Arc<dyn Fn() -> Vec<Rule> + Send + Sync>;
+/// `Pipeline` contains `Box<dyn ErasedMiddleware>` and is not `Clone`, so the
+/// operator needs a factory to create a fresh pipeline for each `execute()` call.
+pub type PipelineFactory = Arc<dyn Fn() -> Pipeline + Send + Sync>;
 
 /// An [`Operator`] that runs a ReAct loop via the context engine.
 ///
 /// Wraps [`react_loop()`](crate::react_loop) with proper error classification,
-/// context setup, and rule injection. This is the operator you register with
+/// context setup, and pipeline injection. This is the operator you register with
 /// a `Dispatcher` when you want a multi-turn, tool-using agent.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use skg_context_engine::{CognitiveOperator, ReactLoopConfig};
+/// use skg_context_engine::{AgentOperator, ReactLoopConfig};
 ///
-/// let op = CognitiveOperator::new("agent", provider, tools, config);
+/// let op = AgentOperator::new("agent", provider, tools, config);
 /// // Register with a dispatcher:
 /// let orch = LocalOrch::new();
 /// orch.register("agent", Arc::new(op));
 /// ```
-pub struct CognitiveOperator<P: Provider> {
+pub struct AgentOperator<P: Provider> {
     provider: P,
     tools: ToolRegistry,
     operator_id: OperatorId,
     config: ReactLoopConfig,
-    /// Factory for rules injected into each execution context.
-    rule_factory: Option<RuleFactory>,
+    /// Factory for the pipeline injected into each execution.
+    pipeline_factory: Option<PipelineFactory>,
     /// Optional dispatcher injected into the `DispatchContext` extensions before
     /// each `react_loop` call. When set, downstream tools and sub-dispatch sites
     /// can access it via `dispatch_ctx.extensions().get::<Arc<dyn Dispatcher>>()`.
     dispatcher: Option<Arc<dyn Dispatcher>>,
 }
 
-impl<P: Provider> CognitiveOperator<P> {
-    /// Create a new cognitive operator.
+impl<P: Provider> AgentOperator<P> {
+    /// Create a new agent operator.
     ///
     /// `operator_id` identifies this operator in dispatch traces and tool
     /// call metadata.
@@ -89,22 +90,22 @@ impl<P: Provider> CognitiveOperator<P> {
             tools,
             operator_id: operator_id.into(),
             config,
-            rule_factory: None,
+            pipeline_factory: None,
             dispatcher: Some(default_dispatcher),
         }
     }
 
-    /// Set a rule factory that produces rules for each execution.
+    /// Set a pipeline factory that produces a [`Pipeline`] for each execution.
     ///
-    /// Rules fire automatically during context operations. Common rules:
+    /// The pipeline's middleware fires automatically at before/after inference
+    /// boundaries. Common middleware:
     /// - `BudgetGuard` — enforces turn/cost/duration limits
-    /// - Overwatch agents — monitor and intervene
     /// - Telemetry recorders
     ///
-    /// The factory is called once per `execute()` call because rules are
-    /// not `Clone` (they contain boxed trait objects).
-    pub fn with_rules(mut self, factory: impl Fn() -> Vec<Rule> + Send + Sync + 'static) -> Self {
-        self.rule_factory = Some(Arc::new(factory));
+    /// The factory is called once per `execute()` call because `Pipeline` is
+    /// not `Clone` (it contains boxed trait objects).
+    pub fn with_pipeline(mut self, factory: impl Fn() -> Pipeline + Send + Sync + 'static) -> Self {
+        self.pipeline_factory = Some(Arc::new(factory));
         self
     }
 
@@ -120,42 +121,43 @@ impl<P: Provider> CognitiveOperator<P> {
         self
     }
 
-    /// Create an ergonomic typestate builder for constructing a [`CognitiveOperator`].
+    /// Create an ergonomic typestate builder for constructing an [`AgentOperator`].
     ///
     /// The builder enforces at compile time that a provider is supplied before
-    /// [`build()`](crate::CognitiveBuilder::build) is called.
+    /// [`build()`](crate::AgentBuilder::build) is called.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let op = CognitiveOperator::builder()
+    /// let op = AgentOperator::builder()
     ///     .system_prompt("You are helpful.")
     ///     .max_tokens(2048)
     ///     .provider(my_provider)
     ///     .build();
     /// ```
-    pub fn builder() -> crate::CognitiveBuilder<crate::NoProvider> {
-        crate::CognitiveBuilder::new()
+    pub fn builder() -> crate::AgentBuilder<crate::NoProvider> {
+        crate::AgentBuilder::new()
     }
 
-    fn create_context(&self) -> Context {
-        match &self.rule_factory {
-            Some(factory) => Context::with_rules(factory()),
-            None => Context::new(),
+    fn create_pipeline(&self) -> Pipeline {
+        match &self.pipeline_factory {
+            Some(factory) => factory(),
+            None => Pipeline::new(),
         }
     }
 }
 
 #[async_trait]
-impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
+impl<P: Provider + 'static> Operator for AgentOperator<P> {
     #[tracing::instrument(skip_all, fields(operator_id = ?self.operator_id, trigger = ?input.trigger))]
     async fn execute(
         &self,
         input: OperatorInput,
         dispatch_ctx: &DispatchContext,
     ) -> Result<OperatorOutput, ProtocolError> {
-        let mut ctx = self.create_context();
+        let mut ctx = Context::new();
         let mut config = self.config.clone();
+        let pipeline = self.create_pipeline();
 
         // If a dispatcher was provided at construction time, inject it into a
         // cloned dispatch context so all per-dispatch logic (prompt resolution,
@@ -197,26 +199,20 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             }
         }
 
-        // Inject system prompt into context
+        // Inject system prompt into context (synchronous)
         if !config.system_prompt.is_empty() {
-            ctx.inject_system(&config.system_prompt)
-                .await
-                .map_err(map_engine_error)?;
+            ctx.inject_system(&config.system_prompt);
         }
 
         // Seed context with pre-assembled messages from caller, if any.
         // Injected before the new user message so the model sees inherited
         // history first.
         if let Some(messages) = input.context.filter(|m| !m.is_empty()) {
-            ctx.inject_messages(messages)
-                .await
-                .map_err(map_engine_error)?;
+            ctx.inject_messages(messages);
         }
 
-        // Inject user message
-        ctx.inject_message(Message::new(Role::User, input.message))
-            .await
-            .map_err(map_engine_error)?;
+        // Inject user message (synchronous)
+        ctx.inject_message(Message::new(Role::User, input.message));
 
         // Apply allowed_operators from dispatch input as a tool filter.
         // When a parent sets allowed_operators, only those tools are visible
@@ -234,9 +230,16 @@ impl<P: Provider + 'static> Operator for CognitiveOperator<P> {
             ));
         }
 
-        react_loop(&mut ctx, &self.provider, &self.tools, dispatch_ctx, &config)
-            .await
-            .map_err(map_engine_error)
+        react_loop(
+            &mut ctx,
+            &self.provider,
+            &self.tools,
+            dispatch_ctx,
+            &config,
+            &pipeline,
+        )
+        .await
+        .map_err(map_engine_error)
     }
 }
 
@@ -287,8 +290,8 @@ mod tests {
         }
     }
 
-    fn make_op(provider: TestProvider) -> CognitiveOperator<TestProvider> {
-        CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config())
+    fn make_op(provider: TestProvider) -> AgentOperator<TestProvider> {
+        AgentOperator::new("test-op", provider, ToolRegistry::new(), make_config())
     }
 
     #[tokio::test]
@@ -323,7 +326,7 @@ mod tests {
     #[tokio::test]
     async fn cognitive_rate_limit_maps_to_retryable() {
         let provider = skg_turn::test_utils::error_provider_rate_limited();
-        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config());
+        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), make_config());
 
         let result = op.execute(simple_input("test"), &test_ctx()).await;
         let err = result.unwrap_err();
@@ -351,24 +354,29 @@ mod tests {
 
     #[tokio::test]
     async fn cognitive_with_budget_guard() {
-        use crate::rules::{BudgetGuard, BudgetGuardConfig};
+        use crate::middleware::Middleware;
+
+        // Inline middleware that immediately signals a MaxTurns budget exit.
+        // This is equivalent to BudgetGuard::with_config(BudgetGuardConfig { max_turns: Some(0), .. }).
+        struct ImmediateExitGuard;
+        impl Middleware for ImmediateExitGuard {
+            async fn process(&self, _ctx: &mut Context) -> Result<(), EngineError> {
+                Err(EngineError::Exit {
+                    outcome: Outcome::Limited {
+                        limit: LimitReason::MaxTurns,
+                    },
+                    detail: "max_turns reached".into(),
+                })
+            }
+        }
 
         let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
 
-        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config())
-            .with_rules(|| {
-                let guard = BudgetGuard::with_config(BudgetGuardConfig {
-                    max_cost: None,
-                    max_turns: Some(0), // Zero turns = immediate budget exit
-                    max_duration: None,
-                    max_tool_calls: None,
-                });
-                // Before<InferBoundary> fires before each inference call in react_loop.
-                vec![Rule::before::<crate::boundary::InferBoundary>(
-                    "budget_guard",
-                    100,
-                    guard,
-                )]
+        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), make_config())
+            .with_pipeline(|| {
+                let mut p = Pipeline::new();
+                p.push_before(Box::new(ImmediateExitGuard));
+                p
             });
 
         let result = op.execute(simple_input("hi"), &test_ctx()).await;
@@ -426,7 +434,7 @@ mod tests {
     async fn allowed_operators_filters_visible_tools() {
         let provider = TestProvider::with_responses(vec![make_text_response("ok")]);
         let tools = registry_with_tools(&["tool_a", "tool_b", "tool_c"]);
-        let op = CognitiveOperator::new("test-op", provider, tools, make_config());
+        let op = AgentOperator::new("test-op", provider, tools, make_config());
 
         let mut input = simple_input("go");
         let mut op_config = OperatorConfig::default();
@@ -636,7 +644,7 @@ mod tests {
             system_prompt_fn: Some(resolver),
             ..Default::default()
         };
-        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), config);
+        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), config);
 
         op.execute(simple_input("hi"), &test_ctx()).await.unwrap();
 
@@ -660,7 +668,7 @@ mod tests {
             model: Some("test-model".into()),
             ..Default::default() // system_prompt_fn: None
         };
-        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), config);
+        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), config);
 
         op.execute(simple_input("hi"), &test_ctx()).await.unwrap();
 
@@ -676,7 +684,7 @@ mod tests {
 
     /// A no-op dispatcher that panics if `dispatch()` is called.
     ///
-    /// Used to verify that wiring the dispatcher into a `CognitiveOperator`
+    /// Used to verify that wiring the dispatcher into an `AgentOperator`
     /// does not break normal execution (the dispatcher is injected into context
     /// extensions but is never called when the model returns a plain text response).
     struct PanicDispatcher;
@@ -692,11 +700,11 @@ mod tests {
         }
     }
 
-    /// Wiring a dispatcher into `CognitiveOperator` does not break text-only execution.
+    /// Wiring a dispatcher into `AgentOperator` does not break text-only execution.
     #[tokio::test]
     async fn with_dispatcher_executes_normally() {
         let provider = TestProvider::with_responses(vec![make_text_response("Hello!")]);
-        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config())
+        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), make_config())
             .with_dispatcher(Arc::new(PanicDispatcher));
 
         let output = op.execute(simple_input("Hi"), &test_ctx()).await.unwrap();
@@ -746,7 +754,7 @@ mod tests {
         };
 
         let dispatcher = Arc::new(WitnessDispatcher);
-        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), config)
+        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), config)
             .with_dispatcher(dispatcher);
 
         op.execute(simple_input("go"), &test_ctx()).await.unwrap();
@@ -757,12 +765,12 @@ mod tests {
         );
     }
 
-    /// `with_dispatcher` is chainable after `with_rules` and preserves rules.
+    /// `with_dispatcher` is chainable after `with_pipeline` and preserves pipeline.
     #[tokio::test]
-    async fn with_dispatcher_chains_after_with_rules() {
+    async fn with_dispatcher_chains_after_with_pipeline() {
         let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
-        let op = CognitiveOperator::new("test-op", provider, ToolRegistry::new(), make_config())
-            .with_rules(std::vec::Vec::new) // no-op rules
+        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), make_config())
+            .with_pipeline(Pipeline::new) // empty pipeline
             .with_dispatcher(Arc::new(PanicDispatcher));
 
         let output = op.execute(simple_input("hi"), &test_ctx()).await.unwrap();

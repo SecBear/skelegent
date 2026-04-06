@@ -1,17 +1,16 @@
 //! Streaming ReAct loop — [`stream_react_loop()`].
 //!
 //! Like [`react_loop()`](crate::react_loop) but streams inference output
-//! via a callback. Tool dispatch, approval checking, and rule firing
+//! via a callback. Tool dispatch, approval checking, and pipeline middleware
 //! work identically.
 
-use crate::boundary::StreamInferBoundary;
 use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
-use crate::ops::response::AppendResponse;
-use crate::ops::tool::{ExecuteTool, format_tool_result};
+use crate::pipeline::Pipeline;
 use crate::react::{
-    ReactLoopConfig, check_approval, check_exit, format_tool_error, is_handoff_sentinel,
+    ReactLoopConfig, check_approval, check_exit, execute_tool, format_tool_error,
+    format_tool_result, is_handoff_sentinel,
 };
 use futures_util::StreamExt;
 use layer0::DispatchContext;
@@ -31,17 +30,18 @@ use skg_turn::stream::StreamEvent;
 ///
 /// Same flow as [`react_loop()`](crate::react_loop) but streams inference
 /// output through `on_event`. Tool dispatch, approval checking, budget guards,
-/// and all rules work identically.
+/// and pipeline middleware work identically.
 ///
 /// The `on_event` callback receives non-[`StreamEvent::Done`] events
 /// (TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, Usage) immediately
 /// as they arrive from the provider stream. `Done` is deferred: it fires only
-/// after the response has been committed to context via [`AppendResponse`], so
-/// when the consumer receives `Done`, the turn is fully readable from context.
+/// after the response has been committed to context via
+/// [`Context::append_response`], so when the consumer receives `Done`, the
+/// turn is fully readable from context.
 ///
 /// ```ignore
 /// let output = stream_react_loop(
-///     &mut ctx, &provider, &tools, &dispatch_ctx, &config,
+///     &mut ctx, &provider, &tools, &dispatch_ctx, &config, &pipeline,
 ///     |event| match event {
 ///         StreamEvent::TextDelta(text) => print!("{text}"),
 ///         _ => {}
@@ -54,16 +54,17 @@ pub async fn stream_react_loop<P: Provider>(
     tools: &ToolRegistry,
     dispatch_ctx: &DispatchContext,
     config: &ReactLoopConfig,
+    pipeline: &Pipeline,
     on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
 ) -> Result<OperatorOutput, EngineError> {
     loop {
-        // Enter StreamInferBoundary: drains pending interventions + fires Before rules.
-        // Compile AFTER so any context mutations appear in the request.
-        if let Err(err) = ctx.enter_boundary::<StreamInferBoundary>().await {
+        // Before phase: run pipeline before_send middleware (context assembly).
+        // Compile AFTER so any mutations appear in the request.
+        if let Err(err) = pipeline.run_before(ctx).await {
             return structured_exit_output(err, ctx);
         }
 
-        // Phase 1: Compile context (re-filter tools each turn, after before rules)
+        // Phase 1: Compile context (re-filter tools each turn, after before middleware)
         let compile_config = config.compile_config(tools, ctx);
         let infer_request = build_infer_request(ctx, &compile_config);
 
@@ -94,19 +95,18 @@ pub async fn stream_react_loop<P: Provider>(
             ))
         })?;
 
-        // Exit StreamInferBoundary: fires After rules (before we commit events)
-        if let Err(err) = ctx.exit_boundary::<StreamInferBoundary>().await {
+        // After phase: run pipeline after_send middleware before committing response.
+        // If it errors, Done is suppressed — consumer invariant preserved.
+        if let Err(err) = pipeline.run_after(ctx).await {
             return structured_exit_output(err, ctx);
         }
 
-        // Phase 3: Append response to context (rules fire)
-        if let Err(err) = ctx.run(AppendResponse::new(response.clone())).await {
-            return structured_exit_output(err, ctx);
-        }
+        // Phase 3: Append response to context (sync, infallible).
+        ctx.append_response(&response);
         ctx.metrics.turns_completed += 1;
 
-        // Done is a commit signal: context is written, After rules fired.
-        // Emit it only now so the consumer's invariant holds.
+        // Done is the commit signal: context is written, after middleware ran.
+        // Emit only now so the consumer's invariant holds.
         on_event(StreamEvent::Done(response.clone()));
 
         // Phase 4: Check if model is done
@@ -130,16 +130,9 @@ pub async fn stream_react_loop<P: Provider>(
             ));
         }
 
-        // Phase 6: Dispatch tool calls (non-streaming)
+        // Phase 6: Dispatch tool calls (non-streaming, sequential)
         for call in &tool_calls {
-            let result_str = match ctx
-                .run(ExecuteTool::new(
-                    call.clone(),
-                    tools.clone(),
-                    dispatch_ctx.clone(),
-                ))
-                .await
-            {
+            let result_str = match execute_tool(call, tools, dispatch_ctx, ctx).await {
                 Ok(value) => {
                     // Detect HandoffTool sentinel BEFORE formatting.
                     if is_handoff_sentinel(&value) {
@@ -185,9 +178,7 @@ pub async fn stream_react_loop<P: Provider>(
 
             let result_msg =
                 InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
-            if let Err(err) = ctx.inject_message(result_msg).await {
-                return structured_exit_output(err, ctx);
-            }
+            ctx.inject_message(result_msg);
         }
     }
 }
@@ -230,10 +221,8 @@ fn build_infer_request(ctx: &Context, config: &CompileConfig) -> skg_turn::Infer
 mod tests {
     use super::*;
     use crate::context::Context;
-    use crate::op::ContextOp;
-    use crate::rules::{BudgetGuard, BudgetGuardConfig};
-    use crate::{Rule, StreamInferBoundary};
-    use async_trait::async_trait;
+    use crate::middleware::Middleware;
+    use crate::pipeline::Pipeline;
     use layer0::content::Content;
     use layer0::context::{Message, Role};
     use layer0::id::OperatorId;
@@ -246,6 +235,75 @@ mod tests {
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    struct PushMarker(&'static str);
+    impl crate::middleware::Middleware for PushMarker {
+        async fn process(&self, ctx: &mut Context) -> Result<(), crate::error::EngineError> {
+            ctx.push_message(Message::new(Role::System, Content::text(self.0)));
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+    }
+
+    struct HaltMiddleware {
+        error: crate::error::EngineError,
+    }
+    impl HaltMiddleware {
+        fn halted(reason: &str) -> Self {
+            Self {
+                error: crate::error::EngineError::Halted {
+                    reason: reason.into(),
+                },
+            }
+        }
+        fn exit(outcome: Outcome) -> Self {
+            Self {
+                error: crate::error::EngineError::Exit {
+                    outcome,
+                    detail: "test exit".into(),
+                },
+            }
+        }
+    }
+    impl crate::middleware::Middleware for HaltMiddleware {
+        async fn process(&self, _ctx: &mut Context) -> Result<(), crate::error::EngineError> {
+            // Clone the error for each invocation (EngineError is not Clone, so reconstruct)
+            match &self.error {
+                crate::error::EngineError::Halted { reason } => {
+                    Err(crate::error::EngineError::Halted {
+                        reason: reason.clone(),
+                    })
+                }
+                crate::error::EngineError::Exit { outcome, detail } => {
+                    Err(crate::error::EngineError::Exit {
+                        outcome: outcome.clone(),
+                        detail: detail.clone(),
+                    })
+                }
+                _ => unreachable!(),
+            }
+        }
+        fn name(&self) -> &str {
+            "halt"
+        }
+    }
+
+    struct TrackingMarker {
+        ran: Arc<Mutex<bool>>,
+        label: &'static str,
+    }
+    impl crate::middleware::Middleware for TrackingMarker {
+        async fn process(&self, ctx: &mut Context) -> Result<(), crate::error::EngineError> {
+            ctx.push_message(Message::new(Role::System, Content::text(self.label)));
+            *self.ran.lock().unwrap() = true;
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            self.label
+        }
+    }
 
     fn simple_config() -> ReactLoopConfig {
         ReactLoopConfig {
@@ -287,31 +345,6 @@ mod tests {
         }
     }
 
-    struct HaltBeforeStreamInference;
-
-    #[async_trait]
-    impl ContextOp for HaltBeforeStreamInference {
-        type Output = ();
-
-        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
-            Err(EngineError::Halted {
-                reason: "blocked before stream inference".into(),
-            })
-        }
-    }
-
-    struct PushMarker(&'static str);
-
-    #[async_trait]
-    impl ContextOp for PushMarker {
-        type Output = ();
-
-        async fn execute(&self, ctx: &mut Context) -> Result<(), EngineError> {
-            ctx.push_message(Message::new(Role::System, Content::text(self.0)));
-            Ok(())
-        }
-    }
-
     /// A provider that always fails on both `infer` and `infer_stream`.
     struct AlwaysErrorStreamProvider;
 
@@ -327,19 +360,59 @@ mod tests {
         }
     }
 
+    /// Inline budget middleware for tests: mirrors the old BudgetGuard semantics.
+    struct BudgetMiddleware {
+        max_cost: Option<rust_decimal::Decimal>,
+        max_turns: Option<u32>,
+        max_duration: Option<Duration>,
+    }
+
+    impl Middleware for BudgetMiddleware {
+        async fn process(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            if let Some(max_cost) = self.max_cost {
+                if ctx.metrics.cost >= max_cost {
+                    return Err(EngineError::Exit {
+                        outcome: Outcome::Limited {
+                            limit: LimitReason::BudgetExhausted,
+                        },
+                        detail: "cost limit exceeded".into(),
+                    });
+                }
+            }
+            if let Some(max_turns) = self.max_turns {
+                if ctx.metrics.turns_completed >= max_turns {
+                    return Err(EngineError::Exit {
+                        outcome: Outcome::Limited {
+                            limit: LimitReason::MaxTurns,
+                        },
+                        detail: "turn limit exceeded".into(),
+                    });
+                }
+            }
+            if let Some(max_duration) = self.max_duration {
+                if ctx.metrics.elapsed_ms() >= max_duration.as_millis() as u64 {
+                    return Err(EngineError::Exit {
+                        outcome: Outcome::Limited {
+                            limit: LimitReason::Timeout,
+                        },
+                        detail: "duration limit exceeded".into(),
+                    });
+                }
+            }
+            Ok(())
+        }
+    }
+
     #[tokio::test]
-    async fn stream_react_before_boundary_rule_mutates_request_before_provider_call() {
+    async fn stream_react_before_middleware_mutates_request_before_provider_call() {
         let provider = TestProvider::new();
         provider.respond_with_text("done");
 
-        let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
-            "mark before stream inference",
-            100,
-            PushMarker("before stream marker"),
-        )]);
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        let mut pipeline = Pipeline::new();
+        pipeline.push_before(Box::new(PushMarker("before stream marker")));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
@@ -350,6 +423,7 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
+            &pipeline,
             |_| {},
         )
         .await
@@ -369,23 +443,20 @@ mod tests {
                 .messages
                 .iter()
                 .any(|message| message.text_content() == "before stream marker"),
-            "before rule must mutate context before stream request compilation and provider send"
+            "before middleware must mutate context before stream request compilation and provider send"
         );
     }
 
     #[tokio::test]
-    async fn stream_react_after_boundary_rule_runs_after_success_only() {
+    async fn stream_react_after_middleware_runs_after_success_only() {
         let provider = TestProvider::new();
         provider.respond_with_text("done");
 
-        let mut ctx = Context::with_rules(vec![Rule::after::<StreamInferBoundary>(
-            "mark after stream inference",
-            100,
-            PushMarker("after stream marker"),
-        )]);
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        let mut pipeline = Pipeline::new();
+        pipeline.push_after(Box::new(PushMarker("after stream marker")));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
@@ -396,6 +467,7 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
+            &pipeline,
             |_| {},
         )
         .await
@@ -415,46 +487,30 @@ mod tests {
                 .messages
                 .iter()
                 .any(|message| message.text_content() == "after stream marker"),
-            "after rule must not mutate the request that was already sent to the provider"
+            "after middleware must not mutate the request that was already sent to the provider"
         );
         assert!(
             ctx.messages()
                 .iter()
                 .any(|message| message.text_content() == "after stream marker"),
-            "after rule must run after a successful provider call"
+            "after middleware must run after a successful provider call"
         );
     }
 
-    struct ExitBeforeStreamAppend;
-
-    #[async_trait]
-    impl ContextOp for ExitBeforeStreamAppend {
-        type Output = ();
-
-        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
-            Err(EngineError::Exit {
-                outcome: Outcome::Limited {
-                    limit: LimitReason::Timeout,
-                },
-                detail: "append boundary timeout".into(),
-            })
-        }
-    }
-
     #[tokio::test]
-    async fn stream_react_loop_does_not_emit_done_before_append_commit() {
+    async fn stream_react_loop_does_not_emit_done_before_after_middleware_commit() {
+        // If after_send middleware exits, Done must not be emitted — the turn
+        // was not committed to context from the consumer's perspective.
         let provider = TestProvider::new();
-        provider.respond_with_text("hello before append exit");
+        provider.respond_with_text("hello before after-exit");
 
-        let mut ctx =
-            Context::with_rules(vec![Rule::before::<crate::ops::response::AppendResponse>(
-                "exit before append commit",
-                100,
-                ExitBeforeStreamAppend,
-            )]);
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        let mut pipeline = Pipeline::new();
+        pipeline.push_after(Box::new(HaltMiddleware::exit(Outcome::Limited {
+            limit: LimitReason::Timeout,
+        })));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
@@ -467,10 +523,11 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
+            &pipeline,
             move |event| events_clone.lock().unwrap().push(event),
         )
         .await
-        .expect("append exit should return structured operator output");
+        .expect("after-middleware exit should return structured operator output");
 
         assert_eq!(
             output.outcome,
@@ -481,24 +538,8 @@ mod tests {
         let captured = events.lock().unwrap();
         assert!(
             !captured.iter().any(|e| matches!(e, StreamEvent::Done(_))),
-            "Done must not be emitted before the streamed turn is committed to context"
+            "Done must not be emitted when after_send middleware exits before context commit"
         );
-    }
-
-    struct ExitAfterStreamInference;
-
-    #[async_trait]
-    impl ContextOp for ExitAfterStreamInference {
-        type Output = ();
-
-        async fn execute(&self, _ctx: &mut Context) -> Result<(), EngineError> {
-            Err(EngineError::Exit {
-                outcome: Outcome::Limited {
-                    limit: LimitReason::Timeout,
-                },
-                detail: "stream boundary timeout".into(),
-            })
-        }
     }
 
     #[tokio::test]
@@ -506,14 +547,13 @@ mod tests {
         let provider = TestProvider::new();
         provider.respond_with_text("hello before exit");
 
-        let mut ctx = Context::with_rules(vec![Rule::after::<StreamInferBoundary>(
-            "exit after stream inference",
-            100,
-            ExitAfterStreamInference,
-        )]);
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        let mut pipeline = Pipeline::new();
+        pipeline.push_after(Box::new(HaltMiddleware::exit(Outcome::Limited {
+            limit: LimitReason::Timeout,
+        })));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
@@ -526,6 +566,7 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
+            &pipeline,
             move |event| events_clone.lock().unwrap().push(event),
         )
         .await
@@ -540,22 +581,26 @@ mod tests {
         let captured = events.lock().unwrap();
         assert!(
             !captured.iter().any(|e| matches!(e, StreamEvent::Done(_))),
-            "Done must not be emitted before the after-boundary exit is accepted"
+            "Done must not be emitted before the after-phase exit is accepted"
         );
     }
 
     #[tokio::test]
-    async fn stream_react_after_boundary_rule_does_not_run_on_provider_error() {
+    async fn stream_react_after_middleware_does_not_run_on_provider_error() {
         let provider = AlwaysErrorStreamProvider;
 
-        let mut ctx = Context::with_rules(vec![Rule::after::<StreamInferBoundary>(
-            "mark after stream inference",
-            100,
-            PushMarker("after stream marker"),
-        )]);
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        // Track whether after middleware ran.
+        let ran = Arc::new(Mutex::new(false));
+        let ran_clone = Arc::clone(&ran);
+
+        let mut pipeline = Pipeline::new();
+        pipeline.push_after(Box::new(TrackingMarker {
+            ran: Arc::clone(&ran_clone),
+            label: "after stream marker",
+        }));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
@@ -566,6 +611,7 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
+            &pipeline,
             |_| {},
         )
         .await
@@ -576,30 +622,31 @@ mod tests {
             EngineError::Provider(ProviderError::TransientError { .. })
         ));
         assert!(
+            !*ran.lock().unwrap(),
+            "after middleware must not run when streaming provider inference fails"
+        );
+        assert!(
             !ctx.messages()
                 .iter()
                 .any(|message| message.text_content() == "after stream marker"),
-            "after rule must not run when streaming provider inference fails"
+            "after middleware must not inject messages when streaming provider inference fails"
         );
     }
 
     async fn assert_stream_budget_exit_before_provider_call(
         mutate_ctx: impl FnOnce(&mut Context),
-        config: BudgetGuardConfig,
+        budget: BudgetMiddleware,
         expected_outcome: Outcome,
     ) {
         let provider = TestProvider::new();
         provider.respond_with_text("should never be used");
 
-        let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
-            "budget_guard",
-            100,
-            BudgetGuard::with_config(config),
-        )]);
+        let mut pipeline = Pipeline::new();
+        pipeline.push_before(Box::new(budget));
+
+        let mut ctx = Context::new();
         mutate_ctx(&mut ctx);
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
@@ -610,6 +657,7 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
+            &pipeline,
             |_| {},
         )
         .await
@@ -624,11 +672,10 @@ mod tests {
     async fn stream_react_loop_returns_structured_budget_exhausted_exit_before_provider_call() {
         assert_stream_budget_exit_before_provider_call(
             |ctx| ctx.metrics.cost = rust_decimal::Decimal::new(250, 2),
-            BudgetGuardConfig {
+            BudgetMiddleware {
                 max_cost: Some(rust_decimal::Decimal::new(100, 2)),
                 max_turns: None,
                 max_duration: None,
-                max_tool_calls: None,
             },
             Outcome::Limited {
                 limit: LimitReason::BudgetExhausted,
@@ -641,11 +688,10 @@ mod tests {
     async fn stream_react_loop_returns_structured_max_turns_exit_before_provider_call() {
         assert_stream_budget_exit_before_provider_call(
             |ctx| ctx.metrics.turns_completed = 1,
-            BudgetGuardConfig {
+            BudgetMiddleware {
                 max_cost: None,
                 max_turns: Some(1),
                 max_duration: None,
-                max_tool_calls: None,
             },
             Outcome::Limited {
                 limit: LimitReason::MaxTurns,
@@ -658,11 +704,10 @@ mod tests {
     async fn stream_react_loop_returns_structured_timeout_exit_before_provider_call() {
         assert_stream_budget_exit_before_provider_call(
             |ctx| ctx.metrics.start = Instant::now() - Duration::from_secs(5),
-            BudgetGuardConfig {
+            BudgetMiddleware {
                 max_cost: None,
                 max_turns: None,
                 max_duration: Some(Duration::from_secs(1)),
-                max_tool_calls: None,
             },
             Outcome::Limited {
                 limit: LimitReason::Timeout,
@@ -672,18 +717,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_react_loop_halts_before_provider_call_on_stream_boundary_rule() {
+    async fn stream_react_loop_halts_before_provider_call_on_before_middleware() {
         let provider = TestProvider::new();
         provider.respond_with_text("should never be used");
 
-        let mut ctx = Context::with_rules(vec![Rule::before::<StreamInferBoundary>(
-            "halt before stream inference",
-            100,
-            HaltBeforeStreamInference,
-        )]);
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        let mut pipeline = Pipeline::new();
+        pipeline.push_before(Box::new(HaltMiddleware::halted(
+            "blocked before stream inference",
+        )));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
@@ -694,6 +738,7 @@ mod tests {
             &tools,
             &tool_ctx,
             &simple_config(),
+            &pipeline,
             |_| {},
         )
         .await
@@ -709,9 +754,7 @@ mod tests {
         provider.respond_with_text("hello streaming!");
 
         let mut ctx = Context::new();
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
@@ -719,12 +762,14 @@ mod tests {
         let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
         let events_clone = Arc::clone(&events);
 
+        let pipeline = Pipeline::new();
         let output = stream_react_loop(
             &mut ctx,
             &provider,
             &tools,
             &dispatch_ctx,
             &simple_config(),
+            &pipeline,
             move |event| {
                 let label = match &event {
                     StreamEvent::TextDelta(t) => format!("text:{t}"),
@@ -760,18 +805,18 @@ mod tests {
         tools.register(Arc::new(MockTool { name: "echo" }));
 
         let mut ctx = Context::new();
-        ctx.inject_message(Message::new(Role::User, Content::text("echo something")))
-            .await
-            .unwrap();
+        ctx.inject_message(Message::new(Role::User, Content::text("echo something")));
 
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
 
+        let pipeline = Pipeline::new();
         let output = stream_react_loop(
             &mut ctx,
             &provider,
             &tools,
             &dispatch_ctx,
             &simple_config(),
+            &pipeline,
             |_| {},
         )
         .await
@@ -817,21 +862,21 @@ mod tests {
 
         let provider = DeltaStreamProvider;
         let mut ctx = Context::new();
-        ctx.inject_message(Message::new(Role::User, Content::text("hi")))
-            .await
-            .unwrap();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
 
         let tools = ToolRegistry::new();
         let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
         let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
         let events_clone = Arc::clone(&events);
 
+        let pipeline = Pipeline::new();
         let output = stream_react_loop(
             &mut ctx,
             &provider,
             &tools,
             &dispatch_ctx,
             &simple_config(),
+            &pipeline,
             move |event| {
                 let label = match &event {
                     StreamEvent::TextDelta(t) => format!("text:{t}"),

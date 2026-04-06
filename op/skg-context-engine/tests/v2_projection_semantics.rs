@@ -1,38 +1,50 @@
 use layer0::Content;
 use layer0::context::{Message, Role};
-use skg_context_engine::{CompileConfig, Context, InferBoundary, StreamInferBoundary};
+use skg_context_engine::{CompileConfig, Context, Middleware, Pipeline};
 
-// ── Provider deltas projected only at locked semantic boundaries ─────────────
-//
-// The InferBoundary and StreamInferBoundary markers exist as rule targets.
-// Provider interactions are governed through these explicit boundary types.
-// No provider delta leaks into Context without passing through one of these
-// semantic governance points.
-
-#[test]
-fn infer_boundary_marker_exists() {
-    // InferBoundary is the typed governance marker for non-streaming inference.
-    let _: InferBoundary = InferBoundary;
+struct PushMarker(&'static str);
+impl Middleware for PushMarker {
+    async fn process(&self, ctx: &mut Context) -> Result<(), skg_context_engine::EngineError> {
+        ctx.push_message(Message::new(Role::System, Content::text(self.0)));
+        Ok(())
+    }
+    fn name(&self) -> &str {
+        self.0
+    }
 }
 
-#[test]
-fn stream_infer_boundary_marker_exists() {
-    // StreamInferBoundary is the typed governance marker for streaming inference.
-    let _: StreamInferBoundary = StreamInferBoundary;
+// ── Pipeline replaces typed boundary markers ─────────────────────────────────
+
+#[tokio::test]
+async fn pipeline_before_send_runs_before_inference() {
+    let mut pipeline = Pipeline::new();
+    pipeline.push_before(Box::new(PushMarker("before")));
+
+    let mut ctx = Context::new();
+    pipeline.run_before(&mut ctx).await.unwrap();
+    assert_eq!(ctx.messages().len(), 1);
+    assert_eq!(ctx.messages()[0].text_content(), "before");
+}
+
+#[tokio::test]
+async fn pipeline_after_send_runs_after_inference() {
+    let mut pipeline = Pipeline::new();
+    pipeline.push_after(Box::new(PushMarker("after")));
+
+    let mut ctx = Context::new();
+    pipeline.run_after(&mut ctx).await.unwrap();
+    assert_eq!(ctx.messages().len(), 1);
+    assert_eq!(ctx.messages()[0].text_content(), "after");
 }
 
 #[test]
 fn context_compile_does_not_mutate_context() {
-    // compile() snapshots context for inference without mutating it.
-    // This is the assembly → boundary contract: context is readable,
-    // not consumed by the projection step.
     let mut ctx = Context::new();
     ctx.push_message(Message::new(Role::User, Content::text("hello")));
 
     let config = CompileConfig::default();
     let _compiled = ctx.compile(&config);
 
-    // Context is unchanged after compile.
     assert_eq!(ctx.messages().len(), 1);
     assert_eq!(ctx.messages()[0].text_content(), "hello");
 }
@@ -46,6 +58,5 @@ fn context_compile_produces_request_with_all_messages() {
     let config = CompileConfig::default();
     let compiled = ctx.compile(&config);
 
-    // The compiled request captures all context messages.
     assert_eq!(compiled.request.messages.len(), 2);
 }

@@ -131,7 +131,7 @@ pub mod prelude {
     pub use skg_turn::provider::{Provider, ProviderError};
 
     #[cfg(feature = "context-engine")]
-    pub use skg_context_engine::{Context, ReactLoopConfig, react_loop};
+    pub use skg_context_engine::{Context, Middleware, Pipeline, ReactLoopConfig, react_loop};
 
     #[cfg(feature = "op-single-shot")]
     pub use skg_op_single_shot::SingleShotOperator;

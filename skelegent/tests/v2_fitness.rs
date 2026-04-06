@@ -80,6 +80,11 @@ const BANNED_V1_IDENTIFIERS: &[&str] = &[
     "OrchError",
     "EffectEmitter",
     "EffectLog",
+    // v2 context-engine redesign — replaced by Middleware/Pipeline
+    "ContextOp",
+    "ErasedOp",
+    "InferBoundary",
+    "StreamInferBoundary",
 ];
 
 #[test]

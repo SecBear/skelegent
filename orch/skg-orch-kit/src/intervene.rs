@@ -1,45 +1,48 @@
-use skg_context_engine::{ContextOp, ErasedOp};
+use skg_context_engine::{ErasedMiddleware, Middleware};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
-/// Stable intervention adapter for sending context operations to a running worker.
+/// Stable intervention adapter for sending middleware to a running worker.
 ///
 /// The intervention vocabulary stays open: callers can send any
-/// `ContextOp<Output = ()>` or an already-erased op.
+/// `Middleware` or an already-erased middleware.
 #[derive(Clone)]
 pub struct ContextIntervenor {
-    tx: mpsc::Sender<Box<dyn ErasedOp>>,
+    tx: mpsc::Sender<Box<dyn ErasedMiddleware>>,
 }
 
 impl ContextIntervenor {
     /// Wrap an existing intervention sender.
-    pub fn new(tx: mpsc::Sender<Box<dyn ErasedOp>>) -> Self {
+    pub fn new(tx: mpsc::Sender<Box<dyn ErasedMiddleware>>) -> Self {
         Self { tx }
     }
 
-    /// Send a typed context op as an intervention.
-    pub async fn send<O>(&self, op: O) -> Result<(), InterventionSendError>
+    /// Send a typed middleware as an intervention.
+    pub async fn send<M>(&self, mw: M) -> Result<(), InterventionSendError>
     where
-        O: ContextOp<Output = ()> + 'static,
+        M: Middleware + 'static,
     {
-        self.send_erased(Box::new(op)).await
+        self.send_erased(Box::new(mw)).await
     }
 
     /// Send an already-erased intervention.
-    pub async fn send_erased(&self, op: Box<dyn ErasedOp>) -> Result<(), InterventionSendError> {
+    pub async fn send_erased(
+        &self,
+        mw: Box<dyn ErasedMiddleware>,
+    ) -> Result<(), InterventionSendError> {
         self.tx
-            .send(op)
+            .send(mw)
             .await
             .map_err(|_| InterventionSendError::Closed)
     }
 
     /// Borrow the wrapped intervention sender.
-    pub fn sender(&self) -> &mpsc::Sender<Box<dyn ErasedOp>> {
+    pub fn sender(&self) -> &mpsc::Sender<Box<dyn ErasedMiddleware>> {
         &self.tx
     }
 
     /// Recover the wrapped intervention sender.
-    pub fn into_inner(self) -> mpsc::Sender<Box<dyn ErasedOp>> {
+    pub fn into_inner(self) -> mpsc::Sender<Box<dyn ErasedMiddleware>> {
         self.tx
     }
 }
