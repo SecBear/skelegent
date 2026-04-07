@@ -32,6 +32,6 @@ impl crate::environment::Environment for LocalEnvironment {
         self.operator
             .execute(input, ctx)
             .await
-            .map_err(|pe| EnvError::Other(pe.to_string().into()))
+            .map_err(EnvError::Protocol)
     }
 }

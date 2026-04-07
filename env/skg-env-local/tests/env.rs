@@ -74,6 +74,40 @@ async fn propagates_operator_error() {
     );
 }
 
+struct RetryableFailingOperator;
+
+#[async_trait::async_trait]
+impl layer0::operator::Operator for RetryableFailingOperator {
+    async fn execute(
+        &self,
+        _input: OperatorInput,
+        _ctx: &layer0::DispatchContext,
+    ) -> Result<OperatorOutput, layer0::error::ProtocolError> {
+        Err(layer0::error::ProtocolError::new(
+            layer0::error::ErrorCode::Unavailable,
+            "temporary upstream failure",
+            true,
+        ))
+    }
+}
+
+#[tokio::test]
+async fn preserves_retryable_protocol_error_through_local_env() {
+    let env = LocalEnv::new(Arc::new(RetryableFailingOperator));
+    let input = simple_input("retry me");
+    let spec = EnvironmentSpec::default();
+
+    let err = env.run(&make_ctx(), input, &spec).await.unwrap_err();
+    let protocol: layer0::error::ProtocolError = err.into();
+
+    assert_eq!(protocol.code, layer0::error::ErrorCode::Unavailable);
+    assert!(protocol.retryable, "retryable bit must survive LocalEnv");
+    assert!(
+        protocol.message.contains("temporary upstream failure"),
+        "original protocol error message must survive LocalEnv"
+    );
+}
+
 // --- Object safety ---
 
 #[tokio::test]

@@ -2,7 +2,7 @@
 //!
 //! Demonstrates:
 //! - `#[skg_tool]` proc macro for tool definition
-//! - `CognitiveBuilder` for operator construction
+//! - `AgentBuilder` for operator construction
 //! - `ReactLoopConfig` with `max_tool_retries` and `temperature`
 //! - `FunctionProvider` for deterministic, key-free execution
 //! - Multi-turn execution: two tool calls followed by a final text response
@@ -20,7 +20,7 @@ use layer0::content::Content;
 use layer0::operator::{Operator, OperatorInput, TriggerType};
 use layer0::{DispatchContext, DispatchId, OperatorId};
 use serde_json::{Value, json};
-use skg_context_engine::{CognitiveBuilder, ReactLoopConfig};
+use skg_context_engine::{AgentBuilder, ReactLoopConfig};
 use skg_tool::{ToolError, skg_tool};
 use skg_turn::infer::{InferRequest, InferResponse};
 use skg_turn::provider::ProviderError;
@@ -142,9 +142,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // ── Step 2: Build the CognitiveOperator ──────────────────────────────────
+    // ── Step 2: Build the AgentOperator ──────────────────────────────────────
     //
-    // CognitiveBuilder is a typestate builder — `.provider()` is the last
+    // AgentBuilder is a typestate builder — `.provider()` is the last
     // required step, after which `.build()` becomes available.
     //
     // ReactLoopConfig captures per-loop settings:
@@ -164,13 +164,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    println!("Building CognitiveOperator with 3 tools and scripted FunctionProvider...");
+    println!("Building AgentOperator with 3 tools and scripted FunctionProvider...");
     println!(
         "Config: max_tool_retries={}, temperature={:?}",
         config.max_tool_retries, config.temperature
     );
 
-    let op = CognitiveBuilder::new()
+    let op = AgentBuilder::new()
         .system_prompt(
             "You are a helpful assistant with access to weather, time, and search tools. \
              Always use tools to gather information before answering.",

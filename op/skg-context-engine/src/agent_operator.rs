@@ -26,8 +26,8 @@ use std::sync::Arc;
 use crate::context::Context;
 use crate::error::EngineError;
 use crate::pipeline::Pipeline;
-use crate::react::ReactLoopConfig;
-use crate::react::react_loop;
+use crate::runtime::ReactLoopConfig;
+use crate::runtime::react_loop;
 
 /// Factory that produces a [`Pipeline`] for each execution.
 ///
@@ -70,28 +70,21 @@ impl<P: Provider> AgentOperator<P> {
     /// `operator_id` identifies this operator in dispatch traces and tool
     /// call metadata.
     ///
-    /// Tools are automatically wrapped in a `ToolRegistryOrchestrator` so
-    /// sub-dispatch goes through the `Dispatcher` protocol by default.
-    /// Use [`.with_dispatcher()`] to override with a custom dispatcher.
+    /// By default tool calls use the direct `ToolRegistry` path. Use
+    /// [`.with_dispatcher()`] to opt into dispatcher-backed sub-dispatch.
     pub fn new(
         operator_id: impl Into<OperatorId>,
         provider: P,
         tools: ToolRegistry,
         config: ReactLoopConfig,
     ) -> Self {
-        // Auto-wrap tools in a ToolRegistryOrchestrator so the dispatcher-
-        // backed execution path is the default. Callers that need a custom
-        // dispatcher can override with .with_dispatcher().
-        let default_dispatcher: Arc<dyn Dispatcher> = Arc::new(
-            skg_tool::adapter::ToolRegistryOrchestrator::new(tools.clone()),
-        );
         Self {
             provider,
             tools,
             operator_id: operator_id.into(),
             config,
             pipeline_factory: None,
-            dispatcher: Some(default_dispatcher),
+            dispatcher: None,
         }
     }
 
@@ -458,7 +451,7 @@ mod tests {
         // Directly verify the filter function produced by execute's
         // allowed_operators logic.
         let allowed: HashSet<String> = ["tool_a"].iter().map(|s| s.to_string()).collect();
-        let filter: crate::react::ToolFilter =
+        let filter: crate::runtime::ToolFilter =
             Arc::new(move |tool: &dyn skg_tool::ToolDyn, _ctx: &Context| {
                 allowed.contains(tool.name())
             });
@@ -476,12 +469,12 @@ mod tests {
         // Existing filter rejects tool_a. allowed_operators includes
         // tool_a and tool_b. The AND-combination should reject tool_a
         // (blocked by existing) and accept tool_b.
-        let existing: crate::react::ToolFilter =
+        let existing: crate::runtime::ToolFilter =
             Arc::new(|tool: &dyn skg_tool::ToolDyn, _ctx: &Context| tool.name() != "tool_a");
 
         let allowed: HashSet<String> = ["tool_a", "tool_b"].iter().map(|s| s.to_string()).collect();
         let existing_opt = Some(existing);
-        let combined: crate::react::ToolFilter =
+        let combined: crate::runtime::ToolFilter =
             Arc::new(move |tool: &dyn skg_tool::ToolDyn, ctx: &Context| {
                 let name_allowed = allowed.contains(tool.name());
                 name_allowed && existing_opt.as_ref().is_none_or(|f| f(tool, ctx))
@@ -503,7 +496,7 @@ mod tests {
     #[test]
     fn allowed_operators_empty_list_blocks_all() {
         let allowed: HashSet<String> = HashSet::new();
-        let filter: crate::react::ToolFilter =
+        let filter: crate::runtime::ToolFilter =
             Arc::new(move |tool: &dyn skg_tool::ToolDyn, _ctx: &Context| {
                 allowed.contains(tool.name())
             });
@@ -634,7 +627,7 @@ mod tests {
 
     #[tokio::test]
     async fn dynamic_system_prompt_resolved() {
-        use crate::react::SystemPromptFn;
+        use crate::runtime::SystemPromptFn;
 
         let provider = TestProvider::with_responses(vec![make_text_response("Done")]);
         let resolver: SystemPromptFn = Arc::new(|_ctx| "Dynamic prompt for tenant X".to_string());
@@ -718,24 +711,11 @@ mod tests {
         assert_eq!(output.message.as_text().unwrap(), "Hello!");
     }
 
-    /// The dispatcher is accessible in the dispatch context seen by per-dispatch hooks.
+    /// A dispatcher is only injected when explicitly requested via `with_dispatcher()`.
     #[tokio::test]
-    async fn dispatcher_injected_into_context_extensions() {
-        use crate::react::SystemPromptFn;
+    async fn new_does_not_inject_dispatcher_into_context_extensions() {
+        use crate::runtime::SystemPromptFn;
         use std::sync::atomic::{AtomicBool, Ordering};
-
-        struct WitnessDispatcher;
-
-        #[async_trait::async_trait]
-        impl Dispatcher for WitnessDispatcher {
-            async fn dispatch(
-                &self,
-                _ctx: &DispatchContext,
-                _input: OperatorInput,
-            ) -> Result<layer0::DispatchHandle, layer0::error::ProtocolError> {
-                panic!("WitnessDispatcher::dispatch — not expected in this test");
-            }
-        }
 
         let seen = Arc::new(AtomicBool::new(false));
         let seen_clone = Arc::clone(&seen);
@@ -753,15 +733,12 @@ mod tests {
             ..Default::default()
         };
 
-        let dispatcher = Arc::new(WitnessDispatcher);
-        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), config)
-            .with_dispatcher(dispatcher);
-
+        let op = AgentOperator::new("test-op", provider, ToolRegistry::new(), config);
         op.execute(simple_input("go"), &test_ctx()).await.unwrap();
 
         assert!(
-            seen.load(Ordering::SeqCst),
-            "dispatcher was not found in context extensions"
+            !seen.load(Ordering::SeqCst),
+            "AgentOperator::new() should not inject a dispatcher by default"
         );
     }
 

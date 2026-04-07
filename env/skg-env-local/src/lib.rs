@@ -218,7 +218,7 @@ impl Environment for LocalEnv {
             .op
             .execute(input, ctx)
             .await
-            .map_err(|e| EnvError::Other(Box::new(e)));
+            .map_err(EnvError::Protocol);
         drop(cleanup);
         result
     }

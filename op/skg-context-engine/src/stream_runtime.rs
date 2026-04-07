@@ -8,9 +8,9 @@ use crate::compile::CompileConfig;
 use crate::context::Context;
 use crate::error::EngineError;
 use crate::pipeline::Pipeline;
-use crate::react::{
-    ReactLoopConfig, check_approval, check_exit, execute_tool, format_tool_error,
-    format_tool_result, is_handoff_sentinel,
+use crate::runtime::{
+    ReactLoopConfig, check_approval, check_exit, commit_response, execute_tool,
+    format_tool_failure, format_tool_result, is_handoff_sentinel,
 };
 use futures_util::StreamExt;
 use layer0::DispatchContext;
@@ -22,10 +22,11 @@ use layer0::intent::{HandoffContext, Intent, IntentKind};
 use layer0::operator::{LimitReason, TerminalOutcome};
 use layer0::operator::{OperatorMetadata, OperatorOutput, Outcome, TransferOutcome};
 use layer0::wait::WaitReason;
-use skg_tool::ToolRegistry;
+use skg_tool::{ToolConcurrencyHint, ToolRegistry};
 use skg_turn::infer::InferResponse;
 use skg_turn::provider::Provider;
 use skg_turn::stream::StreamEvent;
+use std::collections::HashMap;
 
 ///
 /// Same flow as [`react_loop()`](crate::react_loop) but streams inference
@@ -57,18 +58,15 @@ pub async fn stream_react_loop<P: Provider>(
     pipeline: &Pipeline,
     on_event: impl Fn(StreamEvent) + Send + Sync + 'static,
 ) -> Result<OperatorOutput, EngineError> {
+    let mut tool_retry_counts: HashMap<String, u32> = HashMap::new();
     loop {
-        // Before phase: run pipeline before_send middleware (context assembly).
-        // Compile AFTER so any mutations appear in the request.
         if let Err(err) = pipeline.run_before(ctx).await {
             return structured_exit_output(err, ctx);
         }
 
-        // Phase 1: Compile context (re-filter tools each turn, after before middleware)
         let compile_config = config.compile_config(tools, ctx);
         let infer_request = build_infer_request(ctx, &compile_config);
 
-        // Phase 2: Stream inference — emit deltas immediately, defer Done until committed.
         let mut infer_stream = provider
             .infer_stream(infer_request)
             .await
@@ -78,15 +76,8 @@ pub async fn stream_react_loop<P: Provider>(
         while let Some(event) = infer_stream.next().await {
             let event = event.map_err(EngineError::Provider)?;
             match event {
-                StreamEvent::Done(resp) => {
-                    // Stash; emit Done only after context commit succeeds.
-                    done_response = Some(resp);
-                }
-                other => {
-                    // TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, Usage:
-                    // no commit dependency — emit immediately.
-                    on_event(other);
-                }
+                StreamEvent::Done(resp) => done_response = Some(resp),
+                other => on_event(other),
             }
         }
         let response = done_response.ok_or_else(|| {
@@ -95,30 +86,19 @@ pub async fn stream_react_loop<P: Provider>(
             ))
         })?;
 
-        // After phase: run pipeline after_send middleware before committing response.
-        // If it errors, Done is suppressed — consumer invariant preserved.
-        if let Err(err) = pipeline.run_after(ctx).await {
+        if let Err(err) = commit_response(ctx, pipeline, &response, true).await {
             return structured_exit_output(err, ctx);
         }
 
-        // Phase 3: Append response to context (sync, infallible).
-        ctx.append_response(&response);
-        ctx.metrics.turns_completed += 1;
-
-        // Done is the commit signal: context is written, after middleware ran.
-        // Emit only now so the consumer's invariant holds.
         on_event(StreamEvent::Done(response.clone()));
 
-        // Phase 4: Check if model is done
         if !response.has_tool_calls() {
             let exit = check_exit(&response.stop_reason);
             return Ok(make_output(response, exit, ctx));
         }
 
-        // Phase 5: Check tool approval
         let tool_calls = response.tool_calls.clone();
         let approval_intents = check_approval(&tool_calls, tools);
-
         if !approval_intents.is_empty() {
             ctx.extend_intents(approval_intents);
             return Ok(make_output(
@@ -130,55 +110,139 @@ pub async fn stream_react_loop<P: Provider>(
             ));
         }
 
-        // Phase 6: Dispatch tool calls (non-streaming, sequential)
-        for call in &tool_calls {
-            let result_str = match execute_tool(call, tools, dispatch_ctx, ctx).await {
-                Ok(value) => {
-                    // Detect HandoffTool sentinel BEFORE formatting.
-                    if is_handoff_sentinel(&value) {
-                        let target = value
-                            .get("target")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let reason = value
-                            .get("reason")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        ctx.push_intent(Intent::new(IntentKind::Handoff {
-                            operator: OperatorId::from(target.as_str()),
-                            context: HandoffContext {
-                                task: Content::text(reason),
-                                history: None,
-                                metadata: None,
-                            },
-                        }));
-                        return Ok(make_context_output(
-                            Content::text(""),
-                            Outcome::Transfer {
-                                transfer: TransferOutcome::HandedOff,
-                            },
-                            ctx,
-                        ));
-                    }
-                    match &config.tool_result_formatter {
-                        Some(f) => f(&call.name, &value),
-                        None => format_tool_result(&value),
-                    }
-                }
-                Err(EngineError::Exit { outcome, .. }) => {
-                    return Ok(make_context_output(Content::text(""), outcome, ctx));
-                }
-                Err(e) => match &config.tool_error_formatter {
-                    Some(f) => f(&call.name, &e.to_string()),
-                    None => format_tool_error(&e),
-                },
-            };
+        let all_shared = tool_calls.len() > 1
+            && tool_calls.iter().all(|call| {
+                tools
+                    .get(&call.name)
+                    .map(|t| t.concurrency_hint() == ToolConcurrencyHint::Shared)
+                    .unwrap_or(false)
+            });
 
-            let result_msg =
-                InferResponse::tool_result_message(&call.id, &call.name, result_str, false);
-            ctx.inject_message(result_msg);
+        if all_shared {
+            let futures: Vec<_> = tool_calls
+                .iter()
+                .map(|call| {
+                    let tool = tools.get(&call.name).cloned();
+                    let call_name = call.name.clone();
+                    let input = call.input.clone();
+                    let d_ctx = dispatch_ctx.clone();
+                    let span =
+                        tracing::info_span!("tool_call", tool = %call_name, call_id = %call.id);
+                    tracing::Instrument::instrument(
+                        async move {
+                            let start = std::time::Instant::now();
+                            let result = match tool {
+                                None => Err(EngineError::Halted {
+                                    reason: format!("unknown tool: {call_name}"),
+                                }),
+                                Some(t) => t.call(input, &d_ctx).await.map_err(Into::into),
+                            };
+                            (start.elapsed(), result)
+                        },
+                        span,
+                    )
+                })
+                .collect();
+            let raw_results = futures_util::future::join_all(futures).await;
+            for (call, (duration, tool_result)) in tool_calls.iter().zip(raw_results) {
+                ctx.metrics.tool_calls_total += 1;
+                let (result_str, is_error) = match tool_result {
+                    Ok(value) => {
+                        tracing::debug!(tool = %call.name, duration_ms = duration.as_millis() as u64, "tool succeeded");
+                        if is_handoff_sentinel(&value) {
+                            let target = value
+                                .get("target")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let reason = value
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            ctx.push_intent(Intent::new(IntentKind::Handoff {
+                                operator: OperatorId::from(target.as_str()),
+                                context: HandoffContext {
+                                    task: Content::text(reason),
+                                    history: None,
+                                    metadata: None,
+                                },
+                            }));
+                            return Ok(make_context_output(
+                                Content::text(""),
+                                Outcome::Transfer {
+                                    transfer: TransferOutcome::HandedOff,
+                                },
+                                ctx,
+                            ));
+                        }
+                        (
+                            match &config.tool_result_formatter {
+                                Some(f) => f(&call.name, &value),
+                                None => format_tool_result(&value),
+                            },
+                            false,
+                        )
+                    }
+                    Err(e) => {
+                        ctx.metrics.tool_calls_failed += 1;
+                        tracing::warn!(tool = %call.name, duration_ms = duration.as_millis() as u64, error = %e, "tool failed");
+                        format_tool_failure(call, tools, config, &mut tool_retry_counts, &e)
+                    }
+                };
+                let result_msg =
+                    InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
+                ctx.inject_message(result_msg);
+            }
+        } else {
+            for call in &tool_calls {
+                let result = execute_tool(call, tools, dispatch_ctx, ctx).await;
+                let (result_str, is_error) = match result {
+                    Ok(value) => {
+                        if is_handoff_sentinel(&value) {
+                            let target = value
+                                .get("target")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let reason = value
+                                .get("reason")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            ctx.push_intent(Intent::new(IntentKind::Handoff {
+                                operator: OperatorId::from(target.as_str()),
+                                context: HandoffContext {
+                                    task: Content::text(reason),
+                                    history: None,
+                                    metadata: None,
+                                },
+                            }));
+                            return Ok(make_context_output(
+                                Content::text(""),
+                                Outcome::Transfer {
+                                    transfer: TransferOutcome::HandedOff,
+                                },
+                                ctx,
+                            ));
+                        }
+                        (
+                            match &config.tool_result_formatter {
+                                Some(f) => f(&call.name, &value),
+                                None => format_tool_result(&value),
+                            },
+                            false,
+                        )
+                    }
+                    Err(EngineError::Exit { outcome, .. }) => {
+                        return Ok(make_context_output(Content::text(""), outcome, ctx));
+                    }
+                    Err(e) => format_tool_failure(call, tools, config, &mut tool_retry_counts, &e),
+                };
+                let result_msg =
+                    InferResponse::tool_result_message(&call.id, &call.name, result_str, is_error);
+                ctx.inject_message(result_msg);
+            }
         }
     }
 }
@@ -905,5 +969,227 @@ mod tests {
             .position(|e| e == "done")
             .expect("Done must be emitted");
         assert!(text_pos < done_pos, "TextDelta must arrive before Done");
+    }
+    struct RequireAssistantInAfterSend;
+
+    impl Middleware for RequireAssistantInAfterSend {
+        async fn process(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            let Some(last) = ctx.messages().last() else {
+                return Err(EngineError::Halted {
+                    reason: "after_send saw no messages".into(),
+                });
+            };
+            if last.role != Role::Assistant || last.text_content() != "done" {
+                return Err(EngineError::Halted {
+                    reason: format!(
+                        "after_send expected appended assistant response, got role={:?} text={}",
+                        last.role,
+                        last.text_content()
+                    ),
+                });
+            }
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            "RequireAssistantInAfterSend"
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_after_send_sees_committed_response() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
+
+        let tools = ToolRegistry::new();
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let mut pipeline = Pipeline::new();
+        pipeline.push_after(Box::new(RequireAssistantInAfterSend));
+
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &simple_config(),
+            &pipeline,
+            |_| {},
+        )
+        .await
+        .expect("after_send should run after the assistant response is committed");
+
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_invalid_input_injects_retry_message_with_schema() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_call("picky", "c1", json!({}));
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(MockInvalidInputTool));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")));
+
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let config = ReactLoopConfig {
+            max_tool_retries: 2,
+            ..simple_config()
+        };
+
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &config,
+            &Pipeline::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
+        assert!(
+            ctx.messages().iter().any(|m| {
+                let t = m.text_content();
+                t.contains("rejected the input")
+                    && t.contains("Expected schema")
+                    && t.contains("Please fix")
+            }),
+            "streaming runtime must preserve InvalidInput retry guidance with schema"
+        );
+    }
+
+    struct SlowTool {
+        name: &'static str,
+        delay_ms: u64,
+    }
+
+    impl ToolDyn for SlowTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            "sleeping test tool"
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &DispatchContext,
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
+        > {
+            let delay_ms = self.delay_ms;
+            let name = self.name;
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                Ok(json!({"tool": name}))
+            })
+        }
+
+        fn concurrency_hint(&self) -> skg_tool::ToolConcurrencyHint {
+            skg_tool::ToolConcurrencyHint::Shared
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_shared_tools_run_with_same_parallelism_as_react_loop() {
+        let provider = TestProvider::new();
+        provider.respond_with_tool_calls(vec![
+            ("slow_a", "c1", json!({})),
+            ("slow_b", "c2", json!({})),
+        ]);
+        provider.respond_with_text("done");
+
+        let mut tools = ToolRegistry::new();
+        tools.register(Arc::new(SlowTool {
+            name: "slow_a",
+            delay_ms: 50,
+        }));
+        tools.register(Arc::new(SlowTool {
+            name: "slow_b",
+            delay_ms: 50,
+        }));
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("go")));
+        let dispatch_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+
+        let start = Instant::now();
+        let output = stream_react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &dispatch_ctx,
+            &simple_config(),
+            &Pipeline::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let elapsed = start.elapsed();
+
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
+        );
+        assert!(
+            elapsed < Duration::from_millis(90),
+            "expected shared tools to run in parallel (< 90 ms) but took {elapsed:?}"
+        );
+    }
+
+    struct MockInvalidInputTool;
+
+    impl ToolDyn for MockInvalidInputTool {
+        fn name(&self) -> &str {
+            "picky"
+        }
+
+        fn description(&self) -> &str {
+            "always rejects input with InvalidInput"
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            json!({
+                "type": "object",
+                "properties": { "q": { "type": "string" } },
+                "required": ["q"]
+            })
+        }
+
+        fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &DispatchContext,
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<serde_json::Value, ToolError>> + Send + '_>,
+        > {
+            Box::pin(async { Err(ToolError::InvalidInput("missing required field 'q'".into())) })
+        }
     }
 }

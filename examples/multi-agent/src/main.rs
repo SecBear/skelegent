@@ -25,7 +25,7 @@ use layer0::content::Content;
 use layer0::dispatch::Dispatcher;
 use layer0::id::{DispatchId, OperatorId};
 use layer0::operator::{Operator, OperatorInput, TriggerType};
-use skg_context_engine::{CognitiveOperator, ReactLoopConfig};
+use skg_context_engine::{AgentOperator, ReactLoopConfig};
 use skg_orch_local::LocalOrch;
 use skg_orch_patterns::{HandoffTool, SwarmOperator};
 use skg_tool::{ApprovalPolicy, ToolDyn, ToolError, ToolRegistry};
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         OperatorId::new("support-agent"),
         "Transfer to support when the customer has a technical or account issue.",
     )));
-    let triage_op = CognitiveOperator::new(
+    let triage_op = AgentOperator::new(
         "triage-agent",
         triage_provider,
         triage_tools,
@@ -203,7 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ]);
     let mut billing_tools = ToolRegistry::new();
     billing_tools.register(Arc::new(ChargeTool));
-    let billing_op = CognitiveOperator::new(
+    let billing_op = AgentOperator::new(
         "billing-agent",
         billing_provider,
         billing_tools,
@@ -225,7 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )]);
     let mut support_tools = ToolRegistry::new();
     support_tools.register(Arc::new(LookupTicketTool));
-    let support_op = CognitiveOperator::new(
+    let support_op = AgentOperator::new(
         "support-agent",
         support_provider,
         support_tools,

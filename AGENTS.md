@@ -55,18 +55,16 @@ User message
 | Task                                                     | Where                                                                   |
 | -------------------------------------------------------- | ----------------------------------------------------------------------- |
 | New protocol trait or wire type                          | `layer0/`                                                               |
-| Change operator behavior (react loop, boundaries, rules) | `op/skg-context-engine/`                                                |
+| Change operator behavior (runtime loop, middleware, pipeline) | `op/skg-context-engine/`                                                |
 | New simple operator                                      | `op/skg-op-single-shot/` or new `op/` crate                             |
 | New LLM provider                                         | new `provider/skg-provider-*` crate implementing `Provider`             |
 | New intent variant                                       | `layer0/src/intent.rs` (enum) + `effects/skg-effects-local/` (handler)  |
-| New middleware                                           | layer0 defines the trait; impl goes in the relevant crate               |
+| New middleware                                           | `skg-context-engine` for context/runtime middleware; `layer0` for dispatch/store/exec middleware traits |
 | New state backend                                        | new `state/` crate implementing `StateStore`                            |
 | New environment                                          | new `env/` crate implementing `Environment`                             |
 | Tool infrastructure                                      | `turn/skg-tool/` (trait, registry) or `turn/skg-mcp/` (MCP bridge)      |
 | Orchestration patterns                                   | `orch/skg-orch-kit/` (utilities) or `orch/skg-orch-local/` (local impl) |
-| Durable run primitives                                   | `orch/skg-run-core/`                                                    |
-| Auth/secrets/crypto                                      | `auth/`, `secret/`, `crypto/`                                           |
-| Hooks (lifecycle governance)                             | `hooks/skg-hook-*`                                                      |
+| Auth/secrets                                             | `auth/`, `secret/`                                                      |
 | The umbrella crate                                       | `skelegent/`                                                            |
 
 ## Where Truth Lives
@@ -74,11 +72,11 @@ User message
 | What                       | Where                                                  |
 | -------------------------- | ------------------------------------------------------ |
 | Architectural positions    | `ARCHITECTURE.md`                                      |
-| Behavioral requirements    | `specs/v2/` (current); `specs/` (indexed by `SPECS.md`) |
+| Behavioral requirements    | `specs/v2/` (current)                                  |
 | Operational constraints    | `rules/`                                               |
 | Deep rationale             | `specs/v2/` (see spec docs for rationale)              |
 
-Authority: ARCHITECTURE.md > specs > rules > agent judgment. If specs are
+Authority: ARCHITECTURE.md > specs/v2 > rules > agent judgment. If specs are
 ambiguous, update the specs (do not invent behavior).
 
 ## Load Order
@@ -87,7 +85,7 @@ Before implementation work, load in order:
 
 1. This file
 2. `ARCHITECTURE.md`
-3. `SPECS.md` then the specific spec(s) for your task — prefer `specs/v2/` for implemented domains
+3. `SPECS.md` then the specific spec(s) for your task under `specs/v2/`
 4. The relevant `rules/`
 
 ## Verification
@@ -100,7 +98,7 @@ nix develop -c cargo test --workspace --all-targets
 nix develop -c cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Or run all of the above via `./scripts/verify.sh`.
+Use the Nix commands directly; there is no wrapper verification script.
 
 For layer0 test-utils:
 `nix develop -c cargo test --features test-utils -p layer0`
@@ -116,16 +114,17 @@ Do not claim "done" without fresh evidence from the relevant commands.
 
 **Intents are on Context, not a separate parameter.** Operators declare intents
 via `ctx.push_intent(intent)` during execution. These are drained into
-`OperatorOutput::intents` by `make_output()`. There is no `EffectEmitter`
-parameter on `Operator::execute`.
+`OperatorOutput::intents` by the runtime output helpers. There is no separate
+intent emitter parameter on `Operator::execute`.
 
-**CognitiveOperator is a thin adapter.** It wraps `react_loop()` as a
+**AgentOperator is the thin adapter.** It wraps `react_loop()` as a
 `dyn Operator`. It forwards the `DispatchContext` it receives — it does not
 fabricate one. Its config is `ReactLoopConfig`.
 
-**Context mutations fire rules.** Every `ctx.run(op)` call checks registered
-rules (Before, After, When triggers). BudgetGuard, compaction, and overwatch
-agents are all implemented as rules.
+**Context mutations are direct.** `Context` is a mutable substrate with
+synchronous mutation methods. Middleware runs through `Pipeline::run_before()`
+and `Pipeline::run_after()` around inference boundaries. Budget guards,
+compaction, and telemetry are middleware.
 
 **ExecutionEvent is the semantic observation plane.** Provider chunks are projected into semantic events at meaningful boundaries — status changes, tool calls, intent declarations, artifacts, completion. Observers subscribe to these events rather than raw provider chunks.
 
@@ -139,7 +138,7 @@ Decision."
 When a failure mode repeats:
 
 1. Fix the immediate issue.
-2. Encode: behavior requirement → spec in `specs/`. Process constraint → rule in
+2. Encode: behavior requirement → spec in `specs/v2/`. Process constraint → rule in
    `rules/`.
 
 ## Rules Index

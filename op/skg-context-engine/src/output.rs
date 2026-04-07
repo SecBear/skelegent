@@ -2,7 +2,7 @@
 //!
 //! [`OutputSchema`] defines what the model should return and how to validate it.
 //! [`OutputSchema::extract()`] checks an inference response against the schema.
-//! [`react_loop_structured()`](crate::react::react_loop_structured) composes
+//! [`react_loop_structured()`](crate::runtime::react_loop_structured) composes
 //! this with the ReAct loop for automatic retry on validation failure.
 //!
 //! ## Two modes
@@ -183,7 +183,7 @@ impl OutputSchema {
 
     /// Generate the [`ToolSchema`] for this output.
     ///
-    /// Used by [`react_loop_structured`](crate::react::react_loop_structured)
+    /// Used by [`react_loop_structured`](crate::runtime::react_loop_structured)
     /// to inject the output tool into the compile config.
     pub fn tool_schema(&self) -> ToolSchema {
         ToolSchema {

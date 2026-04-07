@@ -3,7 +3,7 @@
 //! Demonstrates:
 //!   1. Manual `ToolDyn` implementation (a `greet` tool)
 //!   2. `TestProvider` as a scripted, API-key-free provider
-//!   3. `CognitiveBuilder` fluent construction of `CognitiveOperator`
+//!   3. `AgentBuilder` fluent construction of `AgentOperator`
 //!   4. Single-turn execution and output inspection
 //!
 //! Run with: `cargo run -p echo-agent`
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use layer0::content::Content;
 use layer0::operator::{Operator, OperatorInput, TriggerType};
 use layer0::{DispatchContext, DispatchId, OperatorId};
-use skg_context_engine::CognitiveBuilder;
+use skg_context_engine::AgentBuilder;
 use skg_tool::{ToolDyn, ToolError, ToolRegistry};
 use skg_turn::test_utils::{TestProvider, make_text_response, make_tool_call_response};
 
@@ -96,12 +96,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(GreetTool));
 
-    // Step 4: Build the CognitiveOperator via the fluent builder.
+    // Step 4: Build the AgentOperator via the fluent builder.
     //
-    // CognitiveBuilder is a typestate builder:
+    // AgentBuilder is a typestate builder:
     //   - `build()` is only callable after `.provider(...)` is set (compile-time check).
     //   - `.system_prompt()` and `.tools()` can be called in any order.
-    let op = CognitiveBuilder::new()
+    let op = AgentBuilder::new()
         .system_prompt("You are a greeting agent. Use the greet tool when asked to greet someone.")
         .tools(registry)
         .provider(build_provider())

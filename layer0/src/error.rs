@@ -128,6 +128,10 @@ pub enum EnvError {
     #[error("resource limit exceeded: {0}")]
     ResourceExceeded(String),
 
+    /// The wrapped operator or environment already produced a classified protocol failure.
+    #[error("{0}")]
+    Protocol(#[from] ProtocolError),
+
     /// Catch-all.
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
@@ -156,6 +160,7 @@ impl From<EnvError> for ProtocolError {
                 format!("resource limit exceeded: {msg}"),
                 false,
             ),
+            EnvError::Protocol(err) => err,
             EnvError::Other(source) => {
                 ProtocolError::new(ErrorCode::Internal, source.to_string(), false)
             }

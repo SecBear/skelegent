@@ -20,7 +20,6 @@ use layer0::DispatchContext;
 use layer0::content::Content;
 use layer0::error::ProtocolError;
 use layer0::id::{DispatchId, OperatorId};
-use layer0::intent::IntentKind;
 use layer0::operator::{Operator, OperatorInput, OperatorOutput, TriggerType};
 use skg_context_engine::ToolFilter;
 use skg_tool::{ToolDyn, ToolRegistry};
@@ -182,25 +181,15 @@ impl AgentBuilder {
 
 /// Reject the output if any intents were declared that require a handler.
 ///
-/// In v2, all [`layer0::Intent`] variants require an [`OrchestratedRunner`] to
-/// execute (write memory, signal, delegate, handoff, etc.).  `AgentBuilder::run()`
-/// has no intent handler and cannot safely ignore them.
+/// `AgentBuilder::run()` is a convenience API with no intent executor. Any
+/// emitted intent means the caller should be using `OrchestratedRunner` or a
+/// custom runner that can actually handle the declared work.
 fn reject_unhandled_intents(intents: &[layer0::Intent]) -> Result<(), ProtocolError> {
-    let has_intent = intents.iter().any(|intent| {
-        matches!(
-            &intent.kind,
-            IntentKind::WriteMemory { .. }
-                | IntentKind::DeleteMemory { .. }
-                | IntentKind::Delegate { .. }
-                | IntentKind::Handoff { .. }
-        )
-    });
-    if has_intent {
-        return Err(ProtocolError::internal(
-            "AgentBuilder::run() cannot handle intents \
-             (WriteMemory, DeleteMemory, Delegate, Handoff). \
-             Use OrchestratedRunner instead.",
-        ));
+    if !intents.is_empty() {
+        return Err(ProtocolError::internal(format!(
+            "AgentBuilder::run() cannot handle {} intent(s). Use OrchestratedRunner instead.",
+            intents.len()
+        )));
     }
     Ok(())
 }
@@ -243,7 +232,7 @@ impl std::error::Error for AgentBuildError {}
     feature = "provider-ollama"
 ))]
 fn resolve_model(builder: AgentBuilder) -> Result<Box<dyn Operator>, AgentBuildError> {
-    use skg_context_engine::{CognitiveBuilder, ReactLoopConfig};
+    use skg_context_engine::{AgentBuilder as EngineAgentBuilder, ReactLoopConfig};
 
     // Preserve model string so the provider sends the exact version requested.
     // Previously this was None (model dropped after provider selection — the bug).
@@ -269,7 +258,7 @@ fn resolve_model(builder: AgentBuilder) -> Result<Box<dyn Operator>, AgentBuildE
                 })?;
             let provider = skg_provider_anthropic::AnthropicProvider::new(api_key);
             Box::new(
-                CognitiveBuilder::new()
+                EngineAgentBuilder::new()
                     .config(config)
                     .tools(tools)
                     .max_turns(max_turns)
@@ -296,7 +285,7 @@ fn resolve_model(builder: AgentBuilder) -> Result<Box<dyn Operator>, AgentBuildE
                 })?;
             let provider = skg_provider_openai::OpenAIProvider::new(api_key);
             Box::new(
-                CognitiveBuilder::new()
+                EngineAgentBuilder::new()
                     .config(config)
                     .tools(tools)
                     .max_turns(max_turns)
@@ -315,7 +304,7 @@ fn resolve_model(builder: AgentBuilder) -> Result<Box<dyn Operator>, AgentBuildE
         {
             let provider = skg_provider_ollama::OllamaProvider::new();
             Box::new(
-                CognitiveBuilder::new()
+                EngineAgentBuilder::new()
                     .config(config)
                     .tools(tools)
                     .max_turns(max_turns)
@@ -374,8 +363,9 @@ mod tests {
     use super::*;
     use layer0::operator::{Outcome, TerminalOutcome};
     use skg_context_engine::{
-        CognitiveBuilder, CognitiveOperator, Middleware, Pipeline, ReactLoopConfig,
-        react::{BudgetGuard, BudgetGuardConfig},
+        AgentBuilder as EngineAgentBuilder, AgentOperator as EngineAgentOperator, Pipeline,
+        ReactLoopConfig,
+        runtime::{BudgetGuard, BudgetGuardConfig},
     };
     use skg_turn::test_utils::{FunctionProvider, make_text_response};
     use std::sync::Arc;
@@ -394,10 +384,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cognitive_operator_budget_exit_halts() {
+    async fn agent_operator_budget_exit_halts() {
         let (provider, call_count) = counting_provider("unused");
 
-        let op = CognitiveOperator::new(
+        let op = EngineAgentOperator::new(
             "test",
             provider,
             ToolRegistry::new(),
@@ -427,9 +417,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cognitive_operator_execute_returns_complete() {
+    async fn agent_operator_execute_returns_complete() {
         let (provider, call_count) = counting_provider("done");
-        let op = CognitiveOperator::new(
+        let op = EngineAgentOperator::new(
             "test",
             provider,
             ToolRegistry::new(),
@@ -466,7 +456,7 @@ mod tests {
             Ok(make_text_response("done"))
         });
 
-        let op = CognitiveOperator::new(
+        let op = EngineAgentOperator::new(
             "test",
             provider,
             ToolRegistry::new(),
@@ -537,7 +527,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(PingTool));
 
-        let op = CognitiveOperator::new(
+        let op = EngineAgentOperator::new(
             "test",
             provider,
             registry,
@@ -575,7 +565,7 @@ mod tests {
             Ok(make_text_response("done"))
         });
 
-        let op = CognitiveOperator::new(
+        let op = EngineAgentOperator::new(
             "test",
             provider,
             ToolRegistry::new(),
@@ -599,13 +589,13 @@ mod tests {
         );
     }
 
-    /// Verify that [`CognitiveBuilder::run()`] works as an end-to-end convenience shortcut:
+    /// Verify that [`EngineAgentBuilder::run()`] works as an end-to-end convenience shortcut:
     /// build + execute in one call.
     #[tokio::test]
     async fn agent_run_convenience() {
         let (provider, call_count) = counting_provider("Hello from run!");
 
-        let output = CognitiveBuilder::new()
+        let output = EngineAgentBuilder::new()
             .system_prompt("You are helpful.")
             .provider(provider)
             .run("Hi!")
@@ -663,6 +653,19 @@ mod tests {
         assert!(
             result.is_ok(),
             "Empty intent list must not cause run() to error"
+        );
+    }
+
+    #[test]
+    fn run_rejects_custom_intents_too() {
+        use layer0::Intent;
+        use serde_json::json;
+
+        let intents = vec![Intent::custom("demo.custom".into(), json!({"x": 1}))];
+        let result = super::reject_unhandled_intents(&intents);
+        assert!(
+            result.is_err(),
+            "Custom intents also require a handler; run() must reject them"
         );
     }
 }

@@ -68,7 +68,7 @@
 //! | [`layer0::Operator`] | Core async-turn trait — one agent, one cycle |
 //! | [`layer0::StateStore`] | Persistent state backend trait |
 //! | [`layer0::OperatorInput`] | Input envelope (content + trigger type) |
-//! | [`layer0::OperatorOutput`] | Output envelope (content + exit reason + effects) |
+//! | [`layer0::OperatorOutput`] | Output envelope (content + outcome + intents + metadata) |
 //! | [`prelude::Context`] | Composable context engine (requires `context-engine`) |
 //! | [`prelude::ToolRegistry`] | Registry of tools available to an agent |
 //! | [`prelude::MemoryStore`] | In-process state store (requires `state-memory`) |

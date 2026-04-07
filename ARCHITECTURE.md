@@ -119,16 +119,15 @@ include creates capability; what you exclude creates safety.
 **Identity**: Turn-owned. From rich prompt injection to structural constraint —
 but always explicitly configured, never implicitly assumed.
 
-**History**: The turn reads from state; it writes only through effects. The
-state backend is swappable without turn changes. Conversation persistence
-(save/load context) is implemented via `SaveConversation` / `LoadConversation`
-ops from `skg-context-engine` — a user-triggered portable checkpoint pattern for long sessions.
+**History**: The turn reads from state; it writes only through intents. The
+state backend is swappable without turn changes. Conversation persistence is a
+policy above Layer 0, not a built-in context-engine op surface.
 
 **Memory**: Three tiers — hot (always loaded, taxes every turn), warm
 (on-demand within session), cold (cross-session search). Tier assignment is
 per-agent configuration.
 
-**Tools**: Tools are operators registered with `ToolMetadata` — name, description, input schema, and concurrency hints (`parallel_safe`) are carried in the metadata, not a separate tool registry. Sub-operator dispatch (formerly 'tool execution') is mediated by an injected `Arc<dyn Dispatcher>` capability, not the environment protocol directly. Antipattern: naive API-to-MCP conversion — exposing every REST endpoint as an MCP tool without filtering causes context pollution and token waste. Expose only the tools the agent actually needs; use lazy catalog or progressive disclosure for the rest.
+**Tools**: Tools are described by `ToolMetadata`, but the current runtime still compiles schemas from `ToolRegistry` and dispatches either through a direct tool path or an explicitly injected `Arc<dyn Dispatcher>`. Do not pretend the dispatcher-only future state has already landed. Expose only the tools the agent actually needs; use lazy catalog or progressive disclosure for the rest.
 
 **Context budget**: Turn-owned. The compaction reserve must never be zero — a
 system at 100% capacity before compacting has no room to run compaction.
@@ -191,10 +190,10 @@ one trait, one method (`dispatch`), used everywhere. There is no separate
 "orchestrator dispatch" vs "operator dispatch."
 
 **The Orchestrator is a pattern, not a trait**: The code that builds operators,
-wires their dependencies (state stores, providers, observation channels,
-intervention channels), registers them with a Dispatcher implementation, and
-manages lifecycle — this is application code. It is the "orchestrator" in the
-same way an Erlang supervisor is application code, not a protocol trait.
+wires their dependencies (state stores, providers, middleware, dispatchers),
+registers them with a Dispatcher implementation, and manages lifecycle — this
+is application code. Different applications wire differently. The Dispatcher is
+the swappable part.
 Different applications wire differently. The Dispatcher is the swappable part.
 
 **Context transfer**: Task-only injection is the default. Context boundaries
@@ -211,20 +210,14 @@ Conversation-scoped handoff (child inherits the conversation, parent terminates)
 is a distinct pattern from delegation.
 
 **Communication**: Synchronous call/return is the default (`Dispatcher::dispatch`).
-Signals for distributed orchestration (`Intent::Signal`). Context streams for
-real-time observation (via `ExecutionEvent`). Intervention channels for cross-agent context modification.
-Shared state via `StateStore` scopes for persistent coordination.
+Signals for distributed orchestration (`Intent::Signal`). `ExecutionEvent` is the
+semantic observation plane. Observation and intervention are buildable above the
+kernel as middleware and orchestration adapters; they are not built into `Context`.
 
-**Observation and intervention**: Streaming-first. The context engine's `Context`
-emits `ExecutionEvent`s as they happen — messages pushed/removed, intents declared,
-inference tokens, metrics updates. No snapshots, no intervals. An observer
-subscribes to the broadcast channel and sees the full context lifecycle in
-real-time. Intervention is the reverse direction — an external agent sends
-context operations through a channel, processed at every `ctx.run()` boundary.
-Three observation forms: oracle (subscribe, read-only), guardrail (subscribe +
-intervene on conditions), observer agent (full subscription + intervention).
-See `golden/projects/skelegent/design/streaming-observation-intervention.md`
-for the complete design.
+**Observation and intervention**: Middleware-first. A runtime can broadcast
+semantic events from middleware, and orchestration can inject control decisions
+through its own adapters, but the context engine itself does not own stream or
+intervention channels anymore.
 
 **Antipattern — no Workflow trait**: There is no Workflow trait. Workflows are
 application-layer code — typed functions or LLM-backed orchestrating operators —
@@ -240,30 +233,25 @@ turns, write important state to persistent storage. On termination, capture work
 product before the context window is destroyed. This is the single most critical
 lifecycle mechanism for long-running agents.
 
-**Compaction**: Coordination lives above Layer 0. The turn/runtime detects pressure and runs summarization, orchestration may continue-as-new, and state persists results. Layer 0 carries only the message-level hints that travel with the data (`Message` from `layer0::context`, `CompactionPolicy`). Summarization is the default. The compaction reserve must never be zero. `sliding_window` and `policy_trim` strategies are implemented, with
-LLM-driven `summarize` and `extract_cognitive_state` available. Tiered/zone-based
-compaction is tracked in `TODO-aspirational.md` as future work.
-Recursive summarization degradation is a documented failure mode: summarizing
-summaries loses critical detail after 2-3 cycles; fresh summary replacement is
-the mitigation. Message-level metadata (`Message` from `layer0::context`, `CompactionPolicy`)
-enables per-message pin/compress/discard policies.
-Compaction strategies live in the context engine as rules. They are not a separate crate
-because they share the same dependency footprint and type universe as the context engine
-itself. Pre-built strategies (sliding window, policy-aware trim, summarize-and-replace)
-compose with any StateStore backend.
+**Compaction**: Coordination lives above Layer 0. The turn/runtime detects pressure and
+runs middleware; orchestration may continue-as-new, and state persists results.
+Layer 0 carries only message-level hints (`Message`, `CompactionPolicy`).
+Compaction strategies are middleware that mutate `Context` (typically via
+`ctx.set_messages(...)`). They are not rules, not a separate crate, and not a
+kernel-level policy.
 
 **Crash recovery**: Entangled with orchestration by design, but not with a single universal substrate. Local orchestration provides no recovery — acceptable for short tasks. Durable orchestration adds a run/control layer above Layer 0 and may recover through backend-specific replay, checkpoints, journals, leases, or platform-native history. Public contracts should describe run lifecycle and control semantics; backend recovery internals stay below that boundary. The same operator works in both deployments.
 
 **Budget governance**: Single authority, but current enforcement is runtime-local.
-The turn/runtime currently enforces local cost, turn, duration, and tool-call limits via `BudgetGuard` at governed runtime boundaries. Budget-triggered stops surface as `Outcome::Limited` variants in the ReAct loops, while broader halt/continue/downgrade policy belongs to orchestration above Layer 0 unless/until it becomes a real cross-boundary contract.
+The runtime currently enforces local cost, turn, duration, and tool-call limits
+via `BudgetGuard` middleware in the pipeline. Budget-triggered stops surface as
+`Outcome::Limited`. Broader halt/continue/downgrade policy belongs above Layer 0.
 Planners observe remaining budget (read-only).
 
-**Observability**: Cross-cutting. Within an operator, the context stream
-provides full-fidelity real-time visibility into every context mutation and
-inference token. At protocol boundaries, middleware stacks (`DispatchMiddleware`,
-`StoreMiddleware`, `ExecMiddleware`) provide interception and logging. Overhead
-must be proportional — context streaming is zero-cost when no observer is
-subscribed; middleware overhead is per-call.
+**Observability**: Cross-cutting. At protocol boundaries, middleware stacks
+(`DispatchMiddleware`, `StoreMiddleware`, `ExecMiddleware`) provide interception
+and logging. Runtime-level observation is built above the engine rather than
+embedded inside `Context`. Overhead must be proportional to what is enabled.
 
 ---
 

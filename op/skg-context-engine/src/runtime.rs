@@ -664,6 +664,61 @@ fn structured_exit_output(
     }
 }
 
+pub(crate) async fn commit_response(
+    ctx: &mut Context,
+    pipeline: &Pipeline,
+    response: &InferResponse,
+    count_turn: bool,
+) -> Result<(), EngineError> {
+    ctx.append_response(response);
+    if count_turn {
+        ctx.metrics.turns_completed += 1;
+    }
+    pipeline.run_after(ctx).await
+}
+
+pub(crate) fn format_tool_failure(
+    call: &ToolCall,
+    tools: &ToolRegistry,
+    config: &ReactLoopConfig,
+    tool_retry_counts: &mut HashMap<String, u32>,
+    e: &EngineError,
+) -> (String, bool) {
+    if let EngineError::Tool(ToolError::InvalidInput(msg)) = e {
+        let count = tool_retry_counts.entry(call.id.clone()).or_insert(0);
+        if *count < config.max_tool_retries {
+            *count += 1;
+            let schema_str = tools
+                .get(&call.name)
+                .map(|t| t.input_schema().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            (
+                format!(
+                    "Tool '{}' rejected the input: {}\nExpected schema: {}\nPlease fix the input and try again.",
+                    call.name, msg, schema_str
+                ),
+                true,
+            )
+        } else {
+            (
+                match &config.tool_error_formatter {
+                    Some(f) => f(&call.name, &e.to_string()),
+                    None => format_tool_error(e),
+                },
+                false,
+            )
+        }
+    } else {
+        (
+            match &config.tool_error_formatter {
+                Some(f) => f(&call.name, &e.to_string()),
+                None => format_tool_error(e),
+            },
+            false,
+        )
+    }
+}
+
 enum ToolDispatchOutcome {
     Continue,
     AwaitingApproval,
@@ -835,13 +890,13 @@ fn recover_engine_error(proto_err: ProtocolError) -> EngineError {
 /// The loop:
 /// 1. Run `pipeline.run_before(ctx)` (budget guards, context assembly, etc.)
 /// 2. Compile context → send to provider
-/// 3. Run `pipeline.run_after(ctx)` (post-inference middleware)
-/// 4. Append response to context
+/// 3. Commit the response to context (`append_response` + turn metrics)
+/// 4. Run `pipeline.run_after(ctx)` (post-commit middleware)
 /// 5. If no tool calls → return (model is done)
 /// 6. Check tool approval → if any tool requires approval, exit with
 ///    `Outcome::Suspended` and `IntentKind::RequestApproval`
 /// 7. Dispatch each tool call → append results to context
-/// 8. Increment turn counter → go to 1
+/// 8. Repeat until terminal outcome
 ///
 /// When a [`ToolFilter`] is set on the config, tools are re-filtered before
 /// each inference call based on the current context state.
@@ -868,16 +923,10 @@ pub async fn react_loop<P: Provider>(
         let infer_span = tracing::info_span!("infer", turn = ctx.metrics.turns_completed);
         let result = tracing::Instrument::instrument(compiled.infer(provider), infer_span).await?;
 
-        // After inference: run pipeline
-        if let Err(err) = pipeline.run_after(ctx).await {
+        // Phase 2: Commit response to context, then run post-commit middleware.
+        if let Err(err) = commit_response(ctx, pipeline, &result.response, true).await {
             return structured_exit_output(err, ctx);
         }
-
-        // Phase 2: Append response to context
-        ctx.append_response(&result.response);
-
-        // Count this inference as a completed turn
-        ctx.metrics.turns_completed += 1;
 
         // Phase 3: Check if model is done
         if !result.has_tool_calls() {
@@ -1174,17 +1223,13 @@ pub async fn react_loop_structured<P: Provider>(
 
         let result = compiled.infer(provider).await?;
 
-        // After inference: run pipeline
-        if let Err(err) = pipeline.run_after(ctx).await {
+        // Phase 2: Commit response to context, then run post-commit middleware.
+        if let Err(err) = commit_response(ctx, pipeline, &result.response, true).await {
             match structured_exit_output(err, ctx) {
                 Ok(output) => return Ok((None, output)),
                 Err(other) => return Err(other),
             }
         }
-
-        // Phase 2: Append response to context
-        ctx.append_response(&result.response);
-        ctx.metrics.turns_completed += 1;
 
         // Phase 3: Try to extract structured output
         match output.extract(&result.response) {
@@ -3474,6 +3519,63 @@ mod tests {
         assert_eq!(
             ctx.metrics.tool_calls_total, 2,
             "both tools must run when fallback is sequential"
+        );
+    }
+    struct RequireAssistantInAfterSend;
+
+    impl Middleware for RequireAssistantInAfterSend {
+        async fn process(&self, ctx: &mut Context) -> Result<(), EngineError> {
+            let Some(last) = ctx.messages().last() else {
+                return Err(EngineError::Halted {
+                    reason: "after_send saw no messages".into(),
+                });
+            };
+            if last.role != Role::Assistant || last.text_content() != "done" {
+                return Err(EngineError::Halted {
+                    reason: format!(
+                        "after_send expected appended assistant response, got role={:?} text={}",
+                        last.role,
+                        last.text_content()
+                    ),
+                });
+            }
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            "RequireAssistantInAfterSend"
+        }
+    }
+
+    #[tokio::test]
+    async fn react_loop_after_send_sees_committed_response() {
+        let provider = TestProvider::new();
+        provider.respond_with_text("done");
+
+        let mut ctx = Context::new();
+        ctx.inject_message(Message::new(Role::User, Content::text("hi")));
+
+        let tools = ToolRegistry::new();
+        let tool_ctx = DispatchContext::new(DispatchId::from("test"), OperatorId::from("test"));
+        let mut pipeline = Pipeline::new();
+        pipeline.push_after(Box::new(RequireAssistantInAfterSend));
+
+        let output = react_loop(
+            &mut ctx,
+            &provider,
+            &tools,
+            &tool_ctx,
+            &simple_config(),
+            &pipeline,
+        )
+        .await
+        .expect("after_send should run after the assistant response is committed");
+
+        assert_eq!(
+            output.outcome,
+            Outcome::Terminal {
+                terminal: TerminalOutcome::Completed
+            }
         );
     }
 }

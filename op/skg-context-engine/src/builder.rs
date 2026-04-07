@@ -32,19 +32,14 @@
 //! ```
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use layer0::Dispatcher;
-use layer0::operator::{LimitReason, Outcome};
-use rust_decimal::Decimal;
 use skg_tool::{ToolDyn, ToolRegistry};
 use skg_turn::provider::Provider;
 
-use crate::context::Context;
-use crate::error::EngineError;
-use crate::middleware::Middleware;
+use crate::AgentOperator;
 use crate::pipeline::Pipeline;
-use crate::{AgentOperator, ReactLoopConfig};
+use crate::runtime::{BudgetGuard, BudgetGuardConfig, ReactLoopConfig};
 
 // ── PipelineFactory type ──────────────────────────────────────────────────────
 
@@ -53,99 +48,6 @@ use crate::{AgentOperator, ReactLoopConfig};
 /// Pipelines contain `Box<dyn ErasedMiddleware>` and cannot be cloned, so
 /// the operator needs a factory to create fresh instances per `execute()` call.
 pub type PipelineFactory = Arc<dyn Fn() -> Pipeline + Send + Sync>;
-
-// ── BudgetGuard middleware ────────────────────────────────────────────────────
-
-/// Configuration limits for [`BudgetGuard`].
-#[derive(Debug, Clone, Default)]
-pub struct BudgetGuardConfig {
-    /// Maximum number of completed inference turns.
-    pub max_turns: Option<u32>,
-    /// Maximum cumulative cost in USD.
-    pub max_cost: Option<Decimal>,
-    /// Maximum wall-clock duration.
-    pub max_duration: Option<Duration>,
-    /// Maximum total tool calls dispatched.
-    pub max_tool_calls: Option<u32>,
-}
-
-/// Middleware that enforces resource limits before each inference call.
-///
-/// Checks `ctx.metrics` against the configured limits. Returns
-/// [`EngineError::Exit`] with [`Outcome::Limited`] on the first exceeded limit,
-/// preventing the inference call from happening.
-///
-/// Check order: turns → cost → duration → tool calls.
-pub struct BudgetGuard {
-    config: BudgetGuardConfig,
-}
-
-impl BudgetGuard {
-    /// Create a `BudgetGuard` with the given configuration.
-    pub fn with_config(config: BudgetGuardConfig) -> Self {
-        Self { config }
-    }
-}
-
-impl Middleware for BudgetGuard {
-    async fn process(&self, ctx: &mut Context) -> Result<(), EngineError> {
-        let m = &ctx.metrics;
-
-        if let Some(max) = self.config.max_turns {
-            if m.turns_completed >= max {
-                return Err(EngineError::Exit {
-                    outcome: Outcome::Limited {
-                        limit: LimitReason::MaxTurns,
-                    },
-                    detail: format!("turns_completed {} >= max_turns {}", m.turns_completed, max),
-                });
-            }
-        }
-
-        if let Some(max) = self.config.max_cost {
-            if m.cost >= max {
-                return Err(EngineError::Exit {
-                    outcome: Outcome::Limited {
-                        limit: LimitReason::BudgetExhausted,
-                    },
-                    detail: format!("cost {} >= max_cost {}", m.cost, max),
-                });
-            }
-        }
-
-        if let Some(max) = self.config.max_duration {
-            let elapsed = m.start.elapsed();
-            if elapsed >= max {
-                return Err(EngineError::Exit {
-                    outcome: Outcome::Limited {
-                        limit: LimitReason::Timeout,
-                    },
-                    detail: format!("elapsed {:?} >= max_duration {:?}", elapsed, max),
-                });
-            }
-        }
-
-        if let Some(max) = self.config.max_tool_calls {
-            if m.tool_calls_total >= max {
-                return Err(EngineError::Exit {
-                    outcome: Outcome::Limited {
-                        limit: LimitReason::BudgetExhausted,
-                    },
-                    detail: format!(
-                        "tool_calls_total {} >= max_tool_calls {}",
-                        m.tool_calls_total, max
-                    ),
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    fn name(&self) -> &str {
-        "BudgetGuard"
-    }
-}
 
 // ── Typestate markers ─────────────────────────────────────────────────────────
 
